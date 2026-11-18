@@ -25,7 +25,7 @@ One-page map of the Game Watch stack. Read this first; drill into the other docs
 4. **Shell UI** — splash, view, menus, mode router
 5. **Game module** — start / step / draw / over / win
 
-Layers 1–4 should stay stable across titles. Layer 5 is what changes per game.
+Layers 1–4 are **`libraries/WatchCore`**, shared by every title. Layer 5 — plus each watch's themed clock-face art — lives in the sketch.
 
 ## Titles
 

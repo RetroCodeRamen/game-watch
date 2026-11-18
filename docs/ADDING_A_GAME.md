@@ -6,19 +6,17 @@ Use this when building the next title for the same watch hardware.
 
 ### A. New sketch (recommended for distinct games)
 
-Create `games/<name>/<name>.ino` (or top-level `<name>/<name>.ino`) that:
+Create `<name>/<name>.ino` that:
 
-1. Copies the **platform shell** from `sonic_watch` (pins, buttons, clock, modes, `setup`/`loop`).
-2. Replaces only the `GAME` / `MENU` / `OVER` / `WIN` logic and drawing.
-3. Keeps the same pin map from [HARDWARE.md](HARDWARE.md).
+1. `#include <WatchCore.h>` — buttons, clock, alarm, set screens and power save come for free.
+2. Draws its own **themed clock face** (`faceStep` / `faceDraw`) — every watch has its own time art.
+3. Implements the game in `appStart` / `appUpdate` / `appDraw` and calls `watch::exitToClock()` to leave.
 
 Flash with:
 
 ```bash
 ./scripts/flash.sh path/to/sketch_folder
 ```
-
-Pros: simple, no shared-library tooling. Cons: clock code duplicated until factored later.
 
 ### B. Multi-game single firmware
 
@@ -39,23 +37,40 @@ For now, prefer **A**.
 ## Suggested skeleton
 
 ```cpp
-// --- keep platform pins, buttons, clock, SPLASH/VIEW/SETM/RING ---
+#include <Arduino.h>
+#include <WatchCore.h>
 
-enum : uint8_t { /* ... */ GAME, MENU, OVER, WIN };
+enum : uint8_t { PLAY, PAUSE, OVER };
+uint8_t mode;
 
-void startGame() { /* reset state, mode = GAME */ }
-
-void gameStep(uint8_t e) {
-  if (e & B_GAME) { /* pause */ }
-  if (e & B_MODE) { mode = VIEW; return; }
-  // input → simulate → collide
+// ---- theme: clock face ----
+uint8_t anim;
+void faceStep() { anim++; }
+void faceDraw() {
+  u8g2.setFont(u8g2_font_logisoso24_tn);
+  u8g2.setCursor(28, 36);
+  watch::print2(watch::hours()); u8g2.print(':'); watch::print2(watch::minutes());
+  // ... your theme's art around it
 }
 
-void drawGame() {
-  // world, sprites, HUD
+// ---- game ----
+void gameStart() { /* reset state */ mode = PLAY; }
+void gameUpdate(uint8_t e) {
+  if (mode == PLAY) {
+    if (e & B_GAME) { mode = PAUSE; return; }
+    if (e & B_MODE) { watch::exitToClock(); return; }
+    // input (e edges, watch::held()) → simulate → collide
+  }
 }
+void gameDraw() { /* world, sprites, HUD */ }
+void gameInterrupted() { if (mode == PLAY) mode = PAUSE; }
 
-// wire into update()/render() switch like sonic_watch
+const watch::WatchApp APP = {
+  faceStep, faceDraw, gameStart, gameUpdate, gameDraw,
+  gameInterrupted, nullptr, nullptr, "MID",
+};
+void setup() { watch::begin(APP); }
+void loop()  { watch::run(); }
 ```
 
 ## Input conventions (stay consistent)
@@ -81,7 +96,7 @@ Players should not relearn the watch for each title.
 
 - [ ] Compiles for `rp2040:rp2040:waveshare_rp2040_zero`
 - [ ] Clock still works from Mode
-- [ ] Alarm can interrupt or at least is not broken
+- [ ] Alarm interrupts the game and returns to your pause menu
 - [ ] Game starts from Game button on clock
 - [ ] Pause + quit paths work
 - [ ] No `delay()` in the frame path

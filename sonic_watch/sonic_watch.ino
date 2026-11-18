@@ -1,111 +1,28 @@
 // Sonic-style platformer + watch for RP2040-Zero
 // 4 zones × 2 acts, Egg Wrecker bosses, special-stage emeralds
-// Board: Waveshare RP2040-Zero | Core: Earle Philhower | Lib: U8g2
+// Board: Waveshare RP2040-Zero | Core: Earle Philhower | Libs: U8g2, WatchCore
+//
+// Clock, alarm, set screens and buttons live in libraries/WatchCore.
+// This sketch supplies the Sonic-themed clock face and the game (see WatchApp at the bottom).
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <math.h>
-// 16-bit coords — 8-bit u8g2_uint_t wraps x=128..130 into columns 0..2 on SH1106
-#define U8G2_16BIT
-#include <U8g2lib.h>
+#include <WatchCore.h>
 #include "title_bitmap.h"
 #include "sonic_sprites.h"
 
 // Fixed-point type must be visible before Arduino's auto-prototypes
 typedef int32_t fx;
 
-const uint8_t P_LEFT = 2, P_MID = 3, P_RIGHT = 6, P_MODE = 7, P_GAME = 8;
-const uint8_t P_BUZ = 15, P_SDA = 4, P_SCL = 5;
-
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
-
 void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame);
 void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, bool moving);
 void drawSunflower(int16_t x, int16_t baseY);
 void drawRingGlyph(int16_t x, int16_t y);
-void plot(int16_t x, int16_t y);
-void hLineSafe(int16_t x, int16_t y, int16_t w);
-void vLineSafe(int16_t x, int16_t y, int16_t h);
-void circleSafe(int16_t cx, int16_t cy, int16_t r);
-void triSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
-void fillTriSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
-void lineSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1);
-void discSafe(int16_t cx, int16_t cy, int16_t r);
 
-enum : uint8_t { B_LEFT = 1, B_MID = 2, B_RIGHT = 4, B_MODE = 8, B_GAME = 16 };
-const uint8_t BPIN[5] = {P_LEFT, P_MID, P_RIGHT, P_MODE, P_GAME};
-uint8_t held = 0, lastRaw = 0, pending = 0;
-unsigned long changedAt[5];
-
-uint8_t readButtons() {
-  unsigned long now = millis();
-  uint8_t edges = 0;
-  for (uint8_t i = 0; i < 5; i++) {
-    uint8_t bit = 1 << i;
-    bool raw = !digitalRead(BPIN[i]);
-    if (raw != ((lastRaw & bit) != 0)) { lastRaw ^= bit; changedAt[i] = now; }
-    if (now - changedAt[i] >= 20) {
-      bool isHeld = held & bit;
-      if (raw != isHeld) { held ^= bit; if (raw) edges |= bit; }
-    }
-  }
-  return edges;
-}
-
-void beep(uint16_t f, uint16_t ms) { tone(P_BUZ, f, ms); }
-
-enum : uint8_t { SPLASH, VIEW, SETM, RING, GAME, MENU, OVER, WIN, SPECIAL, CLEAR };
-uint8_t mode = VIEW;   // boot straight into watch face
+// Game-side modes only; clock face / set / alarm are owned by WatchCore
+enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR };
+uint8_t mode = SPLASH;
 uint8_t splashFrame = 0;
-
-// Clock-face power save (VIEW only): full → software-dim @10s → off @20s; any key wakes
-// (This SH1106 ignores setContrast, so "dim" is a checkerboard punch-out of lit pixels.)
-unsigned long lastInputMs = 0;
-uint8_t idleStage = 0;   // 0 full, 1 dim, 2 screen off
-
-void displayWake() {
-  idleStage = 0;
-  lastInputMs = millis();
-  u8g2.setPowerSave(0);
-}
-
-void displayEnsureOn() {
-  if (idleStage != 0) displayWake();
-  else u8g2.setPowerSave(0);
-}
-
-// ~half the lit pixels cleared — visible dim without contrast hardware
-void applySoftwareDim() {
-  u8g2.setDrawColor(0);
-  for (uint8_t y = 0; y < 64; y++) {
-    for (uint8_t x = (y & 1); x < 128; x += 2)
-      u8g2.drawPixel(x, y);
-  }
-  u8g2.setDrawColor(1);
-}
-
-void updateClockIdle() {
-  if (mode != VIEW) {
-    if (idleStage != 0) displayWake();
-    return;
-  }
-  unsigned long idle = millis() - lastInputMs;
-  if (idle >= 20000UL) {
-    if (idleStage != 2) {
-      idleStage = 2;
-      u8g2.clearBuffer();
-      u8g2.sendBuffer();
-      u8g2.setPowerSave(1);
-    }
-  } else if (idle >= 10000UL) {
-    if (idleStage != 1) {
-      idleStage = 1;
-      u8g2.setPowerSave(0);
-    }
-  } else if (idleStage != 0) {
-    displayWake();
-  }
-}
 
 // Watch-face Sonic vignette (walk + spin-jump for a ring)
 int16_t wfX = -14;
@@ -116,28 +33,6 @@ uint8_t wfRingCD = 0;     // frames until ring respawns
 uint8_t wfPause = 0;      // brief hold before looping from the left
 bool    wfRingLive = true;
 bool    wfAir = false;
-
-const uint8_t MDAYS[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
-const char MONS[] = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC";
-uint32_t tod = 43200;
-uint8_t mon = 1, dday = 1;
-uint32_t alarmTod = 25200;
-bool alarmOn = false;
-unsigned long lastSec = 0;
-
-void tick() {
-  if (++tod >= 86400UL) {
-    tod = 0;
-    if (++dday > MDAYS[mon - 1]) { dday = 1; if (++mon > 12) mon = 1; }
-  }
-  if (alarmOn && tod == alarmTod && (mode == VIEW || mode == GAME || mode == SPECIAL))
-    mode = RING;
-}
-
-void two(uint8_t v) { if (v < 10) u8g2.print('0'); u8g2.print(v); }
-void monthName(uint8_t m) {
-  for (uint8_t i = 0; i < 3; i++) u8g2.print(MONS[(m - 1) * 3 + i]);
-}
 
 void drawSplash() {
   // Title screen shown when GAME button is pressed from watch mode
@@ -207,7 +102,9 @@ void stepWatchFace() {
   }
 }
 
+// ---- Theme: Sonic clock face (WatchApp::faceDraw) ----
 void drawView() {
+  using namespace watch;
   u8g2.setDrawColor(1);
   for (uint8_t i = 0; i < 128; i += 8) hLineSafe(i, 56, 4);
 
@@ -215,7 +112,7 @@ void drawView() {
   drawSunflower(10, 54);
 
   u8g2.setFont(u8g2_font_logisoso24_tn);
-  u8g2.setCursor(30, 36); two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60);
+  u8g2.setCursor(30, 36); print2(hours()); u8g2.print(':'); print2(minutes());
 
   if (wfRingLive) drawRingGlyph(118, 20);
   else if ((wfRingCD > 70) && ((wfAnim >> 1) & 1)) {
@@ -225,71 +122,12 @@ void drawView() {
   drawHogAt(wfX, wfY, wfAir, true, wfAnim, !wfAir);
 
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(2, 63); monthName(mon); u8g2.print(' '); two(dday);
-  u8g2.setCursor(100, 63); two(tod % 60);
-  if (alarmOn) {
+  u8g2.setCursor(2, 63); printMonth(month()); u8g2.print(' '); print2(day());
+  u8g2.setCursor(100, 63); print2(seconds());
+  if (alarmOn()) {
     u8g2.setCursor(40, 9); u8g2.print(F("ALM "));
-    two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60);
+    print2(alarmHours()); u8g2.print(':'); print2(alarmMinutes());
   }
-}
-
-uint8_t setPage = 0, setField = 0;
-void adjust(int8_t d) {
-  if (setPage == 0) {
-    uint8_t h = tod / 3600, m = (tod / 60) % 60, s = tod % 60;
-    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
-    tod = h * 3600UL + m * 60UL + s;
-  } else if (setPage == 1) {
-    if (setField == 0) mon = (mon - 1 + d + 12) % 12 + 1;
-    uint8_t dim = MDAYS[mon - 1];
-    if (dday > dim) dday = dim;
-    if (setField == 1) dday = (dday - 1 + d + dim) % dim + 1;
-  } else {
-    if (setField == 2) { alarmOn = !alarmOn; return; }
-    uint8_t h = alarmTod / 3600, m = (alarmTod / 60) % 60;
-    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
-    alarmTod = h * 3600UL + m * 60UL;
-  }
-}
-void setLoop(uint8_t e) {
-  if (e & B_MODE) { setPage++; setField = 0; if (setPage > 2) mode = VIEW; return; }
-  if (e & B_LEFT) adjust(-1);
-  if (e & B_RIGHT) adjust(1);
-  if (e & B_MID) {
-    setField++;
-    if (setField >= ((setPage == 2) ? 3 : 2)) { setField = 0; mode = VIEW; }
-  }
-}
-void drawSet() {
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(setPage == 2 ? 40 : 30, 12);
-  u8g2.print(setPage == 0 ? F("SET TIME") : setPage == 1 ? F("SET DATE") : F("ALARM"));
-  u8g2.setFont(u8g2_font_logisoso20_tn);
-  u8g2.setCursor(20, 40);
-  if (setPage == 0) { two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60); }
-  else if (setPage == 1) { monthName(mon); u8g2.print(' '); two(dday); }
-  else { two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60); }
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(0, 54); u8g2.print(F("L/R change"));
-  u8g2.setCursor(0, 63);
-  if (setPage == 2 && setField == 2) { u8g2.print(F("ALARM ")); u8g2.print(alarmOn ? F("ON") : F("OFF")); }
-  else if (setPage == 1) u8g2.print(setField ? F("DAY") : F("MONTH"));
-  else u8g2.print(setField ? F("MINUTE") : F("HOUR"));
-  u8g2.setCursor(72, 63); u8g2.print(F("MID next"));
-}
-
-void ringLoop() {
-  static bool on = false;
-  bool want = (millis() % 1000) < 300;
-  if (want != on) { on = want; if (on) tone(P_BUZ, 1200); else noTone(P_BUZ); }
-}
-void drawRing() {
-  if ((millis() / 400) & 1) {
-    u8g2.setFont(u8g2_font_ncenB14_tr);
-    u8g2.setCursor(18, 30); u8g2.print(F("WAKE UP!"));
-  }
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(18, 50); u8g2.print(F("PRESS ANY BUTTON"));
 }
 
 // ===================== GAME =====================
@@ -912,115 +750,6 @@ void resolveLanding(int16_t rad) {
   }
 }
 
-// U8g2 treats coords as unsigned — any negative x/y wraps to ~65535 and
-// paints garbage scanlines (worse while scrolling when objects exit left).
-void plot(int16_t x, int16_t y) {
-  // Signed clip — never hand U8g2 an out-of-range pixel (SH1106 will wrap it)
-  if (x < 0 || y < 0 || x >= 128 || y >= 64) return;
-  u8g2.drawPixel((u8g2_uint_t)x, (u8g2_uint_t)y);
-}
-
-void fillBoxClipped(int16_t x, int16_t y, int16_t w, int16_t h) {
-  if (w <= 0 || h <= 0) return;
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x >= 128 || y >= 64) return;
-  if (x + w > 128) w = 128 - x;
-  if (y + h > 64) h = 64 - y;
-  if (w > 0 && h > 0) u8g2.drawBox((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)w, (u8g2_uint_t)h);
-}
-
-void hLineSafe(int16_t x, int16_t y, int16_t w) {
-  if (y < 0 || y >= 64 || w <= 0) return;
-  if (x < 0) { w += x; x = 0; }
-  if (x >= 128) return;
-  if (x + w > 128) w = 128 - x;
-  if (w > 0) u8g2.drawHLine((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)w);
-}
-
-void vLineSafe(int16_t x, int16_t y, int16_t h) {
-  if (x < 0 || x >= 128 || h <= 0) return;
-  if (y < 0) { h += y; y = 0; }
-  if (y >= 64) return;
-  if (y + h > 64) h = 64 - y;
-  if (h > 0) u8g2.drawVLine((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)h);
-}
-
-void lineSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
-  int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-  int16_t dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-  int16_t err = dx + dy;
-  for (;;) {
-    plot(x0, y0);
-    if (x0 == x1 && y0 == y1) break;
-    int16_t e2 = err << 1;
-    if (e2 >= dy) { err += dy; x0 += sx; }
-    if (e2 <= dx) { err += dx; y0 += sy; }
-  }
-}
-
-void discSafe(int16_t cx, int16_t cy, int16_t r) {
-  if (r < 0) return;
-  // Skip if fully off-screen
-  if (cx + r < 0 || cy + r < 0 || cx - r >= 128 || cy - r >= 64) return;
-  for (int16_t y = -r; y <= r; y++) {
-    for (int16_t x = -r; x <= r; x++) {
-      if (x * x + y * y <= r * r) plot(cx + x, cy + y);
-    }
-  }
-}
-
-void circleSafe(int16_t cx, int16_t cy, int16_t r) {
-  if (r < 0) return;
-  if (cx + r < 0 || cy + r < 0 || cx - r >= 128 || cy - r >= 64) return;
-  int16_t x = -r, y = 0, err = 2 - 2 * r;
-  do {
-    plot(cx - x, cy + y);
-    plot(cx - y, cy - x);
-    plot(cx + x, cy - y);
-    plot(cx + y, cy + x);
-    r = err;
-    if (r <= y) err += ++y * 2 + 1;
-    if (r > x || err > y) err += ++x * 2 + 1;
-  } while (x < 0);
-}
-
-void triSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
-  lineSafe(x0, y0, x1, y1);
-  lineSafe(x1, y1, x2, y2);
-  lineSafe(x2, y2, x0, y0);
-}
-
-// Filled triangle via bbox + barycentric (clip-safe)
-void fillTriSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
-  int16_t minX = x0, maxX = x0, minY = y0, maxY = y0;
-  if (x1 < minX) minX = x1; if (x1 > maxX) maxX = x1;
-  if (x2 < minX) minX = x2; if (x2 > maxX) maxX = x2;
-  if (y1 < minY) minY = y1; if (y1 > maxY) maxY = y1;
-  if (y2 < minY) minY = y2; if (y2 > maxY) maxY = y2;
-  if (maxX < 0 || maxY < 0 || minX >= 128 || minY >= 64) return;
-  if (minX < 0) minX = 0; if (minY < 0) minY = 0;
-  if (maxX > 127) maxX = 127; if (maxY > 63) maxY = 63;
-  int16_t a = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
-  if (a == 0) { triSafe(x0, y0, x1, y1, x2, y2); return; }
-  for (int16_t y = minY; y <= maxY; y++) {
-    for (int16_t x = minX; x <= maxX; x++) {
-      int16_t w0 = (x1 - x) * (y2 - y) - (x2 - x) * (y1 - y);
-      int16_t w1 = (x2 - x) * (y0 - y) - (x0 - x) * (y2 - y);
-      int16_t w2 = (x0 - x) * (y1 - y) - (x1 - x) * (y0 - y);
-      if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
-        plot(x, y);
-    }
-  }
-}
-
-void frameSafe(int16_t x, int16_t y, int16_t w, int16_t h) {
-  hLineSafe(x, y, w);
-  hLineSafe(x, y + h - 1, w);
-  vLineSafe(x, y, h);
-  vLineSafe(x + w - 1, y, h);
-}
-
 void stopRoll() {
   groundRoll = false;
   if (onGround) rolling = false;
@@ -1065,7 +794,7 @@ void handleDoubleTapRoll(uint8_t e) {
 
   if (e & B_RIGHT) {
     if (!groundRoll && lastTapDir == 2 && now - lastTapMs < 280 && onGround &&
-        (fvx > 0 || (held & B_RIGHT))) {
+        (fvx > 0 || (watch::held() & B_RIGHT))) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
@@ -1078,7 +807,7 @@ void handleDoubleTapRoll(uint8_t e) {
   }
   if (e & B_LEFT) {
     if (!groundRoll && lastTapDir == 1 && now - lastTapMs < 280 && onGround &&
-        (fvx < 0 || (held & B_LEFT))) {
+        (fvx < 0 || (watch::held() & B_LEFT))) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
@@ -1160,7 +889,7 @@ void applyGroundControl() {
     else if (fvx < 0) { fvx += ROLL_FRIC; if (fvx > 0) fvx = 0; }
   } else if (onGround) {
     fvx += (fx)slope * SLOPE_RUN;
-    bool left = held & B_LEFT, right = held & B_RIGHT;
+    bool left = watch::held() & B_LEFT, right = watch::held() & B_RIGHT;
     if (right && !left) {
       if (fvx < 0) fvx += BRAKE;          // skid
       else {
@@ -1181,12 +910,12 @@ void applyGroundControl() {
       else if (fvx < 0) { fvx += FRICTION; if (fvx > 0) fvx = 0; }
     }
   } else if (pinball) {
-    if (held & B_LEFT)  { fvx -= ACCEL; faceRight = false; }
-    if (held & B_RIGHT) { fvx += ACCEL; faceRight = true; }
+    if (watch::held() & B_LEFT)  { fvx -= ACCEL; faceRight = false; }
+    if (watch::held() & B_RIGHT) { fvx += ACCEL; faceRight = true; }
   } else {
     // Air steer — classic Sonic still answers the D-pad off the ground
-    if (held & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
-    if (held & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
+    if (watch::held() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
+    if (watch::held() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
   }
 
   if (fvx > top) fvx = top;
@@ -1327,9 +1056,9 @@ void stepLoop(int16_t rad) {
   // loop momentum even while the sprite moves left across the ceiling).
   // Opposite only brakes through zero — never snaps onto the mirror path.
   fx along = (fx)(loopSense * (float)ACCEL);  // left entry: sense=-1 → along=-ACCEL
-  if ((loopSense < 0 && (held & B_RIGHT)) || (loopSense > 0 && (held & B_LEFT)))
+  if ((loopSense < 0 && (watch::held() & B_RIGHT)) || (loopSense > 0 && (watch::held() & B_LEFT)))
     loopGspd += along;          // accelerate further along the loop
-  if ((loopSense < 0 && (held & B_LEFT)) || (loopSense > 0 && (held & B_RIGHT)))
+  if ((loopSense < 0 && (watch::held() & B_LEFT)) || (loopSense > 0 && (watch::held() & B_RIGHT)))
     loopGspd -= along;          // brake / reverse only through zero
   if (loopGspd > TOP_SPD) loopGspd = TOP_SPD;
   if (loopGspd < -TOP_SPD) loopGspd = -TOP_SPD;
@@ -1398,7 +1127,7 @@ void physicsStep(uint8_t e) {
     beep(900, 30);
   }
   // Variable jump: release early cuts the rise
-  if (!onGround && !jumpCut && !(held & B_MID) && fvy < 0) {
+  if (!onGround && !jumpCut && !(watch::held() & B_MID) && fvy < 0) {
     fvy >>= 1;
     jumpCut = true;
   }
@@ -1471,7 +1200,7 @@ void gameStep(uint8_t e) {
 
 void gameStepInner(uint8_t e) {
   if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
-  if (e & B_MODE) { mode = VIEW; return; }
+  if (e & B_MODE) { watch::exitToClock(); return; }
 
   if (invul) invul--;
   if (intro) intro--;
@@ -1641,7 +1370,7 @@ void gameStepInner(uint8_t e) {
 }
 
 void specialStep(uint8_t e) {
-  if (e & B_MODE) { mode = VIEW; return; }
+  if (e & B_MODE) { watch::exitToClock(); return; }
   if (intro) intro--;
   animFrame++;
   if (spTimer) spTimer--;
@@ -1654,8 +1383,8 @@ void specialStep(uint8_t e) {
     return;
   }
 
-  if (held & B_LEFT) fpx -= I2F(2);
-  if (held & B_RIGHT) fpx += I2F(2);
+  if (watch::held() & B_LEFT) fpx -= I2F(2);
+  if (watch::held() & B_RIGHT) fpx += I2F(2);
   if (e & B_MID) fvy = I2F(-5);
   if (fvy < I2F(4)) fvy += GRAVITY * 2;
   fpy += fvy;
@@ -2066,7 +1795,7 @@ void menuLoop(uint8_t e) {
   if (e & B_MID) {
     if (menuSel == 0) mode = GAME;
     else if (menuSel == 1) startGame();
-    else mode = VIEW;
+    else watch::exitToClock();
   }
 }
 void drawMenu() {
@@ -2078,38 +1807,34 @@ void drawMenu() {
   u8g2.setCursor(0, 63); u8g2.print(F("L/R pick  MID ok"));
 }
 
-void update(uint8_t e) {
+// ===================== WatchCore hooks =====================
+void gameStart() {            // Game pressed on the clock face
+  splashFrame = 0;
+  mode = SPLASH;
+}
+
+void gameUpdate(uint8_t e) {
   switch (mode) {
     case SPLASH:
       if (splashFrame < 250) splashFrame++;
       if (e & B_MID) startGame();
-      else if (e & (B_MODE | B_GAME | B_LEFT | B_RIGHT)) mode = VIEW;
+      else if (e & (B_MODE | B_GAME | B_LEFT | B_RIGHT)) watch::exitToClock();
       break;
-    case VIEW:
-      if (idleStage < 2) stepWatchFace();
-      if (e & B_MODE) { displayEnsureOn(); mode = SETM; setPage = 0; setField = 0; }
-      else if (e & B_GAME) { displayEnsureOn(); splashFrame = 0; mode = SPLASH; }
-      break;
-    case SETM: setLoop(e); break;
-    case RING: if (e) { mode = VIEW; noTone(P_BUZ); } else ringLoop(); break;
     case GAME: gameStep(e); break;
     case SPECIAL: specialStep(e); break;
     case CLEAR: clearStep(e); break;
     case MENU: menuLoop(e); break;
     case OVER:
       if (e & B_MID) startGame();
-      else if (e & (B_GAME | B_MODE)) mode = VIEW;  // Mode always escapes to clock
+      else if (e & (B_GAME | B_MODE)) watch::exitToClock();  // Mode always escapes to clock
       break;
-    case WIN: if (e) mode = VIEW; break;
+    case WIN: if (e) watch::exitToClock(); break;
   }
 }
 
-void render() {
+void gameDraw() {
   switch (mode) {
     case SPLASH: drawSplash(); break;
-    case VIEW: drawView(); break;
-    case SETM: drawSet(); break;
-    case RING: drawRing(); break;
     case GAME: drawGame(); break;
     case SPECIAL: drawSpecial(); break;
     case CLEAR: drawClear(); break;
@@ -2119,40 +1844,22 @@ void render() {
   }
 }
 
-void setup() {
-  for (uint8_t i = 0; i < 5; i++) pinMode(BPIN[i], INPUT_PULLUP);
-  pinMode(P_BUZ, OUTPUT);
-  Wire.setSDA(P_SDA); Wire.setSCL(P_SCL); Wire.setClock(400000);
-  u8g2.begin();
-  u8g2.setBitmapMode(1);   // bitmap 0-bits are transparent, not a black mask
-  lastSec = millis();
-  displayWake();
+// Alarm interrupted a run: come back to the pause menu, not straight into play
+void gameInterrupted() {
+  if (mode == GAME) { menuSel = 0; mode = MENU; }
 }
 
-void loop() {
-  pending |= readButtons();
-  unsigned long now = millis();
-  if (now - lastSec >= 1000) { lastSec += 1000; tick(); }
+const watch::WatchApp APP = {
+  stepWatchFace,    // faceStep
+  drawView,         // faceDraw
+  gameStart,        // appStart
+  gameUpdate,       // appUpdate
+  gameDraw,         // appDraw
+  gameInterrupted,  // appInterrupted
+  nullptr,          // setDraw  (default set screens)
+  nullptr,          // ringDraw (default alarm screen)
+  "MID",            // nextLabel
+};
 
-  // Any button press resets idle; wakes a blanked clock face
-  if (pending) {
-    lastInputMs = now;
-    if (mode == VIEW && idleStage != 0) displayWake();
-  }
-
-  static unsigned long lastFrame = 0;
-  if (now - lastFrame < 33) return;
-  lastFrame = now;
-  uint8_t ev = pending; pending = 0;
-
-  update(ev);
-  updateClockIdle();
-
-  // Screen off on clock face — skip OLED traffic until a key wakes it
-  if (mode == VIEW && idleStage == 2) return;
-
-  u8g2.clearBuffer();
-  render();
-  if (mode == VIEW && idleStage == 1) applySoftwareDim();
-  u8g2.sendBuffer();
-}
+void setup() { watch::begin(APP); }
+void loop() { watch::run(); }

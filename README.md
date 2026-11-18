@@ -21,7 +21,8 @@ Requirements: [`arduino-cli`](https://arduino.github.io/arduino-cli/), Earle Phi
 | Path | Purpose |
 |------|---------|
 | `docs/` | Hardware, software architecture, flash guide, how to add games |
-| `scripts/flash.sh` | Compile + upload helper |
+| `libraries/WatchCore/` | Shared watch shell: buttons, clock, alarm, set screens, power save, clip-safe drawing |
+| `scripts/flash.sh` | Compile + upload helper (passes `--libraries libraries`) |
 | `sonic_watch/` | Clock + Sonic runner |
 | `metroid_watch/` | Clock + Metroid adventure (design doc included) |
 

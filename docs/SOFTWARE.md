@@ -4,61 +4,87 @@ Target pattern for all Game Watch firmwares. The Sonic sketch (`sonic_watch/`) i
 
 ## Runtime model
 
-```
-setup()
-  pinMode pull-ups, Wire I2C, u8g2.begin()
+The shell lives in **`libraries/WatchCore`** and is shared by every firmware. A sketch supplies a
+`watch::WatchApp` table of hooks and hands control to the library:
 
-loop()  (as fast as possible for buttons)
-  pending |= readButtons()
-  if 1s elapsed → tick clock
-  if ≥33 ms since last frame (~30 FPS):
-      update(pending edges)
-      clearBuffer → render → sendBuffer
+```cpp
+const watch::WatchApp APP = {
+  faceStep, faceDraw,          // theme: the clock face art (required)
+  gameStart, gameUpdate, gameDraw,
+  gameInterrupted,             // optional: alarm took over mid-game
+  nullptr, nullptr,            // optional themed set / alarm screens
+  "MID",                       // set-screen hint for the Mid button
+};
+void setup() { watch::begin(APP); }
+void loop()  { watch::run(); }
+```
+
+`watch::run()`:
+
+```
+pending |= debounced button edges        (every spin of loop())
+catch up the clock 1 s at a time         (alarm checked every second)
+if the face is dark, a press only wakes it
+every 33 ms (~30 FPS):
+    update(pending)  → face / set / ring / your appUpdate()
+    power-save step  (face only)
+    clearBuffer → render → sendBuffer
 ```
 
 **Rules**
 
-1. Sample buttons every spin of `loop()`; only consume edges on the frame tick.
-2. Cap logic + draw to ~**30 FPS** so I2C OLED traffic stays stable.
-3. Never block for more than a few ms (no `delay()` in the game path).
+1. Never block for more than a few ms (no `delay()` in the game path).
+2. Read continuous input with `watch::held()`; react to presses via the `edges` argument.
+3. Leave the game with `watch::exitToClock()` — don't draw your own clock.
 
 ## Mode machine
 
 ```
-SPLASH → VIEW ⇄ SETM
-           ↕
-         RING (alarm)
-           ↕
-         GAME ⇄ MENU
-           ↓
-       OVER / WIN → VIEW or restart
+FACE ⇄ SET (time / date / alarm)
+  │ Game
+  ▼
+ APP ── your own modes (splash, play, pause, over, win…) ── exitToClock() → FACE
+
+any mode ──alarm──▶ RING ──any key / 60 s──▶ back where you were
 ```
 
-| Mode | Role |
-|------|------|
-| `SPLASH` | Boot title |
-| `VIEW` | Clock face (always recoverable) |
-| `SETM` | Set time / date / alarm |
-| `RING` | Alarm ringing |
-| `GAME` | Active game |
-| `MENU` | In-game pause |
-| `OVER` / `WIN` | End screens |
+| System mode | Owner | Role |
+|-------------|-------|------|
+| FACE | sketch art, library logic | Themed clock face; dims at 10 s, off at 20 s |
+| SET | library (art overridable) | Mode cycles time → date → alarm; Mid next field; L/R adjust |
+| RING | library (art overridable) | Fires from any mode; game is frozen, then resumed |
+| APP | sketch | Everything game-side |
 
-**Platform convention:** `MODE` returns to the clock from gameplay when possible. `GAME` starts or pauses the game from the clock / run.
+If the alarm interrupts the game, `appInterrupted()` runs first — use it to switch into your
+pause menu so play doesn't resume instantly when the alarm is dismissed.
 
-## Shared services (keep these)
+## Theming the watch
 
-These belong in every firmware, even if the game changes:
+Each firmware has its own clock art. The **face is always the sketch's job**: `faceDraw()`
+draws everything on screen (time, date, alarm badge, animation) using:
 
-| Service | Responsibility |
-|---------|----------------|
-| Button debounce | `readButtons()`, `held`, edge bits |
-| Clock | `tod`, `mon`, `dday`, `tick()`, alarm |
-| Display helpers | `two()`, `monthName()`, fonts |
-| Sound | `beep(freq, ms)` |
-| Frame router | `update(e)` + `render()` by `mode` |
+| Call | Returns |
+|------|---------|
+| `watch::hours()` / `minutes()` / `seconds()` | Current time |
+| `watch::month()` / `day()` | Date (1-based) |
+| `watch::alarmOn()` / `alarmHours()` / `alarmMinutes()` | Alarm |
+| `watch::print2(v)` / `printMonth(m)` | Zero-padded digits / `JAN`..`DEC` at the cursor |
+| `watch::frameCount()` | Rendered-frame counter for animation |
 
-Games plug into `GAME` / `MENU` / `OVER` / `WIN` (and optionally splash art). Leave clock + settings intact so the device stays a watch.
+`faceStep()` advances the face animation and is only called while the face is lit.
+Set and alarm screens use plain defaults; supply `setDraw` / `ringDraw` (reading
+`watch::setPage()` / `setField()`) to theme those too.
+
+## Shared services (in WatchCore)
+
+| Service | API |
+|---------|-----|
+| Buttons | `B_LEFT B_MID B_RIGHT B_MODE B_GAME` bits, `watch::held()`; alias to logical names per game |
+| Clock + alarm | `watch::hours()` … above; set via the SET screens |
+| Sound | `beep(freq, ms)` (muted while the alarm rings) |
+| Drawing | `plot`, `hLineSafe`, `vLineSafe`, `lineSafe`, `fillBoxClipped`, `frameSafe`, `discSafe`, `circleSafe`, `triSafe`, `fillTriSafe` |
+| Display | global `u8g2` (SH1106, full buffer) |
+| Pins | `watch::DEFAULT_PINS`; pass a different `watch::Pins` to `begin()` for new hardware |
 
 ## Drawing stack
 

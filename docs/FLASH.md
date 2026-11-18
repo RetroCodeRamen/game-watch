@@ -51,8 +51,14 @@ The script compiles then uploads over USB (UF2).
 FQBN=rp2040:rp2040:waveshare_rp2040_zero
 SKETCH=sonic_watch
 
-arduino-cli compile --fqbn "$FQBN" "$SKETCH"
+arduino-cli compile --fqbn "$FQBN" --libraries libraries "$SKETCH"
 arduino-cli upload -p /dev/ttyACM0 --fqbn "$FQBN" "$SKETCH"
+```
+
+Every sketch depends on the repo's `libraries/WatchCore`. `--libraries libraries` (run from the repo root) makes arduino-cli find it. For the Arduino IDE instead, symlink it into your sketchbook once:
+
+```bash
+ln -s "$PWD/libraries/WatchCore" ~/Arduino/libraries/WatchCore
 ```
 
 ## Bootloader recovery
@@ -65,7 +71,7 @@ If upload fails:
 
 ## Verify after flash
 
-1. Splash → `SONIC` (or your title) then clock.
-2. Game button starts the game.
+1. Boots to the themed clock face.
+2. Game button starts the game (Sonic shows its title splash first).
 3. Mode returns to clock.
 4. Jump / roll respond; OLED not garbled (if garbled, check I2C wiring GP4/GP5).

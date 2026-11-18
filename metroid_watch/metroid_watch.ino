@@ -3,13 +3,15 @@
 // Solid floors + jump-through platforms. Stable Samus movement.
 // Full campaign comes later once this feels right.
 //
+// Clock, alarm, set screens and buttons live in libraries/WatchCore.
+// This sketch supplies the Metroid-themed clock face and the game (see WatchApp at the bottom).
+//
 // Logical buttons: Left Right Up Down Menu
 // Current 5-button board: Mid→Up, Mode→Down, Game→Menu
+// New hardware: pass a watch::Pins to watch::begin() and adjust the aliases below.
 
 #include <Arduino.h>
-#include <Wire.h>
-#define U8G2_16BIT
-#include <U8g2lib.h>
+#include <WatchCore.h>
 #include "metroid_sprites.h"
 
 // Before Arduino auto-prototypes
@@ -19,128 +21,12 @@ struct Plat {
   bool solid;  // true = solid slab; false = jump-through from below
 };
 
-// -------------------- pins (change here for new hardware) --------------------
-const uint8_t P_LEFT = 2, P_UP = 3, P_RIGHT = 6, P_DOWN = 7, P_MENU = 8;
-const uint8_t P_BUZ = 15, P_SDA = 4, P_SCL = 5;
+// -------------------- logical buttons → physical WatchCore bits --------------------
+const uint8_t B_UP = B_MID, B_DOWN = B_MODE, B_MENU = B_GAME;
 
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
-
-enum : uint8_t { B_LEFT = 1, B_UP = 2, B_RIGHT = 4, B_DOWN = 8, B_MENU = 16 };
-const uint8_t BPIN[5] = {P_LEFT, P_UP, P_RIGHT, P_DOWN, P_MENU};
-uint8_t held = 0, lastRaw = 0, pending = 0;
-unsigned long changedAt[5];
-
-uint8_t readButtons() {
-  unsigned long now = millis();
-  uint8_t edges = 0;
-  for (uint8_t i = 0; i < 5; i++) {
-    uint8_t bit = (uint8_t)(1 << i);
-    bool raw = !digitalRead(BPIN[i]);
-    if (raw != ((lastRaw & bit) != 0)) { lastRaw ^= bit; changedAt[i] = now; }
-    if (now - changedAt[i] >= 20) {
-      bool isHeld = (held & bit) != 0;
-      if (raw != isHeld) {
-        held ^= bit;
-        if (raw) edges |= bit;
-      }
-    }
-  }
-  return edges;
-}
-
-void beep(uint16_t f, uint16_t ms) { tone(P_BUZ, f, ms); }
-
-// -------------------- modes --------------------
-enum : uint8_t { VIEW, SETM, RING, GAME, PAUSE };
-uint8_t mode = VIEW;
-
-unsigned long lastInputMs = 0;
-uint8_t idleStage = 0;
-
-void displayWake() {
-  idleStage = 0;
-  lastInputMs = millis();
-  u8g2.setPowerSave(0);
-}
-void displayEnsureOn() {
-  if (idleStage) displayWake();
-  else u8g2.setPowerSave(0);
-}
-void applySoftwareDim() {
-  u8g2.setDrawColor(0);
-  for (uint8_t y = 0; y < 64; y++)
-    for (uint8_t x = (y & 1); x < 128; x += 2)
-      u8g2.drawPixel(x, y);
-  u8g2.setDrawColor(1);
-}
-void updateClockIdle() {
-  if (mode != VIEW) {
-    if (idleStage) displayWake();
-    return;
-  }
-  unsigned long idle = millis() - lastInputMs;
-  if (idle >= 20000UL) {
-    if (idleStage != 2) {
-      idleStage = 2;
-      u8g2.clearBuffer();
-      u8g2.sendBuffer();
-      u8g2.setPowerSave(1);
-    }
-  } else if (idle >= 10000UL) {
-    if (idleStage != 1) { idleStage = 1; u8g2.setPowerSave(0); }
-  } else if (idleStage) {
-    displayWake();
-  }
-}
-
-const uint8_t MDAYS[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
-const char MONS[] = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC";
-uint32_t tod = 43200;
-uint8_t mon = 1, dday = 1;
-uint32_t alarmTod = 25200;
-bool alarmOn = false;
-unsigned long lastSec = 0;
-
-void tick() {
-  if (++tod >= 86400UL) {
-    tod = 0;
-    if (++dday > MDAYS[mon - 1]) { dday = 1; if (++mon > 12) mon = 1; }
-  }
-  if (alarmOn && tod == alarmTod && (mode == VIEW || mode == GAME))
-    mode = RING;
-}
-
-void two(uint8_t v) { if (v < 10) u8g2.print('0'); u8g2.print(v); }
-void monthName(uint8_t m) {
-  for (uint8_t i = 0; i < 3; i++) u8g2.print(MONS[(m - 1) * 3 + i]);
-}
-
-void plot(int16_t x, int16_t y) {
-  if ((uint16_t)x < 128 && (uint16_t)y < 64) u8g2.drawPixel(x, y);
-}
-void hLineSafe(int16_t x, int16_t y, int16_t w) {
-  if ((uint16_t)y >= 64) return;
-  if (x < 0) { w += x; x = 0; }
-  if (x + w > 128) w = 128 - x;
-  if (w > 0) u8g2.drawHLine(x, y, w);
-}
-void vLineSafe(int16_t x, int16_t y, int16_t h) {
-  if ((uint16_t)x >= 128) return;
-  if (y < 0) { h += y; y = 0; }
-  if (y + h > 64) h = 64 - y;
-  if (h > 0) u8g2.drawVLine(x, y, h);
-}
-void fillBox(int16_t x, int16_t y, int16_t w, int16_t h) {
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > 128) w = 128 - x;
-  if (y + h > 64) h = 64 - y;
-  if (w > 0 && h > 0) u8g2.drawBox(x, y, w, h);
-}
-void frameBox(int16_t x, int16_t y, int16_t w, int16_t h) {
-  hLineSafe(x, y, w); hLineSafe(x, y + h - 1, w);
-  vLineSafe(x, y, h); vLineSafe(x + w - 1, y, h);
-}
+// Game-side modes only; clock face / set / alarm are owned by WatchCore
+enum : uint8_t { GAME, PAUSE };
+uint8_t mode = GAME;
 
 // =====================================================================
 // ENGINE SANDBOX — one room, 384×224 playfield (3×4 viewports of 128×56)
@@ -228,7 +114,7 @@ int16_t px = 40, py = 180;
 int16_t camX = 0, camY = 0;
 bool faceRight = true;
 bool onGround = false;
-bool jumpHeld = false;       // Up currently held
+bool jumpHeld = false;       // Up currently watch::held()
 bool jumpCutDone = false;    // already applied release cut this jump
 uint8_t coyote = 0;
 uint8_t jumpBuf = 0;
@@ -389,7 +275,7 @@ void drawWorld() {
     if (x > 128 || x + p.w < 0) continue;
 
     if (p.solid) {
-      fillBox(x, y, p.w, 4);
+      fillBoxClipped(x, y, p.w, 4);
       // rock edge ticks
       for (int16_t t = 0; t < p.w; t += 8)
         plot(x + t, y - 1);
@@ -409,7 +295,7 @@ void drawWorld() {
 }
 
 void drawHud() {
-  fillBox(0, 0, 128, HUD_H);
+  fillBoxClipped(0, 0, 128, HUD_H);
   u8g2.setDrawColor(0);
   u8g2.setFont(u8g2_font_5x7_tr);
   u8g2.setCursor(2, 7);
@@ -430,9 +316,9 @@ void drawGame() {
 void drawPause() {
   // Big readable pause — not the full Start tabs yet
   u8g2.setDrawColor(1);
-  fillBox(14, 12, 100, 44);
+  fillBoxClipped(14, 12, 100, 44);
   u8g2.setDrawColor(0);
-  frameBox(14, 12, 100, 44);
+  frameSafe(14, 12, 100, 44);
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setCursor(40, 24);
   u8g2.print(F("PAUSED"));
@@ -453,14 +339,14 @@ void gamePhysics(uint8_t e) {
     menuHeld = true;
     menuDownMs = millis();
   }
-  if (menuHeld && (held & B_MENU) && millis() - menuDownMs >= 350UL) {
+  if (menuHeld && (watch::held() & B_MENU) && millis() - menuDownMs >= 350UL) {
     menuHeld = false;
     pauseSel = 0;
     mode = PAUSE;
     beep(400, 30);
     return;
   }
-  if (menuHeld && !(held & B_MENU)) {
+  if (menuHeld && !(watch::held() & B_MENU)) {
     menuHeld = false;
     pauseSel = 0;
     mode = PAUSE;
@@ -470,8 +356,8 @@ void gamePhysics(uint8_t e) {
 
   // ---- Horizontal accel (semi-implicit Euler) ----
   int8_t dir = 0;
-  if (held & B_LEFT)  { dir = -1; faceRight = false; }
-  if (held & B_RIGHT) { dir =  1; faceRight = true; }
+  if (watch::held() & B_LEFT)  { dir = -1; faceRight = false; }
+  if (watch::held() & B_RIGHT) { dir =  1; faceRight = true; }
 
   if (dir != 0) {
     if (dirHold < 255) dirHold++;
@@ -509,7 +395,7 @@ void gamePhysics(uint8_t e) {
     jumpBuf = 8;       // ~130ms buffer
     jumpHeld = true;
   }
-  if (!(held & B_UP)) jumpHeld = false;
+  if (!(watch::held() & B_UP)) jumpHeld = false;
 
   if (onGround) coyote = 6;     // ~100ms
   else if (coyote) coyote--;
@@ -621,14 +507,13 @@ void pauseStep(uint8_t e) {
       menuDownMs = 0;
       beep(600, 15);
     } else {
-      mode = VIEW;
+      watch::exitToClock();
       beep(300, 40);
     }
   }
 }
 
-// -------------------- clock UI --------------------
-uint8_t setPage = 0, setField = 0;
+// -------------------- Theme: Metroid clock face --------------------
 int16_t wfX = -8;
 uint8_t wfAnim = 0;
 
@@ -639,132 +524,55 @@ void stepWatchFace() {
 }
 
 void drawView() {
+  using namespace watch;
   u8g2.setDrawColor(1);
   for (uint8_t i = 0; i < 16; i++)
     plot((i * 41 + wfAnim) & 127, 8 + (i * 7) % 18);
   u8g2.setFont(u8g2_font_logisoso24_tn);
-  u8g2.setCursor(28, 36); two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60);
+  u8g2.setCursor(28, 36); print2(hours()); u8g2.print(':'); print2(minutes());
   // tiny ball on ground line
   blitBits(wfX - 3, 49, SAMUS_BALL, 7, 1, false);
   hLineSafe(0, 56, 128);
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(2, 63); monthName(mon); u8g2.print(' '); two(dday);
-  u8g2.setCursor(100, 63); two(tod % 60);
-  if (alarmOn) {
+  u8g2.setCursor(2, 63); printMonth(month()); u8g2.print(' '); print2(day());
+  u8g2.setCursor(100, 63); print2(seconds());
+  if (alarmOn()) {
     u8g2.setCursor(40, 9); u8g2.print(F("ALM "));
-    two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60);
+    print2(alarmHours()); u8g2.print(':'); print2(alarmMinutes());
   }
 }
 
-void adjust(int8_t d) {
-  if (setPage == 0) {
-    uint8_t h = tod / 3600, m = (tod / 60) % 60, s = tod % 60;
-    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
-    tod = h * 3600UL + m * 60UL + s;
-  } else if (setPage == 1) {
-    if (setField == 0) mon = (mon - 1 + d + 12) % 12 + 1;
-    uint8_t dim = MDAYS[mon - 1];
-    if (dday > dim) dday = dim;
-    if (setField == 1) dday = (dday - 1 + d + dim) % dim + 1;
-  } else {
-    if (setField == 2) { alarmOn = !alarmOn; return; }
-    uint8_t h = alarmTod / 3600, m = (alarmTod / 60) % 60;
-    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
-    alarmTod = h * 3600UL + m * 60UL;
-  }
-}
-void setLoop(uint8_t e) {
-  if (e & B_DOWN) { setPage++; setField = 0; if (setPage > 2) mode = VIEW; return; }
-  if (e & B_LEFT) adjust(-1);
-  if (e & B_RIGHT) adjust(1);
-  if (e & B_UP) {
-    setField++;
-    if (setField >= ((setPage == 2) ? 3 : 2)) { setField = 0; mode = VIEW; }
-  }
-}
-void drawSet() {
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(setPage == 2 ? 40 : 30, 12);
-  u8g2.print(setPage == 0 ? F("SET TIME") : setPage == 1 ? F("SET DATE") : F("ALARM"));
-  u8g2.setFont(u8g2_font_logisoso20_tn);
-  u8g2.setCursor(20, 40);
-  if (setPage == 0) { two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60); }
-  else if (setPage == 1) { monthName(mon); u8g2.print(' '); two(dday); }
-  else { two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60); }
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(0, 54); u8g2.print(F("L/R change"));
-  u8g2.setCursor(0, 63);
-  if (setPage == 2 && setField == 2) { u8g2.print(F("ALARM ")); u8g2.print(alarmOn ? F("ON") : F("OFF")); }
-  else if (setPage == 1) u8g2.print(setField ? F("DAY") : F("MONTH"));
-  else u8g2.print(setField ? F("MINUTE") : F("HOUR"));
-  u8g2.setCursor(72, 63); u8g2.print(F("UP next"));
-}
-
-void ringLoop() {
-  static bool on = false;
-  bool want = (millis() % 1000) < 300;
-  if (want != on) { on = want; if (on) tone(P_BUZ, 1200); else noTone(P_BUZ); }
-}
-void drawRing() {
-  if ((millis() / 400) & 1) {
-    u8g2.setFont(u8g2_font_ncenB14_tr);
-    u8g2.setCursor(18, 30); u8g2.print(F("WAKE UP!"));
-  }
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(18, 50); u8g2.print(F("PRESS ANY BUTTON"));
-}
-
-void update(uint8_t e) {
+// -------------------- WatchCore hooks --------------------
+void gameUpdate(uint8_t e) {
   switch (mode) {
-    case VIEW:
-      if (idleStage < 2) stepWatchFace();
-      if (e & B_DOWN) { displayEnsureOn(); mode = SETM; setPage = 0; setField = 0; }
-      else if (e & B_MENU) { displayEnsureOn(); startSandbox(); }
-      break;
-    case SETM: setLoop(e); break;
-    case RING: if (e) { mode = VIEW; noTone(P_BUZ); } else ringLoop(); break;
     case GAME: gamePhysics(e); break;
     case PAUSE: pauseStep(e); break;
   }
 }
 
-void render() {
+void gameDraw() {
   switch (mode) {
-    case VIEW: drawView(); break;
-    case SETM: drawSet(); break;
-    case RING: drawRing(); break;
     case GAME: drawGame(); break;
     case PAUSE: drawPause(); break;
   }
 }
 
-void setup() {
-  for (uint8_t i = 0; i < 5; i++) pinMode(BPIN[i], INPUT_PULLUP);
-  pinMode(P_BUZ, OUTPUT);
-  Wire.setSDA(P_SDA); Wire.setSCL(P_SCL); Wire.setClock(400000);
-  u8g2.begin();
-  u8g2.setBitmapMode(1);
-  lastSec = millis();
-  displayWake();
+// Alarm interrupted play: resume into the pause menu
+void gameInterrupted() {
+  if (mode == GAME) { pauseSel = 0; menuHeld = false; mode = PAUSE; }
 }
 
-void loop() {
-  pending |= readButtons();
-  unsigned long now = millis();
-  if (now - lastSec >= 1000) { lastSec += 1000; tick(); }
-  if (pending) {
-    lastInputMs = now;
-    if (mode == VIEW && idleStage) displayWake();
-  }
-  static unsigned long lastFrame = 0;
-  if (now - lastFrame < 33) return;
-  lastFrame = now;
-  uint8_t ev = pending; pending = 0;
-  update(ev);
-  updateClockIdle();
-  if (mode == VIEW && idleStage == 2) return;
-  u8g2.clearBuffer();
-  render();
-  if (mode == VIEW && idleStage == 1) applySoftwareDim();
-  u8g2.sendBuffer();
-}
+const watch::WatchApp APP = {
+  stepWatchFace,    // faceStep
+  drawView,         // faceDraw
+  startSandbox,     // appStart (Menu pressed on the face)
+  gameUpdate,       // appUpdate
+  gameDraw,         // appDraw
+  gameInterrupted,  // appInterrupted
+  nullptr,          // setDraw  (default set screens)
+  nullptr,          // ringDraw (default alarm screen)
+  "UP",             // nextLabel — Mid is "Up" on this firmware
+};
+
+void setup() { watch::begin(APP); }
+void loop() { watch::run(); }

@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FQBN="${FQBN:-rp2040:rp2040:waveshare_rp2040_zero}"
 PORT="${PORT:-/dev/ttyACM0}"
 SKETCH="${1:-sonic_watch}"
+LIBS="$ROOT/libraries"   # shared WatchCore lives here
 
 # Allow "sonic_watch" or a path relative to repo root
 if [[ "$SKETCH" != /* ]]; then
@@ -30,7 +31,7 @@ if [[ ! -e "$PORT" ]]; then
 fi
 
 echo "==> Compiling $NAME ($FQBN)"
-arduino-cli compile --fqbn "$FQBN" "$SKETCH"
+arduino-cli compile --fqbn "$FQBN" --libraries "$LIBS" "$SKETCH"
 
 echo "==> Uploading to $PORT"
 arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$SKETCH"
