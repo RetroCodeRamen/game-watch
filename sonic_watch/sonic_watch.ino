@@ -21,7 +21,7 @@ void drawSunflower(int16_t x, int16_t baseY);
 void drawRingGlyph(int16_t x, int16_t y);
 
 // Game-side modes only; clock face / set / alarm are owned by WatchCore
-enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR };
+enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR, DEAD };
 uint8_t mode = SPLASH;
 uint8_t splashFrame = 0;
 
@@ -143,6 +143,12 @@ struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
 // Whole act stays resident — no scroll-despawn (draw/AI cull only)
 Obj objs[256];   // a hand-built act is ~150–230 objects (each ring is one)
 Plat plats[64];
+// Green Hill log bridges: a walkway that sags toward wherever Sonic stands
+struct Bridge { int16_t x0, x1, y; bool live; };
+Bridge bridges[6];
+int8_t curBridge = -1;      // bridge Sonic is standing on (-1 none)
+bool onLedge;               // standing on a platform/bridge (terrain slope below doesn't apply)
+uint8_t deadT;              // death animation frame counter
 Shot shots[6];
 Scatter scat[3];
 const uint8_t SCATTER_LIFE = 90;
@@ -373,6 +379,10 @@ bool addObj(int16_t x, int16_t y, uint8_t kind) {
     if (kind == 8) { o.state = 0; o.timer = 20 + (h8((uint16_t)(x + 3)) & 31); }
     if (kind == 9) { o.y = y; o.timer = 0; }
     if (kind == 10) o.timer = 0;
+    if (kind == 11) {                       // fish: rests in the pool at `home`, leaps on a timer
+      o.home = y; o.state = 0; o.vx = 0;
+      o.timer = 20 + (h8((uint16_t)(x * 3)) & 31);
+    }
     return true;
   }
   return false;
@@ -405,6 +415,35 @@ bool addPlat(int16_t x, int16_t y, int16_t w) {
   }
   return false;
 }
+void addBridge(int16_t x0, int16_t x1, int16_t y) {
+  for (auto &b : bridges) {
+    if (b.live) continue;
+    b.live = true; b.x0 = x0; b.x1 = x1; b.y = y;
+    return;
+  }
+}
+
+// How far bridge i dips at x: deepest under Sonic (up to 5 px mid-span), 0 at the posts
+int16_t bridgeSag(uint8_t i, int16_t u) {
+  if (curBridge != (int8_t)i) return 0;
+  const Bridge &b = bridges[i];
+  int16_t sp = px;
+  if (sp <= b.x0) sp = b.x0 + 1;
+  if (sp >= b.x1) sp = b.x1 - 1;
+  int16_t half = (b.x1 - b.x0) / 2;
+  int16_t edge = (sp - b.x0 < b.x1 - sp) ? sp - b.x0 : b.x1 - sp;
+  int16_t S = (int16_t)((5 * (int32_t)edge) / (half > 0 ? half : 1));
+  if (u <= sp) return (int16_t)((int32_t)S * (u - b.x0) / (sp - b.x0));
+  return (int16_t)((int32_t)S * (b.x1 - u) / (b.x1 - sp));
+}
+
+// Standing height for placing things: a bridge deck if one spans x, else the ground
+int16_t surfaceAt(int16_t x) {
+  for (auto &b : bridges)
+    if (b.live && x >= b.x0 && x <= b.x1) return b.y;
+  return groundAt(x);
+}
+
 void addShot(int16_t x, int16_t y, int8_t vx, int8_t vy) {
   for (auto &s : shots) {
     if (s.live) continue;
@@ -418,6 +457,9 @@ void clearWorld() {
   for (auto &p : plats) p.live = false;
   for (auto &s : shots) s.live = false;
   for (auto &r : scat) r.live = false;
+  for (auto &b : bridges) b.live = false;
+  curBridge = -1;
+  onLedge = false;
   loopTrack.live = false;
   inLoop = false;
   loopAng = 0;
@@ -511,16 +553,43 @@ void hurt() {
     inHollow = false;
     return;
   }
-  // No rings = death: lose a life and restart this act from the beginning
+  // No rings = death: lose a life; the death animation runs after gameStep() finishes
+  // (hurt() is called mid-iteration over objs), then the act restarts or it's game over
   if (lives) lives--;
-  if (!lives) {
-    mode = OVER;
-    beep(120, 400);
-    return;
-  }
-  beep(150, 350);
-  // Rebuild after gameStep() finishes — hurt() is called mid-iteration over objs
   restartPending = true;
+}
+
+// Original short "dun da dun dun daaa" (~1.9 s)
+static const watch::Note DEATH_TUNE[] = {
+  {523, 150}, {0, 30}, {494, 110}, {466, 150}, {0, 30}, {440, 150}, {0, 50}, {349, 900},
+};
+
+void startDeath() {
+  mode = DEAD;
+  deadT = 0;
+  inLoop = inHollow = false;
+  rolling = groundRoll = false;
+  onGround = false;
+  curBridge = -1;
+  invul = 0;
+  setPlayerVel(0, -JUMP_SPD);     // pop straight up…
+  watch::playTune(DEATH_TUNE, sizeof(DEATH_TUNE) / sizeof(DEATH_TUNE[0]));
+}
+
+void deathStep(uint8_t e) {
+  if (e & B_MODE) { watch::stopTune(); watch::exitToClock(); return; }
+  deadT++;
+  // …then fall through everything and off the bottom of the screen (camera stays put)
+  for (uint8_t i = 0; i < 2; i++) {
+    fvy += GRAVITY;
+    fpy += fvy;
+  }
+  syncPlayerInts();
+  if (deadT >= 60 && sy(py) > 80 && !watch::tunePlaying()) {
+    if (!lives) { mode = OVER; return; }
+    startAct(zone, act);   // rebuild stage; lives/score/emeralds kept
+    invul = 45;
+  }
 }
 
 void placeGoal(int16_t x) { addObj(x, groundAt(x) - 20, 6); }
@@ -556,10 +625,15 @@ void startEggWrecker() {
 void buildAct() {
   // Whole act is built once from its layout table and stays loaded
   clearWorld();
+  // Bridges first, so rings/springs above them sit on the deck, not in the pool
+  for (uint8_t i = 0; i < lvl->nObj; i++) {
+    const LvlObj &d = lvl->obj[i];
+    if (d.kind == L_BRIDGE) addBridge(d.x, d.x + d.arg * 4, groundAt(d.x));
+  }
   for (uint8_t i = 0; i < lvl->nObj; i++) {
     const LvlObj &d = lvl->obj[i];
     int16_t x = d.x;
-    int16_t g = groundAt(x);
+    int16_t g = surfaceAt(x);
     switch (d.kind) {
       case L_RING:   addObj(x, g - d.h, 1); break;
       case L_CRAB:   addObj(x, g - 5, 2); break;
@@ -575,7 +649,7 @@ void buildAct() {
       case L_RINGS:
         for (uint8_t k = 0; k < d.arg; k++) {
           int16_t rx = x + k * 12;
-          addObj(rx, groundAt(rx) - d.h, 1);
+          addObj(rx, surfaceAt(rx) - d.h, 1);
         }
         break;
       case L_ARC:
@@ -585,7 +659,7 @@ void buildAct() {
           int16_t m = d.arg - 1;
           int16_t u = 2 * k - m;                       // -m..m
           int16_t lift = m ? 8 + ((int32_t)(d.h - 8) * (m * m - u * u)) / (m * m) : d.h;
-          addObj(rx, groundAt(rx) - lift, 1);
+          addObj(rx, surfaceAt(rx) - lift, 1);
         }
         break;
       case L_SPIKES:
@@ -593,6 +667,7 @@ void buildAct() {
         break;
       case L_LOOP:   placeGreenHillLoop(x); break;
       case L_CHEMX:  placeChemWavyCross(x); break;
+      case L_FISH:   addObj(x, groundAt(x) - 3, 11); break;   // in the pool, under the deck
     }
   }
   clearLoopRunway();                 // no hazards right before / after a loop
@@ -699,6 +774,27 @@ void resolveLanding(int16_t rad) {
     }
   }
 
+  // Log bridges: one-way from above; while standing, follow the sag down
+  int8_t landedBridge = -1;
+  bool ledge = landed && fpy != I2F(g - rad);
+  for (uint8_t i = 0; i < 6; i++) {
+    const Bridge &b = bridges[i];
+    if (!b.live || px < b.x0 || px > b.x1) continue;
+    int16_t top = b.y + bridgeSag(i, px);
+    bool standing = (i == curBridge);
+    if (fvy >= 0 && prevFeet <= top + 3 && (feet >= top || (standing && feet >= top - 6))) {
+      int16_t t2 = top - rad;
+      if (!landed || t2 < F2I(fpy) || standing) {
+        fpy = I2F(t2);
+        fvy = 0;
+        landed = true;
+        landedBridge = i;
+        ledge = true;
+      }
+    }
+  }
+  curBridge = landedBridge;
+
   syncPlayerInts();
   // Safety: never leave Sonic buried under terrain
   g = groundAt(px);
@@ -706,8 +802,11 @@ void resolveLanding(int16_t rad) {
     fpy = I2F(g - rad);
     fvy = 0;
     landed = true;
+    ledge = false;
+    curBridge = -1;
     syncPlayerInts();
   }
+  onLedge = landed && ledge;
 
   if (landed) {
     onGround = true;
@@ -849,7 +948,8 @@ void applyGroundControl() {
   bool pinball = (zone == 2 && (rolling || abs(fvx) >= I2F(2)));
   // Rolling keeps whatever speed you had (Genesis caps rolls at 16, i.e. never in practice)
   fx top = pinball ? I2F(5) : TOP_SPD;
-  int16_t slope = onGround ? slopeAt(px) : 0;
+  // On a platform or bridge the terrain below is irrelevant — it's flat underfoot
+  int16_t slope = (onGround && !onLedge) ? slopeAt(px) : 0;
 
   if (groundRoll && onGround) {
     // Holding forward adds no roll speed; slope does (2.5×)
@@ -1198,8 +1298,7 @@ void gameStep(uint8_t e) {
   gameStepInner(e);
   if (restartPending) {
     restartPending = false;
-    startAct(zone, act);   // rebuild stage; lives/score/emeralds kept
-    invul = 45;
+    startDeath();
   }
 }
 
@@ -1294,6 +1393,19 @@ void gameStepInner(uint8_t e) {
     }
     if (o.kind == 9 && o.timer) o.timer--;
     if (o.kind == 10) o.timer++;
+    if (o.kind == 11) {                        // fish: wait in the pool, leap, splash back down
+      if (o.state == 0) {
+        if (o.timer) o.timer--;
+        else { o.state = 1; o.vx = -10; }      // vx doubles as vertical speed
+      } else {
+        o.y += o.vx;
+        o.vx++;
+        if (o.vx > 0 && o.y >= o.home) {
+          o.y = o.home; o.state = 0;
+          o.timer = 30 + (h8((uint16_t)(o.x + animFrame)) & 31);
+        }
+      }
+    }
   }
 
   for (auto &s : shots) {
@@ -1336,8 +1448,8 @@ void gameStepInner(uint8_t e) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 50; beep(1400, 50);
           if (fvy > 0) { fvy = I2F(-4); rolling = true; syncPlayerInts(); }
-        } else {
-          bumpFromSolid(o.x - 5, o.x + 5, o.y - 5, o.y + 4, rad);
+        } else if (!invul) {
+          hurt();                       // ran into it upright: lose rings, or die with none
         }
       }
     } else if (o.kind == 3) {
@@ -1380,6 +1492,16 @@ void gameStepInner(uint8_t e) {
           if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
         } else {
           bumpFromSolid(o.x - 5, o.x + 5, o.y - 5, o.y + 5, rad);
+        }
+      }
+    } else if (o.kind == 11) {
+      // Fish: only dangerous while it's out of the water
+      if (o.y < o.home - 4 && abs(px - o.x) < 6 && abs(py - o.y) < 8) {
+        if (canBreakEnemy(o.y)) {
+          o.live = false; score += 60; beep(1400, 50);
+          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+        } else if (!invul) {
+          hurt();
         }
       }
     }
@@ -1579,13 +1701,32 @@ void drawSpikes(int16_t x, int16_t baseY) {
 }
 
 void drawPalm(int16_t x, int16_t baseY) {
-  vLineSafe(x, baseY - 20, 20);
-  lineSafe(x, baseY - 20, x - 6, baseY - 14);
-  lineSafe(x, baseY - 20, x + 6, baseY - 14);
-  lineSafe(x, baseY - 21, x - 4, baseY - 26);
-  lineSafe(x, baseY - 21, x + 4, baseY - 26);
-  plot(x - 1, baseY - 20);
-  plot(x + 1, baseY - 20);
+  // ~48 px tall (sunflower is ~40): trunk leans right with bark bands, five drooping
+  // fronds drawn two pixels thick so they survive the OLED, and a pair of coconuts.
+  const int16_t H = 40;
+  for (int16_t i = 0; i <= H; i++) {
+    int16_t cx = x + (i * i) / 320;          // gentle lean, ~5 px at the crown
+    int16_t yy = baseY - i;
+    plot(cx, yy); plot(cx + 1, yy);
+    if ((i & 3) == 0) plot(cx + 2, yy);      // bark bands
+  }
+  int16_t tx = x + (H * H) / 320 + 1, ty = baseY - H;
+  // frond polylines: crown → mid → tip (dx, dy pairs)
+  static const int8_t FR[5][4] = {
+    {-7, -4, -15,  3},    // long left, drooping
+    {-4, -7, -10, -6},    // upper left
+    { 1, -8,   5, -9},    // top
+    { 5, -6,  11, -5},    // upper right
+    { 8, -3,  15,  4},    // long right, drooping
+  };
+  for (uint8_t f = 0; f < 5; f++) {
+    for (int8_t t = 0; t <= 1; t++) {
+      lineSafe(tx, ty + t, tx + FR[f][0], ty + FR[f][1] + t);
+      lineSafe(tx + FR[f][0], ty + FR[f][1] + t, tx + FR[f][2], ty + FR[f][3] + t);
+    }
+  }
+  discSafe(tx - 1, ty + 3, 1);
+  discSafe(tx + 2, ty + 3, 1);
 }
 
 void drawPipe(int16_t x, int16_t baseY) {
@@ -1650,6 +1791,17 @@ void drawDeco(int16_t x, int16_t baseY, uint8_t typ) {
   else if (typ == 2) drawPipe(x, baseY);
   else if (typ == 3) drawNeon(x, baseY);
   else drawGear(x, baseY);
+}
+
+// Fish leaping straight up: body, tail fin below, teeth + eye cut out
+void drawFish(int16_t x, int16_t y) {
+  fillBoxClipped(x - 2, y - 4, 5, 8);
+  plot(x - 3, y - 1); plot(x + 3, y - 1); plot(x - 3, y); plot(x + 3, y);
+  fillTriSafe(x - 3, y + 7, x + 3, y + 7, x, y + 3);
+  u8g2.setDrawColor(0);
+  plot(x - 1, y - 4); plot(x + 1, y - 4);   // teeth
+  plot(x + 1, y - 1);                        // eye
+  u8g2.setDrawColor(1);
 }
 
 void drawCrab(int16_t x, int16_t y, uint8_t frame) {
@@ -1726,6 +1878,18 @@ void drawGame() {
 
   drawLoopTrack();
 
+  // Pools under the bridges: rippling surface a few px below the deck
+  for (auto &b : bridges) {
+    if (!b.live) continue;
+    int16_t wy = sy(b.y + 8);
+    for (int16_t u = b.x0 + 2; u < b.x1 - 1; u += 2) {
+      int16_t xs = sx(u);
+      if (xs < 0 || xs > 127) continue;
+      plot(xs, wy + (((u >> 3) + (animFrame >> 2)) & 1));
+      if ((u & 7) == 0) plot(xs, wy + 4);
+    }
+  }
+
   for (auto &p : plats) {
     if (!p.live) continue;
     if (p.w <= 0 || p.w > 48) continue;
@@ -1772,6 +1936,19 @@ void drawGame() {
     } else if (o.kind == 8) drawFlame(x, y, o.state);
     else if (o.kind == 9) drawBumper(x, y, o.timer > 0);
     else if (o.kind == 10) drawSaw(x, y, o.timer);
+    else if (o.kind == 11 && o.y < o.home - 4) drawFish(x, y);   // hidden while underwater
+  }
+
+  // Bridge decks: logs with a gap, following the sag; posts at each end
+  for (uint8_t i = 0; i < 6; i++) {
+    const Bridge &b = bridges[i];
+    if (!b.live || b.x1 < cam - 8 || b.x0 > cam + 136) continue;
+    for (int16_t u = b.x0; u < b.x1; u += 6) {
+      int16_t top = b.y + bridgeSag(i, u + 2);
+      fillBoxClipped(sx(u), sy(top), 5, 3);
+    }
+    vLineSafe(sx(b.x0), sy(b.y - 5), 8);
+    vLineSafe(sx(b.x1), sy(b.y - 5), 8);
   }
 
   for (auto &s : shots) {
@@ -1901,6 +2078,7 @@ void gameUpdate(uint8_t e) {
       else if (e & (B_GAME | B_MODE)) watch::exitToClock();  // Mode always escapes to clock
       break;
     case WIN: if (e) watch::exitToClock(); break;
+    case DEAD: deathStep(e); break;
   }
 }
 
@@ -1913,6 +2091,7 @@ void gameDraw() {
     case MENU: drawMenu(); break;
     case OVER: drawOver(); break;
     case WIN: drawWin(); break;
+    case DEAD: drawGame(); break;
   }
 }
 

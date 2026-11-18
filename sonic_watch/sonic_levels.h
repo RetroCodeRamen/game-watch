@@ -35,7 +35,12 @@ enum : uint8_t {
   L_SPIKES = 23,   // arg = number of spike clusters, 12 px apart
   L_LOOP = 24,     // loop mouth at x (needs ~110 px flat before, ~130 after)
   L_CHEMX = 25,    // Chemical Plant wavy crossing tubes from x (~130 px, flat)
+  L_BRIDGE = 26,   // sagging log bridge from x, arg = length / 4, at the ground height at x.
+                   // Dip the terrain underneath into a pool and bring it back up at the far end.
+  L_FISH = 27,     // fish that leaps up out of the pool under a bridge
 };
+// Rule: spikes need open sky — never put a platform lower than 32 px (2 Sonic heights)
+// over a spike; put spikes in the gaps between ledges instead.
 
 // deco args
 enum : uint8_t { D_SUN = 0, D_PALM = 1, D_PIPE = 2, D_NEON = 3, D_GEAR = 4 };
@@ -56,9 +61,9 @@ static const TerrainPt GH1_T[] = {
   {1960, 46}, {2040, 40}, {2120, 40}, {2200, 46}, {2260, 52},
   {2560, 52},                       // spike valley
   {2640, 46}, {2720, 40}, {2800, 36}, {2880, 36}, {2960, 44}, {3040, 52},
-  {3080, 56}, {3360, 56},           // spike-pit bridge
-  {3440, 50}, {3520, 44}, {3600, 40}, {3680, 44}, {3760, 50}, {3840, 54},
-  {3920, 48}, {4000, 40}, {4080, 34}, {4160, 30}, {4260, 30},   // the peak
+  {3060, 52}, {3108, 64}, {3252, 64}, {3300, 52}, {3360, 52},   // pool under a log bridge
+  {3440, 50}, {3520, 44}, {3600, 40}, {3680, 44}, {3760, 50}, {3780, 50},
+  {3828, 62}, {3892, 62}, {3940, 50},                           // second pool + bridge {4000, 40}, {4080, 34}, {4160, 30}, {4260, 30},   // the peak
   {4340, 36}, {4420, 42}, {4500, 48}, {4580, 52}, {4660, 48}, {4740, 44},
   {4820, 44}, {4900, 48}, {4980, 52}, {5060, 44}, {5140, 38}, {5220, 38},
   {5420, 50}, {5600, 54}, {6100, 54},                           // downhill finish
@@ -96,29 +101,29 @@ static const LvlObj GH1_O[] = {
   {2120, 26, L_BEE, 0},
   {2210, 0, L_DECO, D_SUN},
   // spike valley: hop the ledges or take the high spring
-  {2270, 18, L_PLAT, 40}, {2280, 0, L_SPIKES, 3}, {2276, 26, L_RINGS, 3},
+  {2250, 18, L_PLAT, 30}, {2256, 26, L_RINGS, 2}, {2290, 0, L_SPIKES, 3}, {2296, 30, L_RINGS, 3},
   {2366, 0, L_CRAB, 0},
-  {2410, 18, L_PLAT, 44}, {2420, 0, L_SPIKES, 3}, {2416, 26, L_RINGS, 3},
+  {2390, 18, L_PLAT, 30}, {2396, 26, L_RINGS, 2}, {2430, 0, L_SPIKES, 3}, {2436, 30, L_RINGS, 3},
   {2500, 0, L_SPRING, 0}, {2530, 50, L_PLAT, 40}, {2534, 58, L_RINGS, 4},
   {2600, 30, L_BEE, 0},
   {2690, 8, L_RINGS, 5},
   {2800, 0, L_DECO, D_PALM},
   {2846, 0, L_CRAB, 0},
   {2900, 22, L_ARC, 5},
-  // spike-pit bridge
-  {3104, 16, L_PLAT, 24}, {3110, 24, L_RINGS, 2},
-  {3120, 0, L_SPIKES, 6},
-  {3150, 20, L_PLAT, 24}, {3156, 28, L_RINGS, 2},
-  {3196, 16, L_PLAT, 24}, {3202, 24, L_RINGS, 2},
-  {3240, 18, L_PLAT, 40}, {3250, 0, L_SPIKES, 3},
+  // ★ log bridge over a pool — fish leap up through it
+  {3060, 0, L_BRIDGE, 60},
+  {3076, 8, L_RINGS, 5}, {3190, 24, L_ARC, 7},
+  {3124, 0, L_FISH, 0}, {3176, 0, L_FISH, 0}, {3232, 0, L_FISH, 0},
   {3310, 30, L_BEE, 0},
   {3400, 0, L_SPRING, 0}, {3446, 0, L_DECO, D_SUN},
   {3520, 0, L_CRAB, 0}, {3560, 8, L_RINGS, 4},
   {3640, 0, L_WALL, 16},
   {3700, 28, L_BEE, 0},
-  {3780, 0, L_DECO, D_PALM},
-  {3830, 8, L_RINGS, 5},
-  {3910, 0, L_CRAB, 0},
+  {3760, 0, L_DECO, D_PALM},
+  {3780, 0, L_BRIDGE, 40},                                // ★ second bridge
+  {3796, 8, L_RINGS, 5},
+  {3836, 0, L_FISH, 0}, {3884, 0, L_FISH, 0},
+  {3966, 0, L_CRAB, 0},
   {4000, 24, L_ARC, 6},                                  // up the climb
   {4180, 0, L_DECO, D_SUN},
   {4204, 28, L_BEE, 0},
@@ -146,7 +151,8 @@ static const LvlObj GH1_O[] = {
 // GREEN HILL ACT 2 — shorter: hills, a spring climb, a spike valley, then the Egg Wrecker.
 static const TerrainPt GH2_T[] = {
   {0, 50}, {200, 50}, {280, 42}, {360, 36}, {440, 36}, {520, 44}, {600, 52},
-  {760, 52}, {840, 46}, {920, 40}, {1000, 40}, {1080, 48}, {1160, 54}, {1440, 54},
+  {760, 52}, {840, 46}, {920, 40}, {1000, 40}, {1080, 48}, {1140, 52}, {1160, 52},
+  {1208, 64}, {1352, 64}, {1400, 52}, {1440, 52},              // pool + bridge
   {1520, 46}, {1600, 38}, {1700, 38}, {1780, 44}, {1860, 50}, {1940, 46},
   {2020, 42}, {2100, 46}, {2200, 52}, {2800, 52},
 };
@@ -163,10 +169,11 @@ static const LvlObj GH2_O[] = {
   {900, 0, L_CRAB, 0},
   {1030, 0, L_DECO, D_PALM},
   {1100, 0, L_WALL, 14},
-  {1180, 18, L_PLAT, 40}, {1190, 0, L_SPIKES, 3}, {1186, 26, L_RINGS, 3},
-  {1260, 30, L_BEE, 0},
-  {1300, 18, L_PLAT, 40}, {1310, 0, L_SPIKES, 3}, {1306, 26, L_RINGS, 3},
-  {1400, 0, L_CRAB, 0},
+  {1160, 0, L_BRIDGE, 60},                                // ★ log bridge, fish below
+  {1176, 8, L_RINGS, 4}, {1270, 22, L_ARC, 6},
+  {1216, 0, L_FISH, 0}, {1284, 0, L_FISH, 0}, {1344, 0, L_FISH, 0},
+  {1260, 34, L_BEE, 0},
+  {1436, 0, L_CRAB, 0},
   {1560, 24, L_ARC, 6},
   {1640, 0, L_DECO, D_SUN},
   {1720, 0, L_CRAB, 0},
@@ -214,14 +221,14 @@ static const LvlObj CP1_O[] = {
   {1160, 0, L_FLAME, 0},
   // low trap corridor with tubes overhead
   {1296, 20, L_PLAT, 44}, {1302, 28, L_RINGS, 3},
-  {1300, 0, L_FLAME, 0}, {1336, 0, L_SPIKES, 2},
+  {1300, 0, L_FLAME, 0}, {1344, 0, L_SPIKE, 0},
   {1356, 24, L_PLAT, 44}, {1362, 32, L_RINGS, 3},
   {1384, 0, L_FLAME, 0},
   {1416, 28, L_PLAT, 44}, {1422, 36, L_RINGS, 3},
   {1424, 0, L_WALL, 14},
   {1464, 0, L_FLAME, 0},
   {1476, 20, L_PLAT, 44}, {1482, 28, L_RINGS, 3},
-  {1504, 0, L_SPIKES, 2},
+  {1524, 0, L_SPIKES, 2},
   {1570, 0, L_DECO, D_PIPE},
   {1700, 0, L_CRAB, 0},
   {1740, 8, L_RINGS, 5},
@@ -237,7 +244,7 @@ static const LvlObj CP1_O[] = {
   {2560, 8, L_RINGS, 4},
   {2700, 0, L_FLAME, 0},
   {2730, 0, L_CRAB, 0},
-  {2770, 18, L_PLAT, 44}, {2780, 0, L_SPIKES, 3}, {2776, 26, L_RINGS, 3},
+  {2750, 18, L_PLAT, 28}, {2756, 26, L_RINGS, 2}, {2786, 0, L_SPIKES, 3}, {2790, 30, L_RINGS, 3},
   {2860, 0, L_WALL, 14},
   {2900, 28, L_BEE, 0},
   // second high tube run over a flame/spike floor
@@ -293,7 +300,7 @@ static const LvlObj CP2_O[] = {
   {700, 0, L_FLAME, 0}, {740, 0, L_SPIKES, 3}, {810, 0, L_FLAME, 0},
   {870, 0, L_WALL, 14},
   {1000, 0, L_FLAME, 0}, {1030, 20, L_PLAT, 44}, {1036, 28, L_RINGS, 3},
-  {1060, 0, L_SPIKES, 2}, {1110, 0, L_FLAME, 0},
+  {1080, 0, L_SPIKES, 2}, {1110, 0, L_FLAME, 0},
   {1170, 26, L_BEE, 0},
   {1240, 0, L_CRAB, 0},
   {1380, 8, L_RINGS, 5},
@@ -359,7 +366,7 @@ static const LvlObj CN1_O[] = {
   {2200, 0, L_CRAB, 0},
   {2250, 28, L_BEE, 0},
   {2290, 8, L_RINGS, 5},
-  {2400, 18, L_PLAT, 40}, {2410, 0, L_SPIKES, 3}, {2406, 26, L_RINGS, 3},
+  {2380, 18, L_PLAT, 28}, {2386, 26, L_RINGS, 2}, {2416, 0, L_SPIKES, 3}, {2420, 30, L_RINGS, 3},
   // bowl: bumper ladder up to a ring stash
   {2596, 0, L_SPRING, 0},
   {2576, 36, L_BUMPER, 0}, {2616, 50, L_BUMPER, 0}, {2576, 64, L_BUMPER, 0},
@@ -456,11 +463,11 @@ static const LvlObj SB1_O[] = {
   {880, 6, L_SAW, 0},
   {930, 0, L_DECO, D_GEAR},
   // girder bridge over a spike pit
-  {1040, 16, L_PLAT, 28}, {1050, 0, L_SPIKES, 8}, {1046, 24, L_RINGS, 2},
-  {1090, 20, L_PLAT, 28}, {1096, 28, L_RINGS, 2},
-  {1140, 16, L_PLAT, 28}, {1146, 24, L_RINGS, 2},
-  {1150, 40, L_SAW, 0},
-  {1190, 20, L_PLAT, 28}, {1196, 28, L_RINGS, 2},
+  {1040, 16, L_PLAT, 24}, {1046, 24, L_RINGS, 2}, {1066, 0, L_SPIKES, 2},
+  {1090, 20, L_PLAT, 24}, {1096, 28, L_RINGS, 2}, {1116, 0, L_SPIKES, 2},
+  {1140, 16, L_PLAT, 24}, {1146, 24, L_RINGS, 2}, {1166, 0, L_SPIKES, 2},
+  {1150, 44, L_SAW, 0},
+  {1190, 20, L_PLAT, 24}, {1196, 28, L_RINGS, 2}, {1216, 0, L_SPIKES, 2},
   {1240, 30, L_BEE, 0},
   {1360, 0, L_FLAME, 0}, {1400, 0, L_FLAME, 0},
   {1440, 0, L_DECO, D_GEAR},
@@ -475,7 +482,7 @@ static const LvlObj SB1_O[] = {
   {2010, 30, L_RINGS, 4},
   {2120, 0, L_FLAME, 0},
   {2160, 28, L_BEE, 0},
-  {2220, 0, L_SPIKES, 3}, {2210, 18, L_PLAT, 44}, {2216, 26, L_RINGS, 3},
+  {2190, 18, L_PLAT, 28}, {2196, 26, L_RINGS, 2}, {2226, 0, L_SPIKES, 3}, {2230, 30, L_RINGS, 3},
   {2360, 0, L_CRAB, 0},
   {2420, 8, L_RINGS, 4},
   {2470, 0, L_DECO, D_GEAR},
@@ -487,12 +494,12 @@ static const LvlObj SB1_O[] = {
   {3000, 30, L_BEE, 0},
   {3040, 0, L_DECO, D_GEAR},
   // long girder bridge
-  {3140, 16, L_PLAT, 28}, {3150, 0, L_SPIKES, 10}, {3146, 24, L_RINGS, 2},
-  {3190, 22, L_PLAT, 28}, {3196, 30, L_RINGS, 2},
-  {3240, 16, L_PLAT, 28}, {3246, 24, L_RINGS, 2},
-  {3250, 42, L_SAW, 0},
-  {3290, 22, L_PLAT, 28}, {3296, 30, L_RINGS, 2},
-  {3340, 16, L_PLAT, 28}, {3346, 24, L_RINGS, 2},
+  {3140, 16, L_PLAT, 24}, {3146, 24, L_RINGS, 2}, {3166, 0, L_SPIKES, 2},
+  {3190, 22, L_PLAT, 24}, {3196, 30, L_RINGS, 2}, {3216, 0, L_SPIKES, 2},
+  {3240, 16, L_PLAT, 24}, {3246, 24, L_RINGS, 2}, {3266, 0, L_SPIKES, 2},
+  {3250, 46, L_SAW, 0},
+  {3290, 22, L_PLAT, 24}, {3296, 30, L_RINGS, 2}, {3316, 0, L_SPIKES, 2},
+  {3340, 16, L_PLAT, 24}, {3346, 24, L_RINGS, 2}, {3366, 0, L_SPIKES, 2},
   {3400, 30, L_BEE, 0},
   {3560, 0, L_CRAB, 0},
   {3600, 6, L_SAW, 0},
@@ -534,11 +541,11 @@ static const LvlObj SB2_O[] = {
   {300, 0, L_FLAME, 0}, {340, 0, L_FLAME, 0},
   {450, 0, L_WALL, 14},
   {520, 28, L_SAW, 0}, {500, 8, L_RINGS, 5},
-  {640, 16, L_PLAT, 28}, {650, 0, L_SPIKES, 8}, {646, 24, L_RINGS, 2},
-  {690, 20, L_PLAT, 28}, {696, 28, L_RINGS, 2},
-  {740, 16, L_PLAT, 28}, {746, 24, L_RINGS, 2},
-  {790, 20, L_PLAT, 28}, {796, 28, L_RINGS, 2},
-  {760, 40, L_SAW, 0},
+  {640, 16, L_PLAT, 24}, {646, 24, L_RINGS, 2}, {666, 0, L_SPIKES, 2},
+  {690, 20, L_PLAT, 24}, {696, 28, L_RINGS, 2}, {716, 0, L_SPIKES, 2},
+  {740, 16, L_PLAT, 24}, {746, 24, L_RINGS, 2}, {766, 0, L_SPIKES, 2},
+  {790, 20, L_PLAT, 24}, {796, 28, L_RINGS, 2}, {816, 0, L_SPIKES, 2},
+  {760, 44, L_SAW, 0},
   {880, 30, L_BEE, 0},
   {960, 0, L_DECO, D_GEAR},
   {1080, 6, L_SAW, 0}, {1140, 6, L_SAW, 0},
