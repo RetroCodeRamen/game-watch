@@ -81,7 +81,7 @@ Set and alarm screens use plain defaults; supply `setDraw` / `ringDraw` (reading
 |---------|-----|
 | Buttons | `B_LEFT B_MID B_RIGHT B_MODE B_GAME` bits, `watch::held()`; alias to logical names per game |
 | Clock + alarm | `watch::hours()` … above; set via the SET screens |
-| Sound | `beep(freq, ms)` (muted while the alarm rings) |
+| Sound | `beep(freq, ms)`; `watch::playTune(notes, n)` / `tunePlaying()` / `stopTune()` for non-blocking jingles (`watch::Note{freq, ms}`, freq 0 = rest). Beeps are skipped while a tune or the alarm plays |
 | Drawing | `plot`, `hLineSafe`, `vLineSafe`, `lineSafe`, `fillBoxClipped`, `frameSafe`, `discSafe`, `circleSafe`, `triSafe`, `fillTriSafe` |
 | Display | global `u8g2` (SH1106, full buffer) |
 | Pins | `watch::DEFAULT_PINS`; pass a different `watch::Pins` to `begin()` for new hardware |
@@ -123,6 +123,10 @@ RP2040 has headroom, but keep watch games tiny:
 
 - Platformer: Left/Right run, Mid jump, double-tap forward/back to ground-roll.
 - Campaign: Green Hill → Chemical Plant → Casino Night → Scrap Brain (2 acts each + Egg Wrecker).
+- Levels are hand-designed in `sonic_levels.h`: per act a terrain profile (`{x, groundY}` points) and an object list (`{x, h above ground, kind, arg}`) with builders for ring rows/arcs, spike runs, platforms, the loop and the Chemical Plant wavy cross. Act 1 ≈ 5.5–5.9k px, Act 2 ≈ 2.3–2.5k px + boss.
+- Act end: Act 1 signpost spins (~2.5 s, input locked) → tally (time, rings, bonus count-up, speed rank, fanfare). Act 2 tallies after the boss.
+- Speed rank vs each act's `parSec`: **A+** ≤ par + 5 s, **B** ≤ par + 12 s, else **D**. Par values are estimates — tune after playtesting.
+- Rings reset each act (and on a restart), as in Sonic.
 - After each act clear: chance of Special Stage (collect 6 rings, grab emerald).
 - Zone deco (kind 5): sunflower/palm/pipe/neon/gear — decoration only.
 - Chemical flame jets (8), Casino bumpers (9), Scrap saws (10).

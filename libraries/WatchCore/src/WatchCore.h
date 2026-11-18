@@ -24,10 +24,16 @@ extern U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2;
 // Games may alias these to logical names, e.g. `const uint8_t B_UP = B_MID;`
 enum : uint8_t { B_LEFT = 1, B_MID = 2, B_RIGHT = 4, B_MODE = 8, B_GAME = 16 };
 
-// Short non-blocking beep on the shared buzzer
+// Short non-blocking beep on the shared buzzer (skipped while a tune is playing)
 void beep(uint16_t freq, uint16_t ms);
 
 namespace watch {
+
+// ---- Tunes (non-blocking; advanced by run()) ----
+struct Note { uint16_t freq; uint16_t ms; };   // freq 0 = rest
+void playTune(const Note *notes, uint8_t count);
+bool tunePlaying();
+void stopTune();
 
 struct Pins {
   uint8_t left, mid, right, mode, game;  // buttons, active-low with pull-ups

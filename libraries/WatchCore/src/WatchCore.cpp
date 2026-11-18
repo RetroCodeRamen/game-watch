@@ -47,6 +47,27 @@ unsigned long lastInputMs = 0;
 unsigned long lastFrame = 0;
 uint32_t frames = 0;
 
+// tune player
+const watch::Note *tune = nullptr;
+uint8_t tuneLen = 0, tuneIdx = 0;
+unsigned long noteEndMs = 0;
+
+void tuneStep() {
+  if (!tune) return;
+  unsigned long now = millis();
+  if (tuneIdx > 0 && (long)(now - noteEndMs) < 0) return;
+  if (tuneIdx >= tuneLen) { tune = nullptr; noTone(pins.buzzer); return; }
+  const watch::Note &n = tune[tuneIdx++];
+  if (n.freq) {
+    // a few ms of silence at the end of each note keeps repeated notes distinct
+    uint16_t on = n.ms > 30 ? n.ms - 12 : n.ms;
+    tone(pins.buzzer, n.freq, on);
+  } else {
+    noTone(pins.buzzer);
+  }
+  noteEndMs = now + n.ms;
+}
+
 // ---------------------------------------------------------------- buttons
 uint8_t readButtons() {
   unsigned long now = millis();
@@ -105,6 +126,7 @@ void updateIdle() {
 // ---------------------------------------------------------------- alarm
 void startRing() {
   if (sys == S_RING) return;
+  tune = nullptr;  // the alarm wins over any jingle
   // Set screens are abandoned; the game is frozen and resumed after.
   ringReturn = (sys == S_APP) ? S_APP : S_FACE;
   if (sys == S_APP && app.appInterrupted) app.appInterrupted();
@@ -238,7 +260,7 @@ void render() {
 
 // ================================================================ public
 void beep(uint16_t freq, uint16_t ms) {
-  if (sys == S_RING) return;  // don't stomp on the alarm tone
+  if (sys == S_RING || tune) return;  // don't stomp on the alarm or a tune
   tone(pins.buzzer, freq, ms);
 }
 
@@ -262,6 +284,7 @@ void begin(const WatchApp &a, const Pins &p) {
 
 void run() {
   pending |= readButtons();
+  tuneStep();
   unsigned long now = millis();
   while (now - lastSec >= 1000) { lastSec += 1000; tick(); }
 
@@ -298,6 +321,16 @@ void exitToClock() {
 }
 
 bool inApp() { return sys == S_APP; }
+
+void playTune(const Note *notes, uint8_t count) {
+  if (sys == S_RING) return;
+  tune = notes;
+  tuneLen = count;
+  tuneIdx = 0;
+  tuneStep();
+}
+bool tunePlaying() { return tune != nullptr; }
+void stopTune() { tune = nullptr; noTone(pins.buzzer); }
 uint8_t held() { return heldMask; }
 uint32_t frameCount() { return frames; }
 

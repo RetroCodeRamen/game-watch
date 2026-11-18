@@ -10,6 +10,7 @@
 #include <WatchCore.h>
 #include "title_bitmap.h"
 #include "sonic_sprites.h"
+#include "sonic_levels.h"
 
 // Fixed-point type must be visible before Arduino's auto-prototypes
 typedef int32_t fx;
@@ -140,8 +141,8 @@ struct Shot { int16_t x, y; int8_t vx, vy; bool live; };
 struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
 
 // Whole act stays resident — no scroll-despawn (draw/AI cull only)
-Obj objs[48];
-Plat plats[24];
+Obj objs[256];   // a hand-built act is ~150–230 objects (each ring is one)
+Plat plats[64];
 Shot shots[6];
 Scatter scat[3];
 const uint8_t SCATTER_LIFE = 90;
@@ -149,8 +150,6 @@ const uint8_t SCATTER_GRACE = 30;
 int16_t ballWX, ballWY;
 uint8_t gStrip[128];
 
-const int16_t ACT1_LEN[4] = {1200, 1300, 1400, 1400};  // slightly shorter = fewer objects
-const int16_t ACT2_LEN[4] = {380, 400, 420, 420};
 
 // Deterministic layout hash (no random() in level gen)
 uint8_t h8(uint16_t n) {
@@ -186,11 +185,39 @@ static const uint8_t LOOP_LOCK = 30;              // L/R input lock after fallin
 
 fx fpx, fpy, fvx, fvy;
 int16_t px, py, pvx, pvy, cam, camY;   // camY unlocks tall loops
-int16_t actEnd, genAt;
-uint16_t rings, score;
+int16_t actEnd;
+uint16_t rings;
+uint32_t score;
+const ActDef *lvl = &ACTS[0][0];   // current act layout
+uint16_t actFrames;                // act timer (display frames, ~33 ms each)
+uint8_t goalT;                     // >0: passed the signpost, counting the spin
+uint8_t lastRank;                  // 0 A+, 1 B, 2 D (for the tally)
+uint32_t tallyRingBonus, tallyTimeBonus;
+
+const uint8_t GOAL_SPIN_FRAMES = 75;  // ~2.5 s of spinning signpost before the tally
+
+// Player input — none while the signpost spins (Sonic just coasts to a stop)
+uint8_t heldIn() { return goalT ? 0 : watch::held(); }
+
+// Act time in whole seconds (frames are ~33 ms)
+uint16_t actSeconds() { return (uint16_t)(((uint32_t)actFrames * 33) / 1000); }
+void printTime(uint16_t secs) {
+  u8g2.print(secs / 60); u8g2.print(':'); watch::print2(secs % 60);
+}
+
+// Original act-clear fanfare (~3.3 s). Plays on the buzzer pin until a speaker is fitted.
+static const watch::Note ACT_CLEAR_TUNE[] = {
+  {784, 110}, {1047, 110}, {1319, 110}, {1568, 220}, {0, 40},
+  {1319, 110}, {1568, 330}, {0, 80},
+  {1397, 110}, {1760, 110}, {2093, 220}, {0, 40},
+  {1760, 110}, {2093, 440}, {0, 60},
+  {1568, 110}, {1760, 110}, {1976, 110}, {2093, 520},
+};
 uint8_t lives, invul, intro, animFrame, menuSel;
 uint8_t zone, act;          // zone 0..3, act 0=Act1 1=Act2
-uint8_t emeralds, clearT;
+uint8_t emeralds;
+uint16_t clearT;            // tally / special-stage frame counter
+uint16_t tallyDoneT;        // frame the bonus count finished (0 = still counting)
 uint8_t lastTapDir;         // 1=L 2=R
 unsigned long lastTapMs;
 bool onGround, rolling, faceRight, groundRoll, jumpCut;
@@ -220,7 +247,21 @@ uint8_t spRings, spGot;
 uint16_t spTimer;
 int16_t spEX, spEY;
 
-const int8_t HILL[16] = {6,8,10,12,12,12,10,8,6,4,2,0,0,0,2,4};
+// Ground height from the act's terrain profile (linear between points)
+int16_t terrainAt(int32_t wx) {
+  const TerrainPt *t = lvl->ter;
+  uint8_t n = lvl->nTer;
+  if (wx <= t[0].x) return t[0].y;
+  if (wx >= t[n - 1].x) return t[n - 1].y;
+  uint8_t lo = 0, hi = n - 1;            // binary search: t[lo].x <= wx < t[hi].x
+  while (hi - lo > 1) {
+    uint8_t mid = (lo + hi) / 2;
+    if (t[mid].x <= wx) lo = mid; else hi = mid;
+  }
+  int32_t dx = t[hi].x - t[lo].x;
+  return t[lo].y + (int16_t)(((int32_t)(t[hi].y - t[lo].y) * (wx - t[lo].x)) / dx);
+}
+
 int16_t groundAt(int32_t wx) {
   if (wx < 0) wx = 0;
   // Boss arena: flat ground
@@ -232,15 +273,7 @@ int16_t groundAt(int32_t wx) {
     int16_t x1 = loopTrack.cx + loopTrack.r + 48;
     if (wx >= x0 && wx <= x1) return floorY;
   }
-  uint8_t i = ((uint32_t)wx >> 5) & 15;
-  uint8_t f = (uint32_t)wx & 31;
-  int16_t a = HILL[i], b = HILL[(i + 1) & 15];
-  // Zone terrain flavor
-  int16_t base = 54 - (a + (b - a) * (int16_t)f / 32);
-  if (zone == 1) base = 51 + ((a + b) / 10);          // Chemical Plant: flatter slabs
-  if (zone == 2) base = 52 - ((a + b) / 6);            // Casino: gentle bowls
-  if (zone == 3) base -= (i & 1) + (f > 20 ? 1 : 0);   // Scrap Brain: choppy
-  return base;
+  return terrainAt(wx);
 }
 
 int16_t sx(int16_t wx) { return wx - cam; }
@@ -274,14 +307,10 @@ int16_t slopeAt(int16_t wx) {
 void placeGreenHillLoop(int16_t x) {
   // Diameter > screen height — camera must scroll vertically through it
   loopTrack.r = 38;
-  int16_t g = 52;
+  int16_t g = terrainAt(x);
   loopTrack.cx = x + loopTrack.r;
   loopTrack.cy = g - loopTrack.r;   // bottom of track on the floor
   loopTrack.live = true;
-  // Spring at the START of the runway only — then clear flat into the mouth
-  addObj(x - 100, g - 4, 3);
-  addObj(x - 70, g - 16, 1);
-  addObj(x - 50, g - 18, 1);
 }
 
 // Strip hazards from the loop approach + ≥100px after the exit
@@ -494,129 +523,10 @@ void hurt() {
   restartPending = true;
 }
 
-// ---- Level chunk builders (zone-themed) ----
-// deco state: 0 sun 1 palm 2 pipe 3 neon 4 gear
-void placeZoneDeco(int16_t x) {
-  if (zone == 0) addDeco(x, h8((uint16_t)x) & 1);  // sunflower or palm
-  else if (zone == 1) addDeco(x, 2);
-  else if (zone == 2) addDeco(x, 3);
-  else addDeco(x, 4);
-}
-
-void spawnChunkAct1(int16_t x0) {
-  uint8_t style = (uint8_t)(((uint16_t)x0 / 140 + zone * 3 + act) & 7);
-  int16_t g = groundAt(x0 + 50);
-
-  if (zone == 2) { // Casino — denser bumpers, light deco
-    if (style < 4) {
-      addObj(x0 + 40, g - 18, 9);
-      addObj(x0 + 75, g - 26, 9);
-      addObj(x0 + 55, groundAt(x0 + 55) - 4, 3);
-      addObj(x0 + 50, g - 34, 1);
-      addObj(x0 + 65, g - 34, 1);
-      if ((style & 1) == 0) placeZoneDeco(x0 + 10);
-    } else {
-      addPlat(x0 + 25, g - 18, 22);
-      addObj(x0 + 36, g - 24, 9);
-      addObj(x0 + 70, g - 16, 9);
-      addObj(x0 + 50, groundAt(x0 + 50) - 4, 3);
-    }
-    return;
-  }
-
-  if (zone == 1) { // Chemical
-    if (style < 3) {
-      addObj(x0 + 45, 0, 8);
-      addObj(x0 + 70, 0, 0);
-      addPlat(x0 + 50, g - 20, 32);
-      addObj(x0 + 60, g - 26, 1);
-      if (style == 0) placeZoneDeco(x0 + 15);
-    } else if (style < 5) {
-      addObj(x0 + 30, 0, 0);
-      addObj(x0 + 50, 0, 8);
-      addPlat(x0 + 20, g - 18, 40);
-      addWall(x0 + 100, 14);
-    } else {
-      addObj(x0 + 35, groundAt(x0 + 35) - 4, 3);
-      addPlat(x0 + 55, g - 24, 28);
-      addObj(x0 + 70, 0, 8);
-      addObj(x0 + 95, groundAt(x0 + 95) - 5, 2);
-    }
-    return;
-  }
-
-  if (zone == 3) { // Scrap Brain
-    if (style < 4) {
-      addObj(x0 + 40, g - 10, 10);
-      addPlat(x0 + 55, g - 22, 26);
-      addObj(x0 + 70, g - 28, 1);
-      if (style == 0) placeZoneDeco(x0 + 8);
-    } else {
-      addObj(x0 + 30, 0, 0);
-      addObj(x0 + 55, g - 12, 10);
-      addObj(x0 + 80, groundAt(x0 + 80) - 4, 3);
-      addPlat(x0 + 95, g - 26, 28);
-    }
-    return;
-  }
-
-  // Green Hill — lighter object load
-  switch (style & 3) {
-    case 0:
-      addPlat(x0 + 20, g - 16, 24);
-      addPlat(x0 + 60, g - 28, 24);
-      addObj(x0 + 35, groundAt(x0 + 35) - 4, 3);
-      addObj(x0 + 70, g - 34, 1);
-      placeZoneDeco(x0 + 8);
-      break;
-    case 1:
-      addObj(x0 + 35, 0, 0);
-      addObj(x0 + 55, 0, 0);
-      addPlat(x0 + 25, g - 18, 36);
-      addObj(x0 + 80, groundAt(x0 + 80) - 5, 2);
-      placeZoneDeco(x0 + 100);
-      break;
-    case 2:
-      addObj(x0 + 25, g - 12, 1);
-      addObj(x0 + 40, g - 18, 1);
-      addObj(x0 + 55, g - 12, 1);
-      addPlat(x0 + 70, g - 22, 28);
-      placeZoneDeco(x0 + 10);
-      break;
-    default:
-      addPlat(x0 + 30, g - 18, 26);
-      addObj(x0 + 45, groundAt(x0 + 45) - 4, 3);
-      addObj(x0 + 90, 0, 0);
-      placeZoneDeco(x0 + 60);
-      break;
-  }
-}
-
-void spawnChunkAct2(int16_t x0) {
-  int16_t g = groundAt(x0 + 40);
-  uint8_t style = h8((uint16_t)(x0 + zone * 17)) & 1;
-  if (zone == 2) {
-    addObj(x0 + 40, g - 16, 9);
-    addObj(x0 + 70, g - 22, 9);
-    addObj(x0 + 25, groundAt(x0 + 25) - 4, 3);
-  } else if (zone == 1) {
-    addObj(x0 + 40, 0, 8);
-    addObj(x0 + 65, 0, 0);
-    addPlat(x0 + 25, g - 16, 28);
-  } else if (zone == 3) {
-    addObj(x0 + 45, g - 10, 10);
-    addPlat(x0 + 70, g - 20, 26);
-  } else {
-    addPlat(x0 + 25, g - 16, 26);
-    addObj(x0 + 50, 0, 0);
-    if (style) placeZoneDeco(x0 + 10);
-  }
-}
-
 void placeGoal(int16_t x) { addObj(x, groundAt(x) - 20, 6); }
 
 void announce() {
-  intro = 45;
+  intro = 60;   // ~2 s title card
   beep(600 + zone * 80 + act * 40, 70);
 }
 
@@ -639,30 +549,64 @@ void startEggWrecker() {
   eggY = 16;
   eggDir = -1;
   ballAngle = 0;
-  intro = 40;
+  intro = 60;
   beep(280, 250);
 }
 
 void buildAct() {
-  // Fixed deterministic layout for the whole act — stays loaded while you explore
+  // Whole act is built once from its layout table and stays loaded
   clearWorld();
-  // Place loop first so runway clearing knows the keep-out zone
-  if (zone == 0 && act == 0) placeGreenHillLoop(320);
-  if (zone == 1 && act == 0) placeChemWavyCross(36);
-  int16_t step = (act == 0) ? 140 : 110;
-  int16_t startX = (zone == 1 && act == 0) ? 160 : 40;
-  for (int16_t x = startX; x < actEnd - 50; x += step) {
-    if (act == 0) spawnChunkAct1(x);
-    else spawnChunkAct2(x);
+  for (uint8_t i = 0; i < lvl->nObj; i++) {
+    const LvlObj &d = lvl->obj[i];
+    int16_t x = d.x;
+    int16_t g = groundAt(x);
+    switch (d.kind) {
+      case L_RING:   addObj(x, g - d.h, 1); break;
+      case L_CRAB:   addObj(x, g - 5, 2); break;
+      case L_SPRING: addObj(x, g - d.h - 4, 3); break;
+      case L_BEE:    addObj(x, g - d.h, 4); break;
+      case L_DECO:   addDeco(x, d.arg); break;
+      case L_WALL:   addWall(x, d.arg); break;
+      case L_SPIKE:  addObj(x, 0, 0); break;
+      case L_FLAME:  addObj(x, 0, 8); break;
+      case L_BUMPER: addObj(x, g - d.h, 9); break;
+      case L_SAW:    addObj(x, g - d.h, 10); break;
+      case L_PLAT:   addPlat(x, g - d.h, d.arg); break;
+      case L_RINGS:
+        for (uint8_t k = 0; k < d.arg; k++) {
+          int16_t rx = x + k * 12;
+          addObj(rx, groundAt(rx) - d.h, 1);
+        }
+        break;
+      case L_ARC:
+        for (uint8_t k = 0; k < d.arg; k++) {
+          int16_t rx = x + k * 12;
+          // parabola: 8 px at the ends, h in the middle
+          int16_t m = d.arg - 1;
+          int16_t u = 2 * k - m;                       // -m..m
+          int16_t lift = m ? 8 + ((int32_t)(d.h - 8) * (m * m - u * u)) / (m * m) : d.h;
+          addObj(rx, groundAt(rx) - lift, 1);
+        }
+        break;
+      case L_SPIKES:
+        for (uint8_t k = 0; k < d.arg; k++) addObj(x + k * 12, 0, 0);
+        break;
+      case L_LOOP:   placeGreenHillLoop(x); break;
+      case L_CHEMX:  placeChemWavyCross(x); break;
+    }
   }
-  if (zone == 0 && act == 0) clearLoopRunway();
-  placeGoal(actEnd);
+  clearLoopRunway();                 // no hazards right before / after a loop
+  if (act == 0) placeGoal(actEnd);   // Act 2 ends in the boss arena instead
 }
 
 void startAct(uint8_t z, uint8_t a) {
   zone = z; act = a;
   bossOn = false;
-  actEnd = (a == 0) ? ACT1_LEN[z] : ACT2_LEN[z];
+  lvl = &ACTS[z][a];
+  actEnd = lvl->len;
+  rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
+  actFrames = 0;
+  goalT = 0;
   cam = 0; camY = 0;
   setPlayerPos(24, groundAt(24) - 5);
   setPlayerVel(0, 0);
@@ -672,7 +616,6 @@ void startAct(uint8_t z, uint8_t a) {
   inHollow = false; loopSide = 0; loopPassed = false; loopRolled = false; loopLock = 0;
   invul = 0; animFrame = 0;
   lastTapDir = 0; lastTapMs = 0;
-  genAt = actEnd;   // nothing left to stream
   buildAct();
   mode = GAME;
   announce();
@@ -712,9 +655,17 @@ void advanceAfterClear() {
 
 void beginClear() {
   mode = CLEAR;
-  clearT = 55;
-  score += 100 + rings * 2;
-  beep(1400, 120);
+  clearT = 0;
+  tallyDoneT = 0;
+  goalT = 0;
+  uint16_t secs = actSeconds();
+  uint16_t par = lvl->parSec;
+  // A+ within 5 s of par (the fastest realistic clear), B within 12 s, otherwise D
+  lastRank = (secs <= par + 5) ? 0 : (secs <= par + 12) ? 1 : 2;
+  static const uint16_t TIME_BONUS[3] = {5000, 2000, 500};
+  tallyTimeBonus = TIME_BONUS[lastRank];
+  tallyRingBonus = (uint32_t)rings * 100;
+  watch::playTune(ACT_CLEAR_TUNE, sizeof(ACT_CLEAR_TUNE) / sizeof(ACT_CLEAR_TUNE[0]));
 }
 
 // ---- physics helpers ----
@@ -811,7 +762,7 @@ void handleDoubleTapRoll(uint8_t e) {
 
   if (e & B_RIGHT) {
     if (!groundRoll && lastTapDir == 2 && now - lastTapMs < 280 && onGround &&
-        (fvx > 0 || (watch::held() & B_RIGHT))) {
+        (fvx > 0 || (heldIn() & B_RIGHT))) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
@@ -824,7 +775,7 @@ void handleDoubleTapRoll(uint8_t e) {
   }
   if (e & B_LEFT) {
     if (!groundRoll && lastTapDir == 1 && now - lastTapMs < 280 && onGround &&
-        (fvx < 0 || (watch::held() & B_LEFT))) {
+        (fvx < 0 || (heldIn() & B_LEFT))) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
@@ -907,7 +858,7 @@ void applyGroundControl() {
     else if (fvx < 0) { fvx += ROLL_FRIC; if (fvx > 0) fvx = 0; }
   } else if (onGround) {
     fvx += (fx)slope * SLOPE_RUN;
-    bool left = watch::held() & B_LEFT, right = watch::held() & B_RIGHT;
+    bool left = heldIn() & B_LEFT, right = heldIn() & B_RIGHT;
     if (loopLock) { left = right = false; }
     if (right && !left) {
       if (fvx < 0) fvx += BRAKE;          // skid
@@ -929,12 +880,12 @@ void applyGroundControl() {
       else if (fvx < 0) { fvx += FRICTION; if (fvx > 0) fvx = 0; }
     }
   } else if (pinball) {
-    if (watch::held() & B_LEFT)  { fvx -= ACCEL; faceRight = false; }
-    if (watch::held() & B_RIGHT) { fvx += ACCEL; faceRight = true; }
+    if (heldIn() & B_LEFT)  { fvx -= ACCEL; faceRight = false; }
+    if (heldIn() & B_RIGHT) { fvx += ACCEL; faceRight = true; }
   } else {
     // Air steer — classic Sonic still answers the D-pad off the ground
-    if (watch::held() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
-    if (watch::held() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
+    if (heldIn() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
+    if (heldIn() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
   }
 
   if (fvx > top) fvx = top;
@@ -1026,8 +977,8 @@ static void loopFallOff(int16_t rad) {
 
 // Free fall inside the loop; the inside face of the track is solid all the way round
 void stepHollow(int16_t rad) {
-  if (watch::held() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
-  if (watch::held() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
+  if (heldIn() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
+  if (heldIn() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
   fvy += GRAVITY;
   if (fvy > MAX_FALL) fvy = MAX_FALL;
   fpx += fvx;
@@ -1078,8 +1029,8 @@ void stepLoop(int16_t rad) {
   if (!loopLock) {
     fx push  = (fx)(loopSense * (float)LOOP_PUSH);
     fx brake = (fx)(loopSense * (float)LOOP_BRAKE);
-    bool fwd = (loopSense < 0 && (watch::held() & B_RIGHT)) || (loopSense > 0 && (watch::held() & B_LEFT));
-    bool back = (loopSense < 0 && (watch::held() & B_LEFT)) || (loopSense > 0 && (watch::held() & B_RIGHT));
+    bool fwd = (loopSense < 0 && (heldIn() & B_RIGHT)) || (loopSense > 0 && (heldIn() & B_LEFT));
+    bool back = (loopSense < 0 && (heldIn() & B_LEFT)) || (loopSense > 0 && (heldIn() & B_RIGHT));
     if (fwd && !loopRolled) loopGspd += push;
     if (back) loopGspd -= brake;
   }
@@ -1184,7 +1135,7 @@ void physicsStep(uint8_t e) {
     beep(900, 30);
   }
   // Variable jump: release early cuts the rise
-  if (!onGround && !jumpCut && !(watch::held() & B_MID) && fvy < 0) {
+  if (!onGround && !jumpCut && !(heldIn() & B_MID) && fvy < 0) {
     fvy >>= 1;
     jumpCut = true;
   }
@@ -1256,6 +1207,9 @@ void gameStepInner(uint8_t e) {
   if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
   if (e & B_MODE) { watch::exitToClock(); return; }
 
+  if (goalT) e = 0;                              // signpost spinning: no control
+  else if (actFrames < 0xFFFF) actFrames++;      // act timer (stops at the signpost)
+
   if (invul) invul--;
   if (intro) intro--;
   animFrame++;
@@ -1284,10 +1238,20 @@ void gameStepInner(uint8_t e) {
     if (psy > 46) camY = py - 46;
   }
 
-  if (!bossOn && px >= actEnd - 8) {
-    if (act == 0) beginClear();
-    else startEggWrecker();
-    return;
+  if (!bossOn && !goalT && px >= actEnd - 8) {
+    if (act == 0) {
+      goalT = 1;                 // passed the signpost: timer stops, sign starts spinning
+      groundRoll = false;        // stand up so normal friction brings him to a stop
+      beep(1500, 60);
+    } else {
+      startEggWrecker();
+      return;
+    }
+  }
+  if (goalT) {
+    goalT++;
+    if (goalT < 50 && (goalT % 3) == 0) beep(900 + (goalT & 4) * 60, 15);   // spin clicks
+    if (goalT >= GOAL_SPIN_FRAMES) { beginClear(); return; }
   }
 
   // Update only nearby objects (level stays fully loaded)
@@ -1437,8 +1401,8 @@ void specialStep(uint8_t e) {
     return;
   }
 
-  if (watch::held() & B_LEFT) fpx -= I2F(2);
-  if (watch::held() & B_RIGHT) fpx += I2F(2);
+  if (heldIn() & B_LEFT) fpx -= I2F(2);
+  if (heldIn() & B_RIGHT) fpx += I2F(2);
   if (e & B_MID) fvy = I2F(-5);
   if (fvy < I2F(4)) fvy += GRAVITY * 2;
   fpy += fvy;
@@ -1485,9 +1449,26 @@ void specialStep(uint8_t e) {
 }
 
 void clearStep(uint8_t e) {
-  (void)e;
-  if (clearT) clearT--;
-  else advanceAfterClear();
+  clearT++;
+  if (e & B_MID) {
+    // Mid skips ahead: finish the jingle / count, or move on once it's done
+    if (tallyDoneT && clearT > tallyDoneT + 10) { advanceAfterClear(); return; }
+    watch::stopTune();
+    score += tallyRingBonus + tallyTimeBonus;
+    tallyRingBonus = tallyTimeBonus = 0;
+  }
+  if (!tallyDoneT) {
+    // Count up once the fanfare has finished (and the screen has been up ~1.5 s)
+    if (clearT < 45 || watch::tunePlaying()) return;
+    uint32_t r = tallyRingBonus < 100 ? tallyRingBonus : 100;
+    uint32_t t = tallyTimeBonus < 100 ? tallyTimeBonus : 100;
+    tallyRingBonus -= r; tallyTimeBonus -= t;
+    score += r + t;
+    if ((clearT & 1) && (r || t)) beep(1800, 12);
+    if (!tallyRingBonus && !tallyTimeBonus) { tallyDoneT = clearT; beep(1400, 120); }
+    return;
+  }
+  if (clearT >= tallyDoneT + 60) advanceAfterClear();   // ~2 s on the totals
 }
 
 // ---------- draw ----------
@@ -1716,12 +1697,19 @@ void drawEggWrecker() {
 }
 
 void drawBanner() {
-  u8g2.setDrawColor(0); u8g2.drawBox(14, 12, 100, 28);
-  u8g2.setDrawColor(1); u8g2.drawFrame(14, 12, 100, 28);
-  u8g2.setCursor(22, 24); u8g2.print(zoneName());
-  u8g2.setCursor(36, 36);
-  if (bossOn) u8g2.print(F("EGG WRECKER"));
-  else { u8g2.print(F("ACT ")); u8g2.print(act + 1); }
+  // Compact title card: zone name over "ACT n" / boss name
+  u8g2.setFont(u8g2_font_5x7_tr);
+  const char *top = (const char *)zoneName();
+  const char *bot = bossOn ? "EGG WRECKER" : (act ? "ACT 2" : "ACT 1");
+  int16_t w = u8g2.getStrWidth(top);
+  int16_t w2 = u8g2.getStrWidth(bot);
+  if (w2 > w) w = w2;
+  int16_t bw = w + 10, bx = (128 - bw) / 2;
+  u8g2.setDrawColor(0); u8g2.drawBox(bx, 16, bw, 20);
+  u8g2.setDrawColor(1); u8g2.drawFrame(bx, 16, bw, 20);
+  u8g2.setCursor((128 - u8g2.getStrWidth(top)) / 2, 25); u8g2.print(top);
+  u8g2.setCursor((128 - u8g2.getStrWidth(bot)) / 2, 33); u8g2.print(bot);
+  u8g2.setFont(u8g2_font_6x10_tr);
 }
 
 void drawGame() {
@@ -1765,8 +1753,19 @@ void drawGame() {
     else if (o.kind == 5) drawDeco(x, y, o.state);
     else if (o.kind == 6) {
       int16_t gh = groundAt(o.x) - o.y;
-      if (gh > 0 && gh < 50) vLineSafe(x, y, gh);
-      fillBoxClipped(x - 4, y, 10, 6);
+      if (gh > 0 && gh < 50) vLineSafe(x, y + 6, gh - 6);
+      if (goalT && goalT < 55) {
+        // spinning: panel width follows |cos|, alternating faces
+        float c = cosf(goalT * 0.45f);
+        int16_t w = (int16_t)(fabsf(c) * 6.0f) + 1;
+        if (c > 0) fillBoxClipped(x - w, y - 2, w * 2, 10);
+        else frameSafe(x - w, y - 2, w * 2, 10);
+      } else if (goalT) {
+        frameSafe(x - 6, y - 2, 12, 10);       // settled: ring emblem
+        circleSafe(x, y + 3, 3);
+      } else {
+        fillBoxClipped(x - 6, y - 2, 12, 10);  // not yet passed
+      }
     } else if (o.kind == 7) {
       int16_t h = o.state ? o.state : 14;
       fillBoxClipped(x, y - h, 6, h);
@@ -1792,8 +1791,7 @@ void drawGame() {
   if (!blink) drawHog(sx(px), sy(py), rolling, faceRight, animFrame);
 
   u8g2.setCursor(0, 9); u8g2.print(F("R")); u8g2.print(rings);
-  u8g2.setCursor(32, 9); u8g2.print(F("Z")); u8g2.print(zone + 1);
-  u8g2.print(F("-")); u8g2.print(act + 1);
+  u8g2.setCursor(32, 9); printTime(actSeconds());
   for (uint8_t i = 0; i < emeralds && i < 7; i++) plot(70 + i * 4, 3);
   for (uint8_t i = 0; i < lives; i++) discSafe(122 - i * 9, 5, 3);
   if (intro) drawBanner();
@@ -1823,10 +1821,30 @@ void drawSpecial() {
 }
 
 void drawClear() {
+  // Zone + "ACT n CLEAR!" header
+  u8g2.setFont(u8g2_font_5x7_tr);
+  const char *zn = (const char *)zoneName();
+  u8g2.setCursor((128 - u8g2.getStrWidth(zn)) / 2, 7); u8g2.print(zn);
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(34, 22); u8g2.print(F("ACT CLEAR"));
-  u8g2.setCursor(28, 36); u8g2.print(zoneName());
-  u8g2.setCursor(40, 50); u8g2.print(F("SCORE ")); u8g2.print(score);
+  const char *hd = act ? "ACT 2 CLEAR!" : "ACT 1 CLEAR!";
+  u8g2.setCursor((128 - u8g2.getStrWidth(hd)) / 2, 18); u8g2.print(hd);
+  hLineSafe(0, 21, 128);
+
+  u8g2.setCursor(2, 32); u8g2.print(F("TIME  ")); printTime(actSeconds());
+  u8g2.setCursor(2, 43); u8g2.print(F("RINGS ")); u8g2.print(rings);
+  u8g2.setCursor(2, 54); u8g2.print(F("BONUS ")); u8g2.print(tallyRingBonus + tallyTimeBonus);
+  u8g2.setCursor(2, 64); u8g2.print(F("SCORE ")); u8g2.print(score);
+
+  // Speed rank, revealed after a beat
+  if (clearT > 20) {
+    static const char *const RANKS[3] = {"A+", "B", "D"};
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.setCursor(96, 30); u8g2.print(F("RANK"));
+    u8g2.setFont(u8g2_font_ncenB18_tr);
+    const char *rk = RANKS[lastRank];
+    u8g2.setCursor(106 - u8g2.getStrWidth(rk) / 2, 52); u8g2.print(rk);
+    u8g2.setFont(u8g2_font_6x10_tr);
+  }
 }
 
 void drawOver() {
