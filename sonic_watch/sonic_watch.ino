@@ -21,9 +21,14 @@ void drawSunflower(int16_t x, int16_t baseY);
 void drawRingGlyph(int16_t x, int16_t y);
 
 // Game-side modes only; clock face / set / alarm are owned by WatchCore
-enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR, DEAD };
+enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR, DEAD, SELECT };
 uint8_t mode = SPLASH;
 uint8_t splashFrame = 0;
+// Title-screen secret: Left Left Right Right Left Right, then Jump → level select.
+// Last six Left/Right presses, two bits each (1 = Left, 2 = Right).
+uint16_t codeHist = 0;
+const uint16_t LEVEL_SELECT_CODE = (1 << 10) | (1 << 8) | (2 << 6) | (2 << 4) | (1 << 2) | 2;
+uint8_t selIdx = 0;          // level-select cursor
 
 // Watch-face Sonic vignette (walk + spin-jump for a ring)
 int16_t wfX = -14;
@@ -706,26 +711,29 @@ void advanceAfterClear() {
   // Chance for special stage (~28%, better with many rings)
   uint8_t chance = 22 + (rings > 20 ? 10 : 0) + (rings > 40 ? 10 : 0);
   if (emeralds < 7 && random(100) < chance) {
-    // enter special
-    mode = SPECIAL;
-    spRings = 0;
-    spTimer = 450; // ~15s at 30 FPS
-    spGot = 0;
-    // Must set the fixed-point state too, or syncPlayerInts() restores the act position
-    setPlayerPos(64, 40);
-    setPlayerVel(0, 0);
-    spEX = 64; spEY = 28;
-    clearWorld();
-    for (uint8_t i = 0; i < 8; i++)
-      addObj(20 + i * 12, 18 + (i & 1) * 14, 1);
-    intro = 35;
-    beep(1200, 80);
+    startSpecial();
     return;
   }
   // next act / zone
   if (act == 0) startAct(zone, 1);
   else if (zone < 3) startAct(zone + 1, 0);
   else { mode = WIN; beep(1000, 500); }
+}
+
+void startSpecial() {
+  mode = SPECIAL;
+  spRings = 0;
+  spTimer = 450; // ~15s at 30 FPS
+  spGot = 0;
+  // Must set the fixed-point state too, or syncPlayerInts() restores the act position
+  setPlayerPos(64, 40);
+  setPlayerVel(0, 0);
+  spEX = 64; spEY = 28;
+  clearWorld();
+  for (uint8_t i = 0; i < 8; i++)
+    addObj(20 + i * 12, 18 + (i & 1) * 14, 1);
+  intro = 35;
+  beep(1200, 80);
 }
 
 void beginClear() {
@@ -2056,19 +2064,63 @@ void drawMenu() {
   u8g2.setCursor(0, 63); u8g2.print(F("L/R pick  MID ok"));
 }
 
+// ===================== Level select (debug) =====================
+// Entries 0..7 = zone*2 + act, 8 = special stage.
+const uint8_t SELECT_COUNT = 9;
+
+void selectStep(uint8_t e) {
+  if (e & B_LEFT)  { selIdx = (selIdx + SELECT_COUNT - 1) % SELECT_COUNT; beep(900, 10); }
+  if (e & B_RIGHT) { selIdx = (selIdx + 1) % SELECT_COUNT; beep(900, 10); }
+  if (e & B_MODE)  { splashFrame = 20; codeHist = 0; mode = SPLASH; return; }
+  if (e & B_MID) {
+    randomSeed(micros());
+    rings = 0; score = 0; lives = 3; emeralds = 0;
+    if (selIdx < 8) startAct(selIdx / 2, selIdx % 2);
+    else { zone = 0; act = 0; lvl = &ACTS[0][0]; startSpecial(); }
+  }
+}
+
+void drawSelect() {
+  static const char *const ZN[4] = {"GREEN HILL", "CHEM PLANT", "CASINO NIGHT", "SCRAP BRAIN"};
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.setCursor(34, 7); u8g2.print(F("LEVEL SELECT"));
+  hLineSafe(0, 9, 128);
+  // 6 visible rows, scrolled so the cursor stays on screen
+  int8_t first = (int8_t)selIdx - 2;
+  if (first < 0) first = 0;
+  if (first > SELECT_COUNT - 6) first = SELECT_COUNT - 6;
+  for (uint8_t r = 0; r < 6; r++) {
+    uint8_t i = first + r;
+    int16_t y = 18 + r * 8;
+    if (i == selIdx) { fillBoxClipped(0, y - 7, 128, 8); u8g2.setDrawColor(0); }
+    u8g2.setCursor(4, y);
+    if (i < 8) { u8g2.print(ZN[i / 2]); u8g2.print(F("  ACT ")); u8g2.print(i % 2 + 1); }
+    else u8g2.print(F("SPECIAL STAGE"));
+    u8g2.setDrawColor(1);
+  }
+  u8g2.setCursor(2, 64); u8g2.print(F("L/R  JUMP=go  MODE=back"));
+}
+
 // ===================== WatchCore hooks =====================
 void gameStart() {            // Game pressed on the clock face
   splashFrame = 0;
+  codeHist = 0;
   mode = SPLASH;
 }
 
 void gameUpdate(uint8_t e) {
   switch (mode) {
     case SPLASH:
+      // Only Jump (play) and Mode (back to the clock) act here; Left/Right feed the code
       if (splashFrame < 250) splashFrame++;
-      if (e & B_MID) startGame();
-      else if (e & (B_MODE | B_GAME | B_LEFT | B_RIGHT)) watch::exitToClock();
+      if (e & B_LEFT)  codeHist = (uint16_t)((codeHist << 2) | 1) & 0x0FFF;
+      if (e & B_RIGHT) codeHist = (uint16_t)((codeHist << 2) | 2) & 0x0FFF;
+      if (e & B_MID) {
+        if (codeHist == LEVEL_SELECT_CODE) { selIdx = 0; mode = SELECT; beep(1800, 80); }
+        else startGame();
+      } else if (e & B_MODE) watch::exitToClock();
       break;
+    case SELECT: selectStep(e); break;
     case GAME: gameStep(e); break;
     case SPECIAL: specialStep(e); break;
     case CLEAR: clearStep(e); break;
@@ -2092,6 +2144,7 @@ void gameDraw() {
     case OVER: drawOver(); break;
     case WIN: drawWin(); break;
     case DEAD: drawGame(); break;
+    case SELECT: drawSelect(); break;
   }
 }
 
