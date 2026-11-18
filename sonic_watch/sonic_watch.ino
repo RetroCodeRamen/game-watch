@@ -179,10 +179,12 @@ static const fx BRAKE       = 330;     // ~11× accel — deliberate skid
 static const fx TOP_SPD     = 1536;    // 6 px/frame
 static const fx START_KICK  = 128;     // 0.5 — immediate bite from standstill
 static const fx AIR_ACCEL   = 18;      // air steer so jumps feel controllable
-static const fx JUMP_SPD    = 475;     // 6.5 × (64/224) ≈ 1.86
+static const fx JUMP_SPD    = 560;     // ~38 px: 2.4 Sonic heights, the Genesis jump/body ratio
+static const fx SPRING_SPD  = 712;     // yellow spring ≈ 62 px (levels are spaced for this)
 static const fx GRAVITY     = 16;      // 0.21875 × (64/224) = 0.0625
 static const fx ROLL_FRIC   = 8;
 static const fx MAX_FALL    = 1170;
+static const int16_t CLIFF_STEP = 6;  // ground rising more than this within Sonic's half-width = a wall
 // Slope pull per px of height change over 8 px. Genesis proportions to our ACCEL: the max
 // slope you can walk up from rest is ~21° (as in Sonic 1); rolling is 2.5× downhill, 0.625× up.
 static const fx SLOPE_RUN     = 10;
@@ -314,8 +316,15 @@ void setPlayerVel(fx vx, fx vy) {
 }
 
 // Approx slope: + = downhill to the right (ground Y grows downward)
+// Height change over 8 px around wx. Each half is measured separately so a cliff edge
+// (a step bigger than any slope) doesn't count as a hill and shove Sonic off it.
 int16_t slopeAt(int16_t wx) {
-  return groundAt(wx + 4) - groundAt(wx - 4);
+  int16_t g = groundAt(wx);
+  int16_t a = g - groundAt(wx - 4), b = groundAt(wx + 4) - g;
+  if (abs(a) > CLIFF_STEP) a = b;
+  if (abs(b) > CLIFF_STEP) b = a;
+  if (abs(a) > CLIFF_STEP) return 0;
+  return a + b;
 }
 
 void placeGreenHillLoop(int16_t x) {
@@ -570,6 +579,7 @@ void hurt() {
     spillRings();
     invul = 55;
     setPlayerVel(faceRight ? I2F(-2) : I2F(2), I2F(-5));
+    jumpCut = true;            // knock-back isn't a jump: releasing the button can't shorten it
     onGround = false;
     rolling = true;
     groundRoll = false;
@@ -850,19 +860,20 @@ void stopRoll() {
   if (onGround) rolling = false;
 }
 
-// Push Sonic out of a solid AABB and kill inward speed (side bump)
+// Push Sonic out of a solid AABB and stop his inward speed (side bump)
 void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_t rad) {
   if (py + rad <= top || py - rad >= bot) return;
   if (px + rad <= left || px - rad >= right) return;
   int16_t mid = (left + right) / 2;
+  // Genesis: touching a solid's side just stops you (no knock-back), so you can jump
+  // straight up beside a wall or spikes and steer over the top.
   if (px < mid) {
     fpx = I2F(left - rad);
-    if (fvx > 0) fvx = I2F(-2);
+    if (fvx > 0) fvx = 0;
   } else {
     fpx = I2F(right + rad);
-    if (fvx < 0) fvx = I2F(2);
+    if (fvx < 0) fvx = 0;
   }
-  faceRight = fvx >= 0;
   if (groundRoll) stopRoll();
   syncPlayerInts();
 }
@@ -944,6 +955,7 @@ void eggStep(int16_t rad) {
     // Bounce AWAY from the craft: above → up (−y), below → down (+y)
     setPlayerVel((px < eggX) ? I2F(-4) : I2F(4),
                  (py <= eggY + 2) ? I2F(-5) : I2F(5));
+    jumpCut = true;
     onGround = false;
     rolling = true;
     faceRight = fvx > 0;
@@ -1292,6 +1304,7 @@ void physicsStep(uint8_t e) {
   if (inHollow) { stepHollow(rad); return; }
 
   int16_t prevX = px;
+  bool wasGrounded = onGround && !onLedge && fvy >= 0;
   applyGroundControl();
 
   if (!onGround) {
@@ -1309,11 +1322,27 @@ void physicsStep(uint8_t e) {
     if (groundRoll) stopRoll();
     syncPlayerInts();
   }
-  // Allow climbing above y=0 for tall loops; only clamp extreme escape
-  if (py < -90) {
-    fpy = I2F(-90);
-    if (fvy < 0) fvy = 0;
-    syncPlayerInts();
+  // Terrain cliffs: a rise steeper than any slope is a wall face — stop at it (no snap-up).
+  // Downhill drops are just ledges to fall off.
+  if (px != prevX) {
+    int8_t dir = px > prevX ? 1 : -1;
+    for (uint8_t k = 0; k < 8; k++) {
+      int16_t lead = px + dir * (rad - 1);
+      if (py + rad - groundAt(lead) <= CLIFF_STEP) break;
+      fpx -= dir * FX_ONE;
+      fvx = 0;
+      if (groundRoll) stopRoll();
+      syncPlayerInts();
+    }
+  }
+
+  // Genesis ground stick: running over a crest or down a slope keeps him on the ground
+  // instead of skipping through the air (he only leaves at a drop bigger than this)
+  if (wasGrounded) {
+    int16_t gap = groundAt(px) - (py + rad);
+    int16_t stick = (int16_t)(abs(fvx) >> 8) + 4;
+    if (stick > 10) stick = 10;
+    if (gap > 0 && gap <= stick) { fpy = I2F(groundAt(px) - rad); fvy = 0; syncPlayerInts(); }
   }
 
   applyWalls(rad);
@@ -1507,8 +1536,12 @@ void gameStepInner(uint8_t e) {
         }
       }
     } else if (o.kind == 3) {
-      if (abs(px - o.x) < 7 && py + rad >= o.y - 2 && py + rad <= o.y + 7 && fvy >= 0) {
-        fvy = -(JUMP_SPD + JUMP_SPD / 2); onGround = false; rolling = true; jumpCut = false;
+      // Check both physics sub-steps: at top speed he moves 12 px a frame, wider than the spring
+      bool overX = abs(px - o.x) < 7 || abs(midPX - o.x) < 7 || (midPX < o.x) != (px < o.x);
+      if (overX && py + rad >= o.y - 2 && py + rad <= o.y + 7 && fvy >= 0) {
+        if (abs(px - o.x) >= 7) { fpx = I2F(o.x); syncPlayerInts(); }
+        fvy = -SPRING_SPD; onGround = false; rolling = true;
+        jumpCut = true;            // springs ignore the jump button (only a real jump can be cut short)
         syncPlayerInts(); beep(1100, 65);
       }
     } else if (o.kind == 4) {
@@ -1648,36 +1681,67 @@ void clearStep(uint8_t e) {
 }
 
 // ---------- draw ----------
-// Blit a 16x20 XBM frame; mirror when facing left
+uint16_t runAnim;   // run-cycle phase (8.8 fixed): advances faster the faster he runs, like Sonic 1
+
+// Blit one sprite frame (sonic_sprites.h); mirrored when facing left. A dark 1-px halo on
+// the sides and top keeps him readable over ground patterns and scenery (none below, so the
+// shoes still sit on the ground line).
 void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
   const uint8_t *src = sonicFrames[frameId];
-  const uint8_t rowBytes = (SONIC_W + 7) / 8;
-  u8g2.setDrawColor(1);
-  for (uint8_t row = 0; row < SONIC_H; row++) {
-    int16_t py = top + row;
-    if (py < 0 || py >= 64) continue;
-    for (uint8_t col = 0; col < SONIC_W; col++) {
-      uint8_t byte = pgm_read_byte(&src[row * rowBytes + (col >> 3)]);
-      if (!(byte & (1 << (col & 7)))) continue;
-      int16_t px = left + (faceRight ? col : (SONIC_W - 1 - col));
-      if (px < 0 || px >= 128) continue;
-      plot(px, py);
+  for (uint8_t pass = 0; pass < 2; pass++) {
+    u8g2.setDrawColor(pass);
+    for (uint8_t row = 0; row < SONIC_H; row++) {
+      uint16_t bits = pgm_read_byte(&src[row * 2]) | (pgm_read_byte(&src[row * 2 + 1]) << 8);
+      if (!bits) continue;
+      int16_t y = top + row;
+      for (uint8_t col = 0; col < SONIC_W; col++) {
+        if (!(bits & (1u << col))) continue;
+        int16_t x = left + (faceRight ? col : (SONIC_W - 1 - col));
+        if (pass) plot(x, y);
+        else { plot(x - 1, y); plot(x + 1, y); plot(x, y - 1); }
+      }
     }
   }
+  u8g2.setDrawColor(1);
 }
 
+// Feet (or the bottom of the spin-ball + 1) at y, centred on x
+void drawSonicFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
+  blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 6, id, faceRight);
+}
+
+// Simple version for the watch face: run cycle / spin-ball / idle blink by frame count
 void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, bool moving) {
   uint8_t id;
-  if (roll) id = SPR_ROLL;
+  if (roll) id = SPR_ROLL0 + ((frame >> 1) & 3);
   else if (moving) id = SPR_RUN0 + ((frame >> 1) & 3);
-  else id = ((frame >> 3) & 1) ? SPR_STAND1 : SPR_STAND0;
-  int16_t top = y - (int16_t)SONIC_H + 6;
-  int16_t left = x - (int16_t)SONIC_W / 2;
-  blitSonic(left, top, id, faceRight);
+  else id = ((frame & 63) < 3) ? SPR_BLINK : SPR_STAND;
+  drawSonicFrame(x, y, id, faceRight);
 }
 
+// In-game Sonic: animation follows his speed (walk → run → figure-8 legs at top speed),
+// skids when you push against a fast run, spins faster when rolling faster.
 void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame) {
-  drawHogAt(x, y, roll || groundRoll, faceRight, frame, fvx != 0 || inLoop);
+  fx spd = inLoop ? abs(loopGspd) : abs(fvx);
+  uint8_t id;
+  bool face = faceRight;
+  if (roll || groundRoll) {
+    if (spd > I2F(3)) runAnim += 256; else runAnim += 128;
+    id = SPR_ROLL0 + ((runAnim >> 8) & 3);
+  } else if (spd == 0 && !inLoop) {
+    id = ((frame & 63) < 3) ? SPR_BLINK : SPR_STAND;
+    runAnim = 0;
+  } else if (onGround && !inLoop && spd > I2F(1) &&
+             (((heldIn() & B_LEFT) && fvx > 0) || ((heldIn() & B_RIGHT) && fvx < 0))) {
+    id = SPR_SKID;           // braking: lean back, still facing the way he's sliding
+    face = fvx > 0;
+  } else if (spd >= 1400) {
+    id = SPR_FAST0 + (frame & 1);
+  } else {
+    runAnim += 24 + spd / 12;  // ~4 steps/s at a walk up to ~15/s near top speed
+    id = SPR_RUN0 + ((runAnim >> 8) & 3);
+  }
+  drawSonicFrame(x, y, id, face);
 }
 
 void drawLoopTrack() {
