@@ -175,7 +175,14 @@ static const fx ROLL_FRIC   = 8;
 static const fx MAX_FALL    = 1170;
 static const fx SLOPE_RUN   = 24;
 static const fx SLOPE_ROLL  = 60;      // ~2.5× run
-static const fx LOOP_PUSH   = (GRAVITY * 3) / 8;  // forward push on the loop track (Genesis ratio)
+// Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
+// LOOP_SLP is the slope factor: Genesis 0.125 px/frame² on a much bigger loop; scaled up for
+// our ~30 px-radius track so it takes the same share of top speed to get round.
+static const fx LOOP_SLP    = 80;                 // 0.3125 px/step² · sin(angle): ~1 screen run-up
+static const fx LOOP_PUSH   = (LOOP_SLP * 3) / 8; // holding forward (Genesis accel : slope = 3:8)
+static const fx LOOP_BRAKE  = LOOP_SLP * 4;       // holding back (Genesis decel : slope = 4:1)
+static const fx LOOP_FALL   = 640;                // 2.5 px/step: slower than this on a wall → fall
+static const uint8_t LOOP_LOCK = 30;              // L/R input lock after falling off (frames)
 
 fx fpx, fpy, fvx, fvy;
 int16_t px, py, pvx, pvy, cam, camY;   // camY unlocks tall loops
@@ -201,6 +208,8 @@ float loopProg;      // radians travelled forward from the bottom; ≥ 2π = ful
 bool inHollow;       // fell off the track: free fall inside the loop
 int8_t loopSide;     // side he came in from while under the loop (−1 left, +1 right, 0 none)
 bool loopPassed;     // completed the lap — don't re-grab the track until he's clear
+bool loopRolled;     // entered the loop rolling (uses rolling slope factors, no forward push)
+uint8_t loopLock;    // Genesis control lock after slipping off a wall (counts down on ground)
 uint8_t bossHP, bossCool, bossPhase;
 int16_t eggX, eggY, ballAngle;   // Egg Wrecker (screen/arena space)
 int8_t eggDir;
@@ -389,6 +398,8 @@ void clearWorld() {
   inHollow = false;
   loopSide = 0;
   loopPassed = false;
+  loopRolled = false;
+  loopLock = 0;
 }
 
 void spillRings() {
@@ -658,7 +669,7 @@ void startAct(uint8_t z, uint8_t a) {
   onGround = true; rolling = false; groundRoll = false; faceRight = true;
   jumpCut = false; inLoop = false;
   loopAng = 0; loopGspd = 0; loopSense = 0; loopProg = 0;
-  inHollow = false; loopSide = 0; loopPassed = false;
+  inHollow = false; loopSide = 0; loopPassed = false; loopRolled = false; loopLock = 0;
   invul = 0; animFrame = 0;
   lastTapDir = 0; lastTapMs = 0;
   genAt = actEnd;   // nothing left to stream
@@ -885,7 +896,8 @@ void eggStep(int16_t rad) {
 
 void applyGroundControl() {
   bool pinball = (zone == 2 && (rolling || abs(fvx) >= I2F(2)));
-  fx top = pinball ? I2F(5) : (groundRoll ? I2F(4) : TOP_SPD);
+  // Rolling keeps whatever speed you had (Genesis caps rolls at 16, i.e. never in practice)
+  fx top = pinball ? I2F(5) : TOP_SPD;
   int16_t slope = onGround ? slopeAt(px) : 0;
 
   if (groundRoll && onGround) {
@@ -896,6 +908,7 @@ void applyGroundControl() {
   } else if (onGround) {
     fvx += (fx)slope * SLOPE_RUN;
     bool left = watch::held() & B_LEFT, right = watch::held() & B_RIGHT;
+    if (loopLock) { left = right = false; }
     if (right && !left) {
       if (fvx < 0) fvx += BRAKE;          // skid
       else {
@@ -932,10 +945,9 @@ void applyGroundControl() {
 // The road runs flat under the loop. Crossing the loop's centre line on the floor (in the
 // direction you came in from) puts Sonic on the circular track at the bottom — at ANY speed.
 // From there it's physics only:
-//   * gravity along the track slows the climb and speeds the descent;
-//   * the track can push but never pull: he stays on only while v² ≥ −g·R·sinθ
-//     (centrifugal force beats gravity). Too slow on a wall → slides back down;
-//     too slow on the upper half → falls off into the hollow, lands, rolls back out;
+//   * the slope factor along the track slows the climb and speeds the descent;
+//   * like Sonic 1: more than 45° from flat and slower than LOOP_FALL → he lets go and
+//     falls (L/R locked 30 frames); slower climbs just slide back down and roll out;
 //   * the through-exit only counts after a full 2π in the entry direction.
 // Angles are y-down: 0 = right, π/2 = bottom, π = left, 3π/2 = top.
 
@@ -951,6 +963,14 @@ static void loopTangent(float th, float *tx, float *ty) {
 }
 
 static int16_t loopFloorY() { return loopTrack.cy + loopTrack.r; }
+
+// Surface angle away from flat: 0 at the bottom, ±π/2 on the walls, ±π on the ceiling
+static float loopRelBottom() {
+  float rel = loopAng - (float)HALF_PI;
+  while (rel > (float)PI) rel -= (float)TWO_PI;
+  while (rel <= -(float)PI) rel += (float)TWO_PI;
+  return rel;
+}
 
 static void loopPlaceOnTrack(int16_t rad) {
   float R = loopTrackR(rad);
@@ -1039,19 +1059,30 @@ void stepLoop(int16_t rad) {
   float tx, ty;
   loopTangent(loopAng, &tx, &ty);
 
-  // Gravity along the track (pulls +Y): a = G · tangent_+θ
-  loopGspd += (fx)((float)GRAVITY * ty);
+  // Sonic_SlopeResist: slope factor · sin(surface angle) along the track (pulls +Y).
+  // Sonic 1 skips it within ±45° of upside-down, so he coasts across the ceiling.
+  // Rolling: 2.5× downhill, 0.625× uphill (S1's #$50, and #$50>>2 when climbing).
+  if (fabsf(loopRelBottom()) < 2.35619f /* 135° */) {
+    float slope = (float)LOOP_SLP * ty;           // + pushes toward +θ
+    if (loopRolled) {
+      bool downhill = (slope > 0) == (loopGspd > 0);
+      slope *= downhill ? 2.5f : 0.625f;
+    }
+    loopGspd += (fx)slope;
+  }
 
   // Forward = the direction you ENTERED (holding right on a left→right run keeps loop
   // momentum even while moving left across the ceiling). Opposite only brakes through zero.
-  // Holding forward pushes at the Genesis accel:slope-gravity ratio (~3/8), so you can't
-  // just hold the button and crawl up the wall — entry speed decides whether you make it.
-  fx push  = (fx)(loopSense * (float)LOOP_PUSH);
-  fx brake = (fx)(loopSense * (float)ACCEL);
-  if ((loopSense < 0 && (watch::held() & B_RIGHT)) || (loopSense > 0 && (watch::held() & B_LEFT)))
-    loopGspd += push;
-  if ((loopSense < 0 && (watch::held() & B_LEFT)) || (loopSense > 0 && (watch::held() & B_RIGHT)))
-    loopGspd -= brake;
+  // Push/brake keep Genesis's ratios to the slope factor (accel 3/8, decel 4×).
+  // Rolling: holding forward adds nothing (as on flat ground). Locked after a fall-off.
+  if (!loopLock) {
+    fx push  = (fx)(loopSense * (float)LOOP_PUSH);
+    fx brake = (fx)(loopSense * (float)LOOP_BRAKE);
+    bool fwd = (loopSense < 0 && (watch::held() & B_RIGHT)) || (loopSense > 0 && (watch::held() & B_LEFT));
+    bool back = (loopSense < 0 && (watch::held() & B_LEFT)) || (loopSense > 0 && (watch::held() & B_RIGHT));
+    if (fwd && !loopRolled) loopGspd += push;
+    if (back) loopGspd -= brake;
+  }
   if (loopGspd > TOP_SPD) loopGspd = TOP_SPD;
   if (loopGspd < -TOP_SPD) loopGspd = -TOP_SPD;
 
@@ -1082,9 +1113,13 @@ void stepLoop(int16_t rad) {
     }
   }
 
-  // Centrifugal check: inward push needed is N = v²/R + g·sinθ; the track can't pull (N < 0)
-  float g = (float)GRAVITY / (float)FX_ONE;
-  if (ds * ds + g * R * sinf(loopAng) < 0.0f) loopFallOff(rad);
+  // Sonic_SlopeRepel: on a wall or ceiling (> 45° from flat) and slower than the fall
+  // speed → ground speed cleared, airborne with current velocity, L/R locked 30 frames
+  fx absG = loopGspd >= 0 ? loopGspd : -loopGspd;
+  if (fabsf(loopRelBottom()) > 0.785398f /* 45° */ && absG < LOOP_FALL) {
+    loopFallOff(rad);
+    loopLock = LOOP_LOCK;
+  }
 }
 
 // Loop entry + solid outer shell. Runs after normal movement/landing each step.
@@ -1107,11 +1142,13 @@ void loopGate(int16_t prevX, int16_t rad) {
   bool nearFloor = py + rad >= loopFloorY() - 6;
   if (nearFloor && !loopPassed) {
     if (loopSide < 0 && fvx > 0 && px >= cx) {          // from the left: up the right wall
+      loopRolled = groundRoll;
       loopAttach((float)HALF_PI, -fvx, -1.0f, 0.0f, rad);
       beep(950, 25);
       return;
     }
     if (loopSide > 0 && fvx < 0 && px <= cx) {          // from the right: up the left wall
+      loopRolled = groundRoll;
       loopAttach((float)HALF_PI, -fvx, 1.0f, 0.0f, rad);
       beep(950, 25);
       return;
@@ -1153,6 +1190,7 @@ void physicsStep(uint8_t e) {
   }
   if (!onGround || groundRoll) rolling = true;
 
+  if (loopLock && (onGround || inLoop)) loopLock--;
   if (inLoop) { stepLoop(rad); return; }
   if (inHollow) { stepHollow(rad); return; }
 
