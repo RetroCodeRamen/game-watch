@@ -152,6 +152,7 @@ Plat plats[64];
 struct Bridge { int16_t x0, x1, y; bool live; };
 Bridge bridges[6];
 int8_t curBridge = -1;      // bridge Sonic is standing on (-1 none)
+int16_t camLead = 0;        // camera look-ahead (px, + = looking right)
 bool onLedge;               // standing on a platform/bridge (terrain slope below doesn't apply)
 uint8_t deadT;              // death animation frame counter
 Shot shots[6];
@@ -159,7 +160,6 @@ Scatter scat[3];
 const uint8_t SCATTER_LIFE = 90;
 const uint8_t SCATTER_GRACE = 30;
 int16_t ballWX, ballWY;
-uint8_t gStrip[128];
 
 
 // Deterministic layout hash (no random() in level gen)
@@ -183,8 +183,11 @@ static const fx JUMP_SPD    = 475;     // 6.5 × (64/224) ≈ 1.86
 static const fx GRAVITY     = 16;      // 0.21875 × (64/224) = 0.0625
 static const fx ROLL_FRIC   = 8;
 static const fx MAX_FALL    = 1170;
-static const fx SLOPE_RUN   = 24;
-static const fx SLOPE_ROLL  = 60;      // ~2.5× run
+// Slope pull per px of height change over 8 px. Genesis proportions to our ACCEL: the max
+// slope you can walk up from rest is ~21° (as in Sonic 1); rolling is 2.5× downhill, 0.625× up.
+static const fx SLOPE_RUN     = 10;
+static const fx SLOPE_ROLL    = 25;
+static const fx SLOPE_ROLL_UP = 6;
 // Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
 // LOOP_SLP is the slope factor: Genesis 0.125 px/frame² on a much bigger loop; scaled up for
 // our ~30 px-radius track so it takes the same share of top speed to get round.
@@ -533,12 +536,28 @@ void updateScatter() {
   }
 }
 
-void cacheGroundStrip() {
-  for (uint8_t i = 0; i < 128; i++) {
-    int16_t g = sy(groundAt(cam + i));
-    // Store screen-Y; 255 = off-screen (drawn only if 0..63)
-    if (g < 0 || g > 63) gStrip[i] = 255;
-    else gStrip[i] = (uint8_t)g;
+// Solid ground reads as solid: a 2 px crust over a zone-specific fill, anchored to the world
+// so it scrolls with the level. Each zone's pattern doubles as its identity in 1-bit.
+static inline bool groundPattern(int32_t wx, int32_t wy) {
+  switch (zone) {
+    case 0:  return ((wx >> 2) ^ (wy >> 2)) & 1;                                  // Green Hill: 4×4 checkerboard
+    case 1:  return ((wy & 3) == 0) || ((wx & 15) == 0 && (wy & 3) == 2);         // Chemical: stripes + rivets
+    case 2:  return ((wx + wy) & 7) == 0 || ((wx - wy) & 7) == 0;                 // Casino: diamond lattice
+    default: return (((wx + wy) & 7) == 0) && ((wy >> 2) & 1);                    // Scrap Brain: sparse ///
+  }
+}
+
+void drawTerrain() {
+  uint8_t *buf = u8g2.getBufferPtr();   // SH1106 full buffer: 8 pages × 128 bytes, LSB = top row
+  for (int16_t i = 0; i < 128; i++) {
+    int32_t wx = (int32_t)cam + i;
+    int16_t g = sy(groundAt(wx));
+    if (g > 63) continue;
+    for (int16_t y = (g < 0 ? 0 : g); y < 64; y++) {
+      int16_t depth = y - g;
+      if (depth < 2 || (depth > 2 && groundPattern(wx, (int32_t)y + camY)))
+        buf[(y >> 3) * 128 + i] |= (uint8_t)(1 << (y & 7));
+    }
   }
 }
 
@@ -686,6 +705,7 @@ void startAct(uint8_t z, uint8_t a) {
   actEnd = lvl->len;
   rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
   actFrames = 0;
+  camLead = 0;
   goalT = 0;
   cam = 0; camY = 0;
   setPlayerPos(24, groundAt(24) - 5);
@@ -961,7 +981,8 @@ void applyGroundControl() {
 
   if (groundRoll && onGround) {
     // Holding forward adds no roll speed; slope does (2.5×)
-    fvx += (fx)slope * SLOPE_ROLL;
+    bool downhill = (fvx == 0) || ((slope > 0) == (fvx > 0));
+    fvx += (fx)slope * (downhill ? SLOPE_ROLL : SLOPE_ROLL_UP);
     if (fvx > 0) { fvx -= ROLL_FRIC; if (fvx < 0) fvx = 0; }
     else if (fvx < 0) { fvx += ROLL_FRIC; if (fvx > 0) fvx = 0; }
   } else if (onGround) {
@@ -1083,7 +1104,12 @@ static void loopFallOff(int16_t rad) {
   groundRoll = false;
 }
 
-// Free fall inside the loop; the inside face of the track is solid all the way round
+// Fell off the track. A loop is a road that climbs, flips and comes down NEXT TO where it
+// started (in 3D), so falling off drops Sonic straight down to the road underneath — the
+// side walls don't catch him like a ring would. Landing:
+//   * on the entry half (behind the centre line) → he's on the entry road: roll back out
+//     or turn round and try again;
+//   * on the climbing half → he lands low on the climb and slides back down and out.
 void stepHollow(int16_t rad) {
   if (heldIn() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
   if (heldIn() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
@@ -1091,26 +1117,38 @@ void stepHollow(int16_t rad) {
   if (fvy > MAX_FALL) fvy = MAX_FALL;
   fpx += fvx;
   fpy += fvy;
-  syncPlayerInts();
 
   float R = loopTrackR(rad);
-  float dx = (float)fpx / FX_ONE - loopTrack.cx;
-  float dy = (float)fpy / FX_ONE - loopTrack.cy;
-  if (dx * dx + dy * dy < R * R) return;
+  float fwdDir = -loopSense;                         // +1: forward is +x (entered from the left)
+  // Can't fall through the climbing wall to the far side
+  float fwd = ((float)fpx / FX_ONE - loopTrack.cx) * fwdDir;
+  if (fwd > R) {
+    fpx = I2F(loopTrack.cx + (int16_t)(R * fwdDir));
+    if ((float)fvx * fwdDir > 0) fvx = 0;
+  }
+  syncPlayerInts();
 
-  // Hit the track: keep only the along-track part of his velocity
-  float th = atan2f(dy, dx);
-  if (th < 0) th += (float)TWO_PI;
-  float tx, ty;
-  loopTangent(th, &tx, &ty);
-  fx gspd = (fx)((float)fvx * tx + (float)fvy * ty);
-  // Progress measured the short way from the bottom — a fall never counts toward a lap
-  float rel = th - (float)HALF_PI;
-  while (rel > (float)PI) rel -= (float)TWO_PI;
-  while (rel <= -(float)PI) rel += (float)TWO_PI;
-  loopAttach(th, gspd, loopSense, loopSense * rel, rad);
-  // Landed near the bottom: that's just the floor — ordinary running/rolling takes over
-  if (fabsf(rel) < 0.35f) loopToGround(rad);
+  int16_t floorY = loopFloorY();
+  if (py + rad < floorY) return;
+
+  fwd = (float)(px - loopTrack.cx) * fwdDir;
+  if (fwd > 2.0f) {
+    // On the climb: put him on the track low down (≤ 40°, below the slip zone)
+    float rel = asinf(fwd / R > 1.0f ? 1.0f : fwd / R);
+    if (rel > 0.70f) rel = 0.70f;
+    float th = (float)HALF_PI + loopSense * rel;
+    float tx, ty;
+    loopTangent(th, &tx, &ty);
+    fx gspd = (fx)((float)fvx * tx + (float)fvy * ty);
+    loopAttach(th, gspd, loopSense, rel, rad);
+  } else {
+    // Behind the centre line: that's just the entry road
+    fpy = I2F(floorY - rad);
+    fvy = 0;
+    onGround = true;
+    inHollow = false;
+    syncPlayerInts();
+  }
 }
 
 void stepLoop(int16_t rad) {
@@ -1335,9 +1373,17 @@ void gameStepInner(uint8_t e) {
     cam = arenaOrigin;
     camY = 0;
   } else {
-    int16_t psx = px - cam;
-    if (psx < 32) cam = px - 32;
-    if (psx > 96) cam = px - 96;
+    // Look-ahead: the faster you run, the further the camera leads — at top speed Sonic sits
+    // 32 px from the trailing edge with 96 px of sightline. Eased 1 px/frame so it never snaps;
+    // held steady through the loop (where fvx swings around).
+    if (!inLoop && !inHollow && !goalT) {
+      int16_t want = (int16_t)((fvx * 32) / TOP_SPD);
+      if (want > 32) want = 32;
+      if (want < -32) want = -32;
+      if (camLead < want) camLead++;
+      else if (camLead > want) camLead--;
+    }
+    cam = px - 64 + camLead;
     if (cam < 0) cam = 0;
     // Vertical follow — keeps Sonic framed through tall loops
     int16_t psy = py - camY;
@@ -1647,8 +1693,8 @@ void drawLoopTrack() {
   // Mouth openings (clear bottom-left / bottom-right notches)
   int16_t floorY = sy(loopTrack.cy + r);
   u8g2.setDrawColor(0);
-  fillBoxClipped(x - r - 1, floorY - 3, 10, 8);
-  fillBoxClipped(x + r - 8, floorY - 3, 10, 8);
+  fillBoxClipped(x - r - 1, floorY - 6, 10, 6);
+  fillBoxClipped(x + r - 8, floorY - 6, 10, 6);
   u8g2.setDrawColor(1);
   // Checker ticks around the ring
   for (uint8_t i = 0; i < 16; i++) {
@@ -1744,14 +1790,64 @@ void drawPipe(int16_t x, int16_t baseY) {
   fillBoxClipped(x - 2, baseY - 4, 6, 4);
 }
 
+// Casino "neon": a card-suit outline on a pole that blinks every ~0.5 s (no text/logos —
+// they turn into blobs at 128×64). Suit picked from the position.
 void drawNeon(int16_t x, int16_t baseY) {
-  frameSafe(x - 6, baseY - 20, 14, 10);
-  if ((animFrame >> 2) & 1) {
-    plot(x - 3, baseY - 16);
-    plot(x, baseY - 15);
-    plot(x + 3, baseY - 16);
-  }
   vLineSafe(x, baseY - 10, 10);
+  if ((animFrame / 15) & 1) return;          // off phase
+  int16_t cy = baseY - 17;
+  switch ((x >> 5) & 3) {
+    case 0:   // diamond
+      lineSafe(x, cy - 6, x + 5, cy); lineSafe(x + 5, cy, x, cy + 6);
+      lineSafe(x, cy + 6, x - 5, cy); lineSafe(x - 5, cy, x, cy - 6);
+      break;
+    case 1:   // heart
+      circleSafe(x - 2, cy - 2, 2); circleSafe(x + 2, cy - 2, 2);
+      lineSafe(x - 4, cy - 1, x, cy + 5); lineSafe(x + 4, cy - 1, x, cy + 5);
+      break;
+    case 2:   // spade
+      lineSafe(x - 4, cy + 1, x, cy - 5); lineSafe(x + 4, cy + 1, x, cy - 5);
+      circleSafe(x - 2, cy + 2, 2); circleSafe(x + 2, cy + 2, 2);
+      vLineSafe(x, cy + 3, 4);
+      break;
+    default:  // club
+      circleSafe(x, cy - 3, 2); circleSafe(x - 3, cy + 1, 2); circleSafe(x + 3, cy + 1, 2);
+      vLineSafe(x, cy + 2, 5);
+      break;
+  }
+}
+
+// Green Hill totem pole: three stacked faces with wings on top, wireframe (background)
+void drawTotem(int16_t x, int16_t baseY) {
+  for (uint8_t k = 0; k < 3; k++) {
+    int16_t top = baseY - 9 * (k + 1);
+    frameSafe(x - 4, top, 9, 9);
+    plot(x - 2, top + 3); plot(x + 2, top + 3);
+    hLineSafe(x - 2, top + 6, 5);
+  }
+  int16_t t = baseY - 27;
+  lineSafe(x - 4, t + 2, x - 9, t - 1); lineSafe(x - 9, t - 1, x - 4, t + 5);
+  lineSafe(x + 4, t + 2, x + 9, t - 1); lineSafe(x + 9, t - 1, x + 4, t + 5);
+}
+
+// In-game sunflower as an outline, so it reads as scenery and never as a spike.
+// (The filled version stays on the watch face.)
+void drawSunflowerOutline(int16_t x, int16_t baseY) {
+  int16_t cy = baseY - 30;
+  vLineSafe(x, cy + 6, baseY - (cy + 6));
+  triSafe(x, baseY - 8,  x - 6, baseY - 13, x - 3, baseY - 6);
+  triSafe(x, baseY - 8,  x + 6, baseY - 13, x + 3, baseY - 6);
+  triSafe(x, baseY - 16, x - 5, baseY - 20, x - 2, baseY - 14);
+  triSafe(x, baseY - 16, x + 5, baseY - 20, x + 2, baseY - 14);
+  triSafe(x,     cy - 9, x - 3, cy - 3, x + 3, cy - 3);
+  triSafe(x + 7, cy - 7, x + 1, cy - 4, x + 4, cy - 1);
+  triSafe(x + 9, cy,     x + 3, cy - 3, x + 3, cy + 3);
+  triSafe(x + 7, cy + 7, x + 1, cy + 4, x + 4, cy + 1);
+  triSafe(x,     cy + 9, x - 3, cy + 3, x + 3, cy + 3);
+  triSafe(x - 7, cy + 7, x - 1, cy + 4, x - 4, cy + 1);
+  triSafe(x - 9, cy,     x - 3, cy - 3, x - 3, cy + 3);
+  triSafe(x - 7, cy - 7, x - 1, cy - 4, x - 4, cy - 1);
+  circleSafe(x, cy, 4);
 }
 
 void drawGear(int16_t x, int16_t baseY) {
@@ -1794,7 +1890,8 @@ void drawSaw(int16_t x, int16_t y, uint8_t spin) {
 }
 
 void drawDeco(int16_t x, int16_t baseY, uint8_t typ) {
-  if (typ == 0) drawSunflower(x, baseY);
+  if (typ == 0) drawSunflowerOutline(x, baseY);
+  else if (typ == 5) drawTotem(x, baseY);
   else if (typ == 1) drawPalm(x, baseY);
   else if (typ == 2) drawPipe(x, baseY);
   else if (typ == 3) drawNeon(x, baseY);
@@ -1876,13 +1973,7 @@ void drawGame() {
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setDrawColor(1);
 
-  // Terrain in camera space (vertical scroll for tall loops)
-  cacheGroundStrip();
-  for (uint8_t i = 0; i < 128; i++) {
-    if (gStrip[i] > 63) continue;
-    u8g2.drawPixel(i, gStrip[i]);
-    if ((i & 15) == 0 && gStrip[i] + 2 < 64) u8g2.drawPixel(i, gStrip[i] + 2);
-  }
+  drawTerrain();
 
   drawLoopTrack();
 
@@ -1975,10 +2066,17 @@ void drawGame() {
   bool blink = invul && ((invul >> 2) & 1);
   if (!blink) drawHog(sx(px), sy(py), rolling, faceRight, animFrame);
 
-  u8g2.setCursor(0, 9); u8g2.print(F("R")); u8g2.print(rings);
-  u8g2.setCursor(32, 9); printTime(actSeconds());
+  // Compact HUD: one 7 px strip, backed in black so it reads over terrain
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(0, 0, 52, 7);
+  u8g2.drawBox(100, 0, 28, 7);
+  u8g2.setDrawColor(1);
+  u8g2.setCursor(0, 6); u8g2.print(F("R")); u8g2.print(rings);
+  u8g2.setCursor(26, 6); printTime(actSeconds());
   for (uint8_t i = 0; i < emeralds && i < 7; i++) plot(70 + i * 4, 3);
-  for (uint8_t i = 0; i < lives; i++) discSafe(122 - i * 9, 5, 3);
+  for (uint8_t i = 0; i < lives; i++) discSafe(124 - i * 6, 3, 2);
+  u8g2.setFont(u8g2_font_6x10_tr);
   if (intro) drawBanner();
 }
 
