@@ -175,7 +175,7 @@ static const fx ROLL_FRIC   = 8;
 static const fx MAX_FALL    = 1170;
 static const fx SLOPE_RUN   = 24;
 static const fx SLOPE_ROLL  = 60;      // ~2.5× run
-static const fx LOOP_ENTER  = 1024;    // ≥4 px/frame to commit to the loop
+static const fx LOOP_PUSH   = (GRAVITY * 3) / 8;  // forward push on the loop track (Genesis ratio)
 
 fx fpx, fpy, fvx, fvy;
 int16_t px, py, pvx, pvy, cam, camY;   // camY unlocks tall loops
@@ -196,9 +196,11 @@ LoopTrack loopTrack;
 bool inLoop;
 float loopAng;       // radians; 0=right, π/2=bottom, π=left, 3π/2=top (y-down)
 fx loopGspd;         // signed speed along +angle tangent (carry / gravity / input)
-float loopTravel;    // progress in entry direction only (slides back reduce it)
-float loopSense;     // −1 left entry (far/right wall first), +1 right entry
-bool loopReadyExit;  // true only after a full loop, never after a fall-back
+float loopSense;     // −1 entered from the left (up the right wall first), +1 from the right
+float loopProg;      // radians travelled forward from the bottom; ≥ 2π = full lap
+bool inHollow;       // fell off the track: free fall inside the loop
+int8_t loopSide;     // side he came in from while under the loop (−1 left, +1 right, 0 none)
+bool loopPassed;     // completed the lap — don't re-grab the track until he's clear
 uint8_t bossHP, bossCool, bossPhase;
 int16_t eggX, eggY, ballAngle;   // Egg Wrecker (screen/arena space)
 int8_t eggDir;
@@ -382,9 +384,11 @@ void clearWorld() {
   inLoop = false;
   loopAng = 0;
   loopGspd = 0;
-  loopTravel = 0;
   loopSense = 0;
-  loopReadyExit = false;
+  loopProg = 0;
+  inHollow = false;
+  loopSide = 0;
+  loopPassed = false;
 }
 
 void spillRings() {
@@ -464,6 +468,7 @@ void hurt() {
     rolling = true;
     groundRoll = false;
     inLoop = false;
+    inHollow = false;
     return;
   }
   // No rings = death: lose a life and restart this act from the beginning
@@ -652,7 +657,8 @@ void startAct(uint8_t z, uint8_t a) {
   setPlayerVel(0, 0);
   onGround = true; rolling = false; groundRoll = false; faceRight = true;
   jumpCut = false; inLoop = false;
-  loopAng = 0; loopGspd = 0; loopTravel = 0; loopSense = 0; loopReadyExit = false;
+  loopAng = 0; loopGspd = 0; loopSense = 0; loopProg = 0;
+  inHollow = false; loopSide = 0; loopPassed = false;
   invul = 0; animFrame = 0;
   lastTapDir = 0; lastTapMs = 0;
   genAt = actEnd;   // nothing left to stream
@@ -922,60 +928,19 @@ void applyGroundControl() {
   if (fvx < -top) fvx = -top;
 }
 
-// The loop is a solid gate: you cannot run/jump through it. The road curves
-// into the track; the only way past is completing the full inner loop.
-void collideLoopBarrier(int16_t rad) {
-  if (!loopTrack.live || inLoop || bossOn) return;
+// ---- Green Hill loop: physics, not a speed gate ----
+// The road runs flat under the loop. Crossing the loop's centre line on the floor (in the
+// direction you came in from) puts Sonic on the circular track at the bottom — at ANY speed.
+// From there it's physics only:
+//   * gravity along the track slows the climb and speeds the descent;
+//   * the track can push but never pull: he stays on only while v² ≥ −g·R·sinθ
+//     (centrifugal force beats gravity). Too slow on a wall → slides back down;
+//     too slow on the upper half → falls off into the hollow, lands, rolls back out;
+//   * the through-exit only counts after a full 2π in the entry direction.
+// Angles are y-down: 0 = right, π/2 = bottom, π = left, 3π/2 = top.
 
-  int16_t r = loopTrack.r;
-  int16_t cx = loopTrack.cx, cy = loopTrack.cy;
-  int16_t floorY = cy + r;
-  int16_t mouthL = cx - r, mouthR = cx + r;
-  int16_t dx = px - cx, dy = py - cy;
-  int32_t d2 = (int32_t)dx * dx + (int32_t)dy * dy;
-  int32_t rIn = (int32_t)(r - 7) * (r - 7);
-  int32_t rOut = (int32_t)(r + 6) * (r + 6);
-
-  // Solid road-block through the middle — mouth zones only lead INTO the loop
-  int16_t plugL = mouthL + 12;
-  int16_t plugR = mouthR - 12;
-  if (px + rad > plugL && px - rad < plugR && py + rad > floorY - 24) {
-    if (px < cx) {
-      fpx = I2F(plugL - rad);
-      if (fvx > 0) fvx = 0;
-    } else {
-      fpx = I2F(plugR + rad);
-      if (fvx < 0) fvx = 0;
-    }
-    if (groundRoll) stopRoll();
-    syncPlayerInts();
-  }
-
-  // Tube wall: push to the outside — no clipping through the ring
-  bool nearMouthL = (dy > r - 14) && (dx >= -r - 2) && (dx <= -r + 16);
-  bool nearMouthR = (dy > r - 14) && (dx <=  r + 2) && (dx >=  r - 16);
-  if (!nearMouthL && !nearMouthR && d2 >= rIn && d2 <= rOut) {
-    float len = sqrtf((float)d2);
-    if (len >= 1.0f) {
-      float scale = (float)(r + 7) / len;
-      fpx = I2F(cx + (int16_t)(dx * scale));
-      fpy = I2F(cy + (int16_t)(dy * scale));
-      fvx = (fx)(-fvx / 4);
-      if (fvy < 0) fvy = 0;
-      syncPlayerInts();
-    }
-  }
-
-  // Hollow interior after a failed run: cannot sneak out the far side
-  if (d2 < rIn) {
-    if (px > cx && fvx > 0) { fpx = I2F(cx - rad); fvx = 0; syncPlayerInts(); }
-    if (px < cx && fvx < 0) { fpx = I2F(cx + rad); fvx = 0; syncPlayerInts(); }
-  }
-}
-
-// Inner-track radius (feet against inside face of the ring)
 static float loopTrackR(int16_t rad) {
-  float R = (float)loopTrack.r - (float)rad - 3.0f;
+  float R = (float)loopTrack.r - (float)rad - 3.0f;   // feet against the inner face
   return (R < 12.0f) ? 12.0f : R;
 }
 
@@ -985,134 +950,189 @@ static void loopTangent(float th, float *tx, float *ty) {
   *ty =  cosf(th);
 }
 
-void loopDetach(int16_t rad) {
-  float tx, ty;
-  loopTangent(loopAng, &tx, &ty);
-  float sp = (float)loopGspd / (float)FX_ONE;
-  fvx = (fx)(sp * tx * (float)FX_ONE);
-  fvy = (fx)(sp * ty * (float)FX_ONE);
-  // Nudge slightly off the track into the hollow so we don't instantly re-stick
-  float R = loopTrackR(rad) - 2.0f;
-  fpx = I2F(loopTrack.cx + (int16_t)(R * cosf(loopAng)));
-  fpy = I2F(loopTrack.cy + (int16_t)(R * sinf(loopAng)));
-  inLoop = false;
-  loopReadyExit = false;
-  onGround = false;
-  rolling = true;
-  groundRoll = false;
+static int16_t loopFloorY() { return loopTrack.cy + loopTrack.r; }
+
+static void loopPlaceOnTrack(int16_t rad) {
+  float R = loopTrackR(rad);
+  fpx = I2F(loopTrack.cx + (int16_t)lroundf(R * cosf(loopAng)));
+  fpy = I2F(loopTrack.cy + (int16_t)lroundf(R * sinf(loopAng)));
   syncPlayerInts();
 }
 
-void tryEnterLoop(int16_t rad) {
-  if (inLoop || !loopTrack.live || bossOn) return;
-  int16_t floorY = loopTrack.cy + loopTrack.r;
-  if (py + rad < floorY - 10 || py + rad > floorY + 8) return;
-  if (!onGround && py + rad < floorY - 4) return;
+static void loopAttach(float th, fx gspd, float sense, float prog, int16_t rad) {
+  inLoop = true;
+  inHollow = false;
+  loopAng = th;
+  loopGspd = gspd;
+  loopSense = sense;
+  loopProg = prog;
+  onGround = false;
+  rolling = true;
+  groundRoll = true;
+  loopPlaceOnTrack(rad);
+}
 
-  int16_t mouthL = loopTrack.cx - loopTrack.r;
-  int16_t mouthR = loopTrack.cx + loopTrack.r;
+// Back onto the flat floor at the bottom of the loop, keeping horizontal speed
+static void loopToGround(int16_t rad) {
+  float tx, ty;
+  loopTangent(loopAng, &tx, &ty);
+  fx vx = (fx)((float)loopGspd * tx);
+  float R = loopTrackR(rad);
+  setPlayerPos(loopTrack.cx + (int16_t)lroundf(R * cosf(loopAng)), loopFloorY() - rad);
+  setPlayerVel(vx, 0);
+  inLoop = false;
+  inHollow = false;
+  onGround = true;
+  if (vx > 0) faceRight = true;
+  else if (vx < 0) faceRight = false;
+}
 
-  // Left approach → up the RIGHT (far) wall, left across top, down left, exit right
-  if (fvx >= LOOP_ENTER && px >= mouthL - 8 && px <= mouthL + 14) {
-    inLoop = true;
-    loopAng = (float)HALF_PI - 0.20f;          // bottom, slightly toward right
-    loopGspd = -fvx;                           // −θ = up the right side
-    if (loopGspd > -LOOP_ENTER) loopGspd = -LOOP_ENTER;
-    loopSense = -1.0f;
-    loopTravel = 0;
-    loopReadyExit = false;
-    onGround = false;
-    rolling = true;
-    groundRoll = true;
-    beep(950, 35);
-    return;
-  }
-  // Right approach (mirror) → up the LEFT wall, right across top, down right, exit left
-  if (fvx <= -LOOP_ENTER && px <= mouthR + 8 && px >= mouthR - 14) {
-    inLoop = true;
-    loopAng = (float)HALF_PI + 0.20f;          // bottom, slightly toward left
-    loopGspd = -fvx;                           // fvx negative → +θ
-    if (loopGspd < LOOP_ENTER) loopGspd = LOOP_ENTER;
-    loopSense = 1.0f;
-    loopTravel = 0;
-    loopReadyExit = false;
-    onGround = false;
-    rolling = true;
-    groundRoll = true;
-    beep(950, 35);
-  }
+// Off the track into the hollow, carrying the velocity he had at the moment he let go
+static void loopFallOff(int16_t rad) {
+  float tx, ty;
+  loopTangent(loopAng, &tx, &ty);
+  fvx = (fx)((float)loopGspd * tx);
+  fvy = (fx)((float)loopGspd * ty);
+  float R = loopTrackR(rad) - 1.0f;   // just inside, so he doesn't instantly re-stick
+  fpx = I2F(loopTrack.cx + (int16_t)(R * cosf(loopAng)));
+  fpy = I2F(loopTrack.cy + (int16_t)(R * sinf(loopAng)));
+  syncPlayerInts();
+  inLoop = false;
+  inHollow = true;
+  onGround = false;
+  rolling = true;
+  groundRoll = false;
+}
+
+// Free fall inside the loop; the inside face of the track is solid all the way round
+void stepHollow(int16_t rad) {
+  if (watch::held() & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
+  if (watch::held() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
+  fvy += GRAVITY;
+  if (fvy > MAX_FALL) fvy = MAX_FALL;
+  fpx += fvx;
+  fpy += fvy;
+  syncPlayerInts();
+
+  float R = loopTrackR(rad);
+  float dx = (float)fpx / FX_ONE - loopTrack.cx;
+  float dy = (float)fpy / FX_ONE - loopTrack.cy;
+  if (dx * dx + dy * dy < R * R) return;
+
+  // Hit the track: keep only the along-track part of his velocity
+  float th = atan2f(dy, dx);
+  if (th < 0) th += (float)TWO_PI;
+  float tx, ty;
+  loopTangent(th, &tx, &ty);
+  fx gspd = (fx)((float)fvx * tx + (float)fvy * ty);
+  // Progress measured the short way from the bottom — a fall never counts toward a lap
+  float rel = th - (float)HALF_PI;
+  while (rel > (float)PI) rel -= (float)TWO_PI;
+  while (rel <= -(float)PI) rel += (float)TWO_PI;
+  loopAttach(th, gspd, loopSense, loopSense * rel, rad);
+  // Landed near the bottom: that's just the floor — ordinary running/rolling takes over
+  if (fabsf(rel) < 0.35f) loopToGround(rad);
 }
 
 void stepLoop(int16_t rad) {
   float R = loopTrackR(rad);
-  float th = loopAng;
   float tx, ty;
-  loopTangent(th, &tx, &ty);
+  loopTangent(loopAng, &tx, &ty);
 
-  // Gravity along the track (pulls +Y). a = G · tangent_+θ = G * ty
+  // Gravity along the track (pulls +Y): a = G · tangent_+θ
   loopGspd += (fx)((float)GRAVITY * ty);
 
-  // Forward = the direction you ENTERED (hold right on a left→right run keeps
-  // loop momentum even while the sprite moves left across the ceiling).
-  // Opposite only brakes through zero — never snaps onto the mirror path.
-  fx along = (fx)(loopSense * (float)ACCEL);  // left entry: sense=-1 → along=-ACCEL
+  // Forward = the direction you ENTERED (holding right on a left→right run keeps loop
+  // momentum even while moving left across the ceiling). Opposite only brakes through zero.
+  // Holding forward pushes at the Genesis accel:slope-gravity ratio (~3/8), so you can't
+  // just hold the button and crawl up the wall — entry speed decides whether you make it.
+  fx push  = (fx)(loopSense * (float)LOOP_PUSH);
+  fx brake = (fx)(loopSense * (float)ACCEL);
   if ((loopSense < 0 && (watch::held() & B_RIGHT)) || (loopSense > 0 && (watch::held() & B_LEFT)))
-    loopGspd += along;          // accelerate further along the loop
+    loopGspd += push;
   if ((loopSense < 0 && (watch::held() & B_LEFT)) || (loopSense > 0 && (watch::held() & B_RIGHT)))
-    loopGspd -= along;          // brake / reverse only through zero
+    loopGspd -= brake;
   if (loopGspd > TOP_SPD) loopGspd = TOP_SPD;
   if (loopGspd < -TOP_SPD) loopGspd = -TOP_SPD;
 
-  // Advance on INNER surface
-  float ds = (float)loopGspd / (float)FX_ONE;
+  float ds = (float)loopGspd / (float)FX_ONE;    // px per step along the track
   float dAng = ds / R;
+  float prevProg = loopProg;
   loopAng += dAng;
-  // Progress only in the entry direction; sliding back unwinds progress
-  loopTravel += dAng * loopSense;
-  if (loopTravel < 0) loopTravel = 0;
-
+  loopProg += dAng * loopSense;                  // + = forward in the entry direction
   while (loopAng < 0) loopAng += (float)TWO_PI;
   while (loopAng >= (float)TWO_PI) loopAng -= (float)TWO_PI;
 
-  th = loopAng;
-  fpx = I2F(loopTrack.cx + (int16_t)(R * cosf(th)));
-  fpy = I2F(loopTrack.cy + (int16_t)(R * sinf(th)));
+  loopPlaceOnTrack(rad);
+  loopTangent(loopAng, &tx, &ty);
+  fvx = (fx)(ds * tx * (float)FX_ONE);           // for sprite facing / anim only
   fvy = 0;
-  loopTangent(th, &tx, &ty);
-  fvx = (fx)(ds * tx * (float)FX_ONE);
-  syncPlayerInts();
 
-  // Full loop in the entry direction → may take through-exit
-  if (loopTravel >= (float)TWO_PI - 0.40f) loopReadyExit = true;
-
-  // Detach on ceiling / high walls if too slow — fall with carried velocity
-  fx absSpd = loopGspd >= 0 ? loopGspd : -loopGspd;
-  bool onCeiling = sinf(th) < -0.20f;                 // upper half
-  bool onHighWall = fabsf(cosf(th)) > 0.70f && sinf(th) < 0.25f;
-  if ((onCeiling || onHighWall) && absSpd < (LOOP_ENTER * 3) / 4) {
-    loopDetach(rad);
-    return;
+  // Crossing the bottom of the track (progress passes a multiple of 2π)
+  if (floorf(loopProg / (float)TWO_PI) != floorf(prevProg / (float)TWO_PI)) {
+    if (loopProg < prevProg) {                   // sliding back → roll out the way he came
+      loopToGround(rad);
+      return;
+    }
+    if (loopProg >= (float)TWO_PI) {             // full lap → out the far side
+      loopToGround(rad);
+      loopPassed = true;
+      beep(1300, 40);
+      return;
+    }
   }
 
-  // Through-exit ONLY after completing the loop, when back near the bottom
-  bool nearBottom = fabsf(th - (float)HALF_PI) < 0.60f;
-  if (loopReadyExit && nearBottom) {
-    int16_t floorY = loopTrack.cy + loopTrack.r;
-    fx outSpd = absSpd;
-    if (outSpd < TOP_SPD / 2) outSpd = TOP_SPD / 2;
-    if (loopSense < 0) {
-      setPlayerPos(loopTrack.cx + loopTrack.r + 6, floorY - rad);
-      setPlayerVel(outSpd, 0);
-    } else {
-      setPlayerPos(loopTrack.cx - loopTrack.r - 6, floorY - rad);
-      setPlayerVel(-outSpd, 0);
+  // Centrifugal check: inward push needed is N = v²/R + g·sinθ; the track can't pull (N < 0)
+  float g = (float)GRAVITY / (float)FX_ONE;
+  if (ds * ds + g * R * sinf(loopAng) < 0.0f) loopFallOff(rad);
+}
+
+// Loop entry + solid outer shell. Runs after normal movement/landing each step.
+void loopGate(int16_t prevX, int16_t rad) {
+  if (!loopTrack.live || inLoop || inHollow || bossOn) return;
+  int16_t r = loopTrack.r, cx = loopTrack.cx, cy = loopTrack.cy;
+
+  // Which side did he come in from? (remembered while under the loop)
+  if (abs(px - cx) > r + 2) { loopSide = 0; loopPassed = false; }
+  else if (loopSide == 0) loopSide = (prevX < cx) ? -1 : 1;
+
+  float R = loopTrackR(rad);
+  float dx = (float)fpx / FX_ONE - cx, dy = (float)fpy / FX_ONE - cy;
+  float d2 = dx * dx + dy * dy;
+
+  // Jumped (or got bounced) up into the hollow: the track is solid from the inside
+  if (!onGround && d2 < R * R) { inHollow = true; return; }
+
+  // On the floor under the loop, crossing the centre line → onto the track, any speed
+  bool nearFloor = py + rad >= loopFloorY() - 6;
+  if (nearFloor && !loopPassed) {
+    if (loopSide < 0 && fvx > 0 && px >= cx) {          // from the left: up the right wall
+      loopAttach((float)HALF_PI, -fvx, -1.0f, 0.0f, rad);
+      beep(950, 25);
+      return;
     }
-    inLoop = false;
-    loopReadyExit = false;
-    onGround = false;
-    rolling = true;
-    groundRoll = true;
-    faceRight = fvx > 0;
+    if (loopSide > 0 && fvx < 0 && px <= cx) {          // from the right: up the left wall
+      loopAttach((float)HALF_PI, -fvx, 1.0f, 0.0f, rad);
+      beep(950, 25);
+      return;
+    }
+  }
+
+  // Outer shell: can't jump into the ring from outside (bottom band is the road itself)
+  int16_t idx = px - cx, idy = py - cy;
+  int32_t id2 = (int32_t)idx * idx + (int32_t)idy * idy;
+  int32_t rIn = (int32_t)(r - 7) * (r - 7);
+  int32_t rOut = (int32_t)(r + 6) * (r + 6);
+  if (idy < r - 14 && id2 >= rIn && id2 <= rOut) {
+    float len = sqrtf((float)id2);
+    if (len >= 1.0f) {
+      float scale = (float)(r + 7) / len;
+      fpx = I2F(cx + (int16_t)(idx * scale));
+      fpy = I2F(cy + (int16_t)(idy * scale));
+      fvx = (fx)(-fvx / 4);
+      if (fvy < 0) fvy = 0;
+      syncPlayerInts();
+    }
   }
 }
 
@@ -1133,14 +1153,10 @@ void physicsStep(uint8_t e) {
   }
   if (!onGround || groundRoll) rolling = true;
 
-  if (inLoop) {
-    stepLoop(rad);
-    return;
-  }
-
-  tryEnterLoop(rad);
   if (inLoop) { stepLoop(rad); return; }
+  if (inHollow) { stepHollow(rad); return; }
 
+  int16_t prevX = px;
   applyGroundControl();
 
   if (!onGround) {
@@ -1165,10 +1181,9 @@ void physicsStep(uint8_t e) {
     syncPlayerInts();
   }
 
-  collideLoopBarrier(rad);
   applyWalls(rad);
   resolveLanding(rad);
-  // Final floor clamp after shell/wall pushes
+  // Final floor clamp after wall pushes
   {
     int16_t g = groundAt(px);
     if (py + rad > g) {
@@ -1178,6 +1193,7 @@ void physicsStep(uint8_t e) {
       syncPlayerInts();
     }
   }
+  loopGate(prevX, rad);
 }
 
 // True if (x,y) is within (rx,ry) of the player at either physics sub-step.
