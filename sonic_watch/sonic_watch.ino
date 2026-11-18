@@ -32,7 +32,7 @@ uint8_t selIdx = 0;          // level-select cursor
 
 // Watch-face Sonic vignette (walk + spin-jump for a ring)
 int16_t wfX = -14;
-int16_t wfY = 54;
+int16_t wfY = 50;
 int8_t  wfVy = 0;
 uint8_t wfAnim = 0;
 uint8_t wfRingCD = 0;     // frames until ring respawns
@@ -62,7 +62,7 @@ void drawSplash() {
 }
 
 void stepWatchFace() {
-  const int16_t ground = 54;
+  const int16_t ground = 50;   // Sonic centre: feet land on the dashed line at y 56
   const int16_t ringX = 118;
   const int16_t ringY = 20;
   wfAnim++;
@@ -171,32 +171,38 @@ uint8_t h8(uint16_t n) {
 }
 
 // Fixed-point physics (1/256 px), 60Hz steps.
+// ZOOM: the whole world is drawn 5/4 bigger than the level data (sonic_levels.h stays in
+// design units). Level positions, sizes, hitboxes, speeds and accelerations all scale by it,
+// so timing and feel are unchanged — only the pixels are bigger. Z() scales a design length.
+#define Z(v) ((int16_t)(((int32_t)(v) * 5) / 4))
 // Watch-tuned: snappy accel, firmer coast (less slippery), hard skid ≈11× accel.
+// Design values (pre-zoom) in comments; every speed/accel below is design × 5/4.
 static const fx FX_ONE      = 256;
-static const fx ACCEL       = 30;      // ~0.117 — snappy launch
-static const fx FRICTION    = 56;      // firmer coast than accel (watch grip)
-static const fx BRAKE       = 330;     // ~11× accel — deliberate skid
-static const fx TOP_SPD     = 1536;    // 6 px/frame
-static const fx START_KICK  = 128;     // 0.5 — immediate bite from standstill
-static const fx AIR_ACCEL   = 18;      // air steer so jumps feel controllable
-static const fx JUMP_SPD    = 560;     // ~38 px: 2.4 Sonic heights, the Genesis jump/body ratio
-static const fx SPRING_SPD  = 712;     // yellow spring ≈ 62 px (levels are spaced for this)
-static const fx GRAVITY     = 16;      // 0.21875 × (64/224) = 0.0625
-static const fx ROLL_FRIC   = 8;
-static const fx MAX_FALL    = 1170;
-static const int16_t CLIFF_STEP = 6;  // ground rising more than this within Sonic's half-width = a wall
-// Slope pull per px of height change over 8 px. Genesis proportions to our ACCEL: the max
-// slope you can walk up from rest is ~21° (as in Sonic 1); rolling is 2.5× downhill, 0.625× up.
+static const fx ACCEL       = 37;      // 30  — snappy launch
+static const fx FRICTION    = 70;      // 56  — firmer coast than accel (watch grip)
+static const fx BRAKE       = 412;     // 330 — ~11× accel, deliberate skid
+static const fx TOP_SPD     = 1920;    // 1536 — 7.5 px/step
+static const fx START_KICK  = 160;     // 128 — immediate bite from standstill
+static const fx AIR_ACCEL   = 22;      // 18  — air steer so jumps feel controllable
+static const fx JUMP_SPD    = 700;     // 560 — ~48 px: 2.2 Sonic heights, the Genesis ratio
+static const fx SPRING_SPD  = 890;     // 712 — yellow spring ≈ 77 px (levels are spaced for this)
+static const fx GRAVITY     = 20;      // 16
+static const fx ROLL_FRIC   = 10;      // 8
+static const fx MAX_FALL    = 1462;    // 1170
+static const int16_t CLIFF_STEP = 7;   // ground rising more than this within Sonic's half-width = a wall
+static const int16_t RAD_STAND = 6, RAD_ROLL = 5;   // feet below centre (5 / 4 before the zoom)
+// Slope pull per px of height change over 10 px (slopeAt). Genesis proportions to our ACCEL:
+// the max slope you can walk up from rest is ~21° (as in Sonic 1); rolling 2.5× down, 0.625× up.
 static const fx SLOPE_RUN     = 10;
 static const fx SLOPE_ROLL    = 25;
 static const fx SLOPE_ROLL_UP = 6;
 // Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
 // LOOP_SLP is the slope factor: Genesis 0.125 px/frame² on a much bigger loop; scaled up for
-// our ~30 px-radius track so it takes the same share of top speed to get round.
-static const fx LOOP_SLP    = 80;                 // 0.3125 px/step² · sin(angle): ~1 screen run-up
+// our ~40 px-radius track so it takes the same share of top speed to get round.
+static const fx LOOP_SLP    = 100;                // 80 — px/step² · sin(angle): ~1 screen run-up
 static const fx LOOP_PUSH   = (LOOP_SLP * 3) / 8; // holding forward (Genesis accel : slope = 3:8)
 static const fx LOOP_BRAKE  = LOOP_SLP * 4;       // holding back (Genesis decel : slope = 4:1)
-static const fx LOOP_FALL   = 640;                // 2.5 px/step: slower than this on a wall → fall
+static const fx LOOP_FALL   = 800;                // 640 — slower than this on a wall → fall
 static const uint8_t LOOP_LOCK = 30;              // L/R input lock after falling off (frames)
 
 fx fpx, fpy, fvx, fvy;
@@ -264,18 +270,24 @@ uint16_t spTimer;
 int16_t spEX, spEY;
 
 // Ground height from the act's terrain profile (linear between points)
+// Ground height at world x. The profile is in design units: find the segment in data space
+// (world x × 4/5) and interpolate, then scale the height by 5/4 — all in one division.
+static inline int32_t floorDiv(int32_t a, int32_t b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
 int16_t terrainAt(int32_t wx) {
   const TerrainPt *t = lvl->ter;
   uint8_t n = lvl->nTer;
-  if (wx <= t[0].x) return t[0].y;
-  if (wx >= t[n - 1].x) return t[n - 1].y;
-  uint8_t lo = 0, hi = n - 1;            // binary search: t[lo].x <= wx < t[hi].x
+  int32_t q = wx * 4;                    // world x in units of 1/5 design px
+  if (q <= (int32_t)t[0].x * 5) return Z(t[0].y);
+  if (q >= (int32_t)t[n - 1].x * 5) return Z(t[n - 1].y);
+  uint8_t lo = 0, hi = n - 1;            // binary search: t[lo].x <= x < t[hi].x
   while (hi - lo > 1) {
     uint8_t mid = (lo + hi) / 2;
-    if (t[mid].x <= wx) lo = mid; else hi = mid;
+    if ((int32_t)t[mid].x * 5 <= q) lo = mid; else hi = mid;
   }
-  int32_t dx = t[hi].x - t[lo].x;
-  return t[lo].y + (int16_t)(((int32_t)(t[hi].y - t[lo].y) * (wx - t[lo].x)) / dx);
+  int32_t den = ((int32_t)t[hi].x - t[lo].x) * 5;
+  int32_t num = q - (int32_t)t[lo].x * 5;
+  int32_t y5 = ((int32_t)t[lo].y * den + (int32_t)(t[hi].y - t[lo].y) * num) * 5;
+  return (int16_t)floorDiv(y5, den * 4);
 }
 
 int16_t groundAt(int32_t wx) {
@@ -285,8 +297,8 @@ int16_t groundAt(int32_t wx) {
   // Flatten a long runway into / under the loop (solid floor — no pits)
   if (loopTrack.live) {
     int16_t floorY = loopTrack.cy + loopTrack.r;
-    int16_t x0 = loopTrack.cx - loopTrack.r - 100;
-    int16_t x1 = loopTrack.cx + loopTrack.r + 48;
+    int16_t x0 = loopTrack.cx - loopTrack.r - Z(100);
+    int16_t x1 = loopTrack.cx + loopTrack.r + Z(48);
     if (wx >= x0 && wx <= x1) return floorY;
   }
   return terrainAt(wx);
@@ -301,6 +313,8 @@ bool onScreen(int16_t wx, int16_t margin = 16) {
 }
 
 static inline fx I2F(int16_t v) { return (fx)v * FX_ONE; }
+// A design-units speed (px/step before the zoom) in world fixed-point
+static inline fx ZV(int16_t v) { return (fx)v * FX_ONE * 5 / 4; }
 static inline int16_t F2I(fx v) {
   return (int16_t)((v >= 0) ? ((v + 128) >> 8) : -(((-v) + 128) >> 8));
 }
@@ -316,11 +330,11 @@ void setPlayerVel(fx vx, fx vy) {
 }
 
 // Approx slope: + = downhill to the right (ground Y grows downward)
-// Height change over 8 px around wx. Each half is measured separately so a cliff edge
+// Height change over 10 px around wx (8 design px). Each half is measured separately so a cliff edge
 // (a step bigger than any slope) doesn't count as a hill and shove Sonic off it.
 int16_t slopeAt(int16_t wx) {
   int16_t g = groundAt(wx);
-  int16_t a = g - groundAt(wx - 4), b = groundAt(wx + 4) - g;
+  int16_t a = g - groundAt(wx - 5), b = groundAt(wx + 5) - g;
   if (abs(a) > CLIFF_STEP) a = b;
   if (abs(b) > CLIFF_STEP) b = a;
   if (abs(a) > CLIFF_STEP) return 0;
@@ -329,7 +343,7 @@ int16_t slopeAt(int16_t wx) {
 
 void placeGreenHillLoop(int16_t x) {
   // Diameter > screen height — camera must scroll vertically through it
-  loopTrack.r = 38;
+  loopTrack.r = Z(38);
   int16_t g = terrainAt(x);
   loopTrack.cx = x + loopTrack.r;
   loopTrack.cy = g - loopTrack.r;   // bottom of track on the floor
@@ -339,14 +353,14 @@ void placeGreenHillLoop(int16_t x) {
 // Strip hazards from the loop approach + ≥100px after the exit
 void clearLoopRunway() {
   if (!loopTrack.live) return;
-  int16_t L = loopTrack.cx - loopTrack.r - 110;
-  int16_t R = loopTrack.cx + loopTrack.r + 100;
+  int16_t L = loopTrack.cx - loopTrack.r - Z(110);
+  int16_t R = loopTrack.cx + loopTrack.r + Z(100);
   for (auto &o : objs) {
     if (!o.live) continue;
     if (o.x < L || o.x > R) continue;
     if (o.kind == 1 || o.kind == 5 || o.kind == 6) continue;  // rings / deco / goal
     // Keep the run-up spring if it's near the start of the clear zone
-    if (o.kind == 3 && o.x < L + 40) continue;
+    if (o.kind == 3 && o.x < L + Z(40)) continue;
     o.live = false;
   }
   for (auto &p : plats) {
@@ -360,16 +374,16 @@ void clearLoopRunway() {
 void placeChemWavyCross(int16_t x0) {
   static const int8_t A[7] = { 0, -5, -10, -14, -10, -5, 0 };
   static const int8_t B[7] = { -14, -10, -5, 0, -5, -10, -14 };
-  int16_t g = groundAt(x0 + 40);
+  int16_t g = groundAt(x0 + Z(40));
   for (uint8_t i = 0; i < 7; i++) {
-    int16_t x = x0 + (int16_t)i * 16;
-    addPlat(x, g + A[i], 18);
-    addPlat(x + 6, g + B[i], 18);
-    if ((i & 1) == 0) addDeco(x + 2, 2);
+    int16_t x = x0 + Z(i * 16);
+    addPlat(x, g + Z(A[i]), Z(18));
+    addPlat(x + Z(6), g + Z(B[i]), Z(18));
+    if ((i & 1) == 0) addDeco(x + Z(2), 2);
   }
-  addObj(x0 + 48, g + A[3] - 6, 1);
-  addObj(x0 + 64, g + B[4] - 6, 1);
-  addObj(x0 + 30, 0, 8);
+  addObj(x0 + Z(48), g + Z(A[3] - 6), 1);
+  addObj(x0 + Z(64), g + Z(B[4] - 6), 1);
+  addObj(x0 + Z(30), 0, 8);
 }
 
 bool beesShoot() { return zone >= 2; }  // Casino Night+
@@ -440,7 +454,7 @@ void addBridge(int16_t x0, int16_t x1, int16_t y) {
   }
 }
 
-// How far bridge i dips at x: deepest under Sonic (up to 5 px mid-span), 0 at the posts
+// How far bridge i dips at x: deepest under Sonic (up to 6 px mid-span), 0 at the posts
 int16_t bridgeSag(uint8_t i, int16_t u) {
   if (curBridge != (int8_t)i) return 0;
   const Bridge &b = bridges[i];
@@ -449,7 +463,7 @@ int16_t bridgeSag(uint8_t i, int16_t u) {
   if (sp >= b.x1) sp = b.x1 - 1;
   int16_t half = (b.x1 - b.x0) / 2;
   int16_t edge = (sp - b.x0 < b.x1 - sp) ? sp - b.x0 : b.x1 - sp;
-  int16_t S = (int16_t)((5 * (int32_t)edge) / (half > 0 ? half : 1));
+  int16_t S = (int16_t)((6 * (int32_t)edge) / (half > 0 ? half : 1));
   if (u <= sp) return (int16_t)((int32_t)S * (u - b.x0) / (sp - b.x0));
   return (int16_t)((int32_t)S * (b.x1 - u) / (b.x1 - sp));
 }
@@ -492,11 +506,11 @@ void clearWorld() {
 
 void spillRings() {
   // At most 3 rings fly out; flung hard so you actually lose them
-  static const int8_t XV[3] = { -5, 5, -3 };
-  static const int8_t YV[3] = { -7, -7, -9 };
+  static const int8_t XV[3] = { -6, 6, -4 };
+  static const int8_t YV[3] = { -9, -9, -11 };
   for (uint8_t i = 0; i < 3; i++) {
     scat[i].live = true;
-    scat[i].x = px + (int16_t)(i - 1) * 12;
+    scat[i].x = px + (int16_t)(i - 1) * 15;
     scat[i].y = py - 4;
     scat[i].vx = XV[i];
     scat[i].vy = YV[i];
@@ -512,11 +526,11 @@ void updateScatter() {
     else { r.live = false; continue; }
 
     r.vy++;
-    if (r.vy > 6) r.vy = 6;
+    if (r.vy > 7) r.vy = 7;
     r.x += r.vx;
     r.y += r.vy;
 
-    int16_t g = groundAt(r.x) - 3;
+    int16_t g = groundAt(r.x) - 4;
     if (r.y >= g && r.vy > 0) {
       r.y = g;
       r.vy = (int8_t)(-(r.vy * 2) / 3);
@@ -527,8 +541,8 @@ void updateScatter() {
     for (auto &p : plats) {
       if (!p.live) continue;
       if (r.x < p.x || r.x > p.x + p.w) continue;
-      if (r.vy > 0 && r.y >= p.y - 3 && r.y <= p.y + 4) {
-        r.y = p.y - 3;
+      if (r.vy > 0 && r.y >= p.y - 4 && r.y <= p.y + 5) {
+        r.y = p.y - 4;
         r.vy = (int8_t)(-(r.vy * 2) / 3);
         if (r.vy > -2) r.vy = -2;
       }
@@ -536,7 +550,7 @@ void updateScatter() {
 
     // Grace period: spilled rings are not grab-able until they've flown out
     if (r.life > SCATTER_LIFE - SCATTER_GRACE) continue;
-    if (abs(px - r.x) < 6 && abs(py - r.y) < 6) {
+    if (abs(px - r.x) < 8 && abs(py - r.y) < 8) {
       r.live = false;
       rings++;
       score += 10;
@@ -578,7 +592,7 @@ void hurt() {
     rings = 0;
     spillRings();
     invul = 55;
-    setPlayerVel(faceRight ? I2F(-2) : I2F(2), I2F(-5));
+    setPlayerVel(faceRight ? ZV(-2) : ZV(2), ZV(-5));
     jumpCut = true;            // knock-back isn't a jump: releasing the button can't shorten it
     onGround = false;
     rolling = true;
@@ -626,7 +640,7 @@ void deathStep(uint8_t e) {
   }
 }
 
-void placeGoal(int16_t x) { addObj(x, groundAt(x) - 20, 6); }
+void placeGoal(int16_t x) { addObj(x, groundAt(x) - 25, 6); }
 
 void announce() {
   intro = 60;   // ~2 s title card
@@ -639,15 +653,15 @@ void startEggWrecker() {
   bossCool = 0;
   bossPhase = 0;
   arenaOrigin = px + 20;
-  setPlayerPos(arenaOrigin + 30, groundAt(arenaOrigin + 30) - 5);
+  setPlayerPos(arenaOrigin + 30, groundAt(arenaOrigin + 30) - RAD_STAND);
   setPlayerVel(0, 0);
   inLoop = false;
   cam = arenaOrigin;
   camY = 0;
   clearWorld();
   // two floating platforms (world)
-  addPlat(arenaOrigin + 28, 34, 26);
-  addPlat(arenaOrigin + 78, 34, 26);
+  addPlat(arenaOrigin + 24, 31, 30);
+  addPlat(arenaOrigin + 76, 31, 30);
   eggX = arenaOrigin + 100;
   eggY = 16;
   eggDir = -1;
@@ -657,51 +671,52 @@ void startEggWrecker() {
 }
 
 void buildAct() {
-  // Whole act is built once from its layout table and stays loaded
+  // Whole act is built once from its layout table and stays loaded. The table is in design
+  // units; positions and sizes are zoomed (Z) here, and spacing is worked out before zooming.
   clearWorld();
   // Bridges first, so rings/springs above them sit on the deck, not in the pool
   for (uint8_t i = 0; i < lvl->nObj; i++) {
     const LvlObj &d = lvl->obj[i];
-    if (d.kind == L_BRIDGE) addBridge(d.x, d.x + d.arg * 4, groundAt(d.x));
+    if (d.kind == L_BRIDGE) addBridge(Z(d.x), Z(d.x + d.arg * 4), groundAt(Z(d.x)));
   }
   for (uint8_t i = 0; i < lvl->nObj; i++) {
     const LvlObj &d = lvl->obj[i];
-    int16_t x = d.x;
+    int16_t x = Z(d.x), h = Z(d.h);
     int16_t g = surfaceAt(x);
     switch (d.kind) {
-      case L_RING:   addObj(x, g - d.h, 1); break;
-      case L_CRAB:   addObj(x, g - 5, 2); break;
-      case L_SPRING: addObj(x, g - d.h - 4, 3); break;
-      case L_BEE:    addObj(x, g - d.h, 4); break;
+      case L_RING:   addObj(x, g - h, 1); break;
+      case L_CRAB:   addObj(x, g - 6, 2); break;
+      case L_SPRING: addObj(x, g - h - 5, 3); break;
+      case L_BEE:    addObj(x, g - h, 4); break;
       case L_DECO:   addDeco(x, d.arg); break;
-      case L_WALL:   addWall(x, d.arg); break;
+      case L_WALL:   addWall(x, Z(d.arg)); break;
       case L_SPIKE:  addObj(x, 0, 0); break;
       case L_FLAME:  addObj(x, 0, 8); break;
-      case L_BUMPER: addObj(x, g - d.h, 9); break;
-      case L_SAW:    addObj(x, g - d.h, 10); break;
-      case L_PLAT:   addPlat(x, g - d.h, d.arg); break;
+      case L_BUMPER: addObj(x, g - h, 9); break;
+      case L_SAW:    addObj(x, g - h, 10); break;
+      case L_PLAT:   addPlat(x, g - h, Z(d.arg)); break;
       case L_RINGS:
         for (uint8_t k = 0; k < d.arg; k++) {
-          int16_t rx = x + k * 12;
-          addObj(rx, surfaceAt(rx) - d.h, 1);
+          int16_t rx = Z(d.x + k * 12);
+          addObj(rx, surfaceAt(rx) - h, 1);
         }
         break;
       case L_ARC:
         for (uint8_t k = 0; k < d.arg; k++) {
-          int16_t rx = x + k * 12;
+          int16_t rx = Z(d.x + k * 12);
           // parabola: 8 px at the ends, h in the middle
           int16_t m = d.arg - 1;
           int16_t u = 2 * k - m;                       // -m..m
           int16_t lift = m ? 8 + ((int32_t)(d.h - 8) * (m * m - u * u)) / (m * m) : d.h;
-          addObj(rx, surfaceAt(rx) - lift, 1);
+          addObj(rx, surfaceAt(rx) - Z(lift), 1);
         }
         break;
       case L_SPIKES:
-        for (uint8_t k = 0; k < d.arg; k++) addObj(x + k * 12, 0, 0);
+        for (uint8_t k = 0; k < d.arg; k++) addObj(Z(d.x + k * 12), 0, 0);
         break;
       case L_LOOP:   placeGreenHillLoop(x); break;
       case L_CHEMX:  placeChemWavyCross(x); break;
-      case L_FISH:   addObj(x, groundAt(x) - 3, 11); break;   // in the pool, under the deck
+      case L_FISH:   addObj(x, groundAt(x) - 4, 11); break;   // in the pool, under the deck
     }
   }
   clearLoopRunway();                 // no hazards right before / after a loop
@@ -712,13 +727,13 @@ void startAct(uint8_t z, uint8_t a) {
   zone = z; act = a;
   bossOn = false;
   lvl = &ACTS[z][a];
-  actEnd = lvl->len;
+  actEnd = Z(lvl->len);
   rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
   actFrames = 0;
   camLead = 0;
   goalT = 0;
   cam = 0; camY = 0;
-  setPlayerPos(24, groundAt(24) - 5);
+  setPlayerPos(30, groundAt(30) - RAD_STAND);
   setPlayerVel(0, 0);
   onGround = true; rolling = false; groundRoll = false; faceRight = true;
   jumpCut = false; inLoop = false;
@@ -820,7 +835,7 @@ void resolveLanding(int16_t rad) {
     if (!b.live || px < b.x0 || px > b.x1) continue;
     int16_t top = b.y + bridgeSag(i, px);
     bool standing = (i == curBridge);
-    if (fvy >= 0 && prevFeet <= top + 3 && (feet >= top || (standing && feet >= top - 6))) {
+    if (fvy >= 0 && prevFeet <= top + 4 && (feet >= top || (standing && feet >= top - 8))) {
       int16_t t2 = top - rad;
       if (!landed || t2 < F2I(fpy) || standing) {
         fpy = I2F(t2);
@@ -882,8 +897,8 @@ void applyWalls(int16_t rad) {
   syncPlayerInts();
   for (auto &o : objs) {
     if (!o.live || o.kind != 7) continue;
-    int16_t h = o.state ? o.state : 14;
-    bumpFromSolid(o.x, o.x + 6, o.y - h, o.y, rad);
+    int16_t h = o.state ? o.state : 18;
+    bumpFromSolid(o.x, o.x + 8, o.y - h, o.y, rad);
   }
   syncPlayerInts();
 }
@@ -904,7 +919,7 @@ void handleDoubleTapRoll(uint8_t e) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
-      if (fvx < I2F(3)) fvx = I2F(3);
+      if (fvx < ZV(3)) fvx = ZV(3);
       syncPlayerInts();
       beep(700, 25);
     }
@@ -917,7 +932,7 @@ void handleDoubleTapRoll(uint8_t e) {
       groundRoll = true;
       rolling = true;
       startedRoll = true;
-      if (fvx > I2F(-3)) fvx = I2F(-3);
+      if (fvx > ZV(-3)) fvx = ZV(-3);
       syncPlayerInts();
       beep(700, 25);
     }
@@ -945,16 +960,16 @@ void eggStep(int16_t rad) {
   int16_t a = ballAngle;
   int16_t swing = (a < 180) ? (-40 + (a * 80) / 180) : (40 - ((a - 180) * 80) / 180);
   ballWX = eggX + swing;
-  ballWY = eggY + 22 + abs(swing) / 8;
+  ballWY = eggY + 24 + abs(swing) / 8;
 
   if (bossCool) bossCool--;
 
   // Touch Egg Mobile (flying craft): always bounce off; damage if spinning into it
-  if (abs(px - eggX) < 12 && abs(py - eggY) < 11) {
+  if (abs(px - eggX) < 14 && abs(py - eggY) < 13) {
     bool attack = rolling && bossCool == 0;
     // Bounce AWAY from the craft: above → up (−y), below → down (+y)
-    setPlayerVel((px < eggX) ? I2F(-4) : I2F(4),
-                 (py <= eggY + 2) ? I2F(-5) : I2F(5));
+    setPlayerVel((px < eggX) ? ZV(-4) : ZV(4),
+                 (py <= eggY + 2) ? ZV(-5) : ZV(5));
     jumpCut = true;
     onGround = false;
     rolling = true;
@@ -981,13 +996,13 @@ void eggStep(int16_t rad) {
     if (px + rad < p.x || px - rad > p.x + p.w) continue;
     if (py + rad >= p.y - 2 && py < p.y + 8) underPlat = true;
   }
-  if (!underPlat && !invul && abs(px - ballWX) < 7 && abs(py - ballWY) < 7) hurt();
+  if (!underPlat && !invul && abs(px - ballWX) < 8 && abs(py - ballWY) < 8) hurt();
 }
 
 void applyGroundControl() {
-  bool pinball = (zone == 2 && (rolling || abs(fvx) >= I2F(2)));
+  bool pinball = (zone == 2 && (rolling || abs(fvx) >= ZV(2)));
   // Rolling keeps whatever speed you had (Genesis caps rolls at 16, i.e. never in practice)
-  fx top = pinball ? I2F(5) : TOP_SPD;
+  fx top = pinball ? ZV(5) : TOP_SPD;
   // On a platform or bridge the terrain below is irrelevant — it's flat underfoot
   int16_t slope = (onGround && !onLedge) ? slopeAt(px) : 0;
 
@@ -1044,8 +1059,8 @@ void applyGroundControl() {
 // Angles are y-down: 0 = right, π/2 = bottom, π = left, 3π/2 = top.
 
 static float loopTrackR(int16_t rad) {
-  float R = (float)loopTrack.r - (float)rad - 3.0f;   // feet against the inner face
-  return (R < 12.0f) ? 12.0f : R;
+  float R = (float)loopTrack.r - (float)rad - 4.0f;   // feet against the inner face
+  return (R < 15.0f) ? 15.0f : R;
 }
 
 // Unit tangent for +angle (θ increasing): (-sin, cos) in y-down space
@@ -1144,7 +1159,7 @@ void stepHollow(int16_t rad) {
   if (py + rad < floorY) return;
 
   fwd = (float)(px - loopTrack.cx) * fwdDir;
-  if (fwd > 2.0f) {
+  if (fwd > 3.0f) {
     // On the climb: put him on the track low down (≤ 40°, below the slip zone)
     float rel = asinf(fwd / R > 1.0f ? 1.0f : fwd / R);
     if (rel > 0.70f) rel = 0.70f;
@@ -1248,7 +1263,7 @@ void loopGate(int16_t prevX, int16_t rad) {
   if (!onGround && d2 < R * R) { inHollow = true; return; }
 
   // On the floor under the loop, crossing the centre line → onto the track, any speed
-  bool nearFloor = py + rad >= loopFloorY() - 6;
+  bool nearFloor = py + rad >= loopFloorY() - 8;
   if (nearFloor && !loopPassed) {
     if (loopSide < 0 && fvx > 0 && px >= cx) {          // from the left: up the right wall
       loopRolled = groundRoll;
@@ -1267,12 +1282,12 @@ void loopGate(int16_t prevX, int16_t rad) {
   // Outer shell: can't jump into the ring from outside (bottom band is the road itself)
   int16_t idx = px - cx, idy = py - cy;
   int32_t id2 = (int32_t)idx * idx + (int32_t)idy * idy;
-  int32_t rIn = (int32_t)(r - 7) * (r - 7);
-  int32_t rOut = (int32_t)(r + 6) * (r + 6);
-  if (idy < r - 14 && id2 >= rIn && id2 <= rOut) {
+  int32_t rIn = (int32_t)(r - 9) * (r - 9);
+  int32_t rOut = (int32_t)(r + 8) * (r + 8);
+  if (idy < r - 18 && id2 >= rIn && id2 <= rOut) {
     float len = sqrtf((float)id2);
     if (len >= 1.0f) {
-      float scale = (float)(r + 7) / len;
+      float scale = (float)(r + 9) / len;
       fpx = I2F(cx + (int16_t)(idx * scale));
       fpy = I2F(cy + (int16_t)(idy * scale));
       fvx = (fx)(-fvx / 4);
@@ -1283,7 +1298,7 @@ void loopGate(int16_t prevX, int16_t rad) {
 }
 
 void physicsStep(uint8_t e) {
-  int16_t rad = rolling ? 4 : 5;
+  int16_t rad = rolling ? RAD_ROLL : RAD_STAND;
 
   if ((e & B_MID) && onGround && !inLoop) {
     fvy = -JUMP_SPD;
@@ -1340,8 +1355,8 @@ void physicsStep(uint8_t e) {
   // instead of skipping through the air (he only leaves at a drop bigger than this)
   if (wasGrounded) {
     int16_t gap = groundAt(px) - (py + rad);
-    int16_t stick = (int16_t)(abs(fvx) >> 8) + 4;
-    if (stick > 10) stick = 10;
+    int16_t stick = (int16_t)(abs(fvx) >> 8) + 5;
+    if (stick > 12) stick = 12;
     if (gap > 0 && gap <= stick) { fpy = I2F(groundAt(px) - rad); fvy = 0; syncPlayerInts(); }
   }
 
@@ -1396,19 +1411,19 @@ void gameStepInner(uint8_t e) {
   physicsStep(0);
 
   syncPlayerInts();
-  int16_t rad = rolling ? 4 : 5;
+  int16_t rad = rolling ? RAD_ROLL : RAD_STAND;
 
   if (bossOn) {
     cam = arenaOrigin;
     camY = 0;
   } else {
     // Look-ahead: the faster you run, the further the camera leads — at top speed Sonic sits
-    // 32 px from the trailing edge with 96 px of sightline. Eased 1 px/frame so it never snaps;
+    // 24 px from the trailing edge with 104 px of sightline. Eased 1 px/frame so it never snaps;
     // held steady through the loop (where fvx swings around).
     if (!inLoop && !inHollow && !goalT) {
-      int16_t want = (int16_t)((fvx * 32) / TOP_SPD);
-      if (want > 32) want = 32;
-      if (want < -32) want = -32;
+      int16_t want = (int16_t)((fvx * 40) / TOP_SPD);
+      if (want > 40) want = 40;
+      if (want < -40) want = -40;
       if (camLead < want) camLead++;
       else if (camLead > want) camLead--;
     }
@@ -1416,8 +1431,8 @@ void gameStepInner(uint8_t e) {
     if (cam < 0) cam = 0;
     // Vertical follow — keeps Sonic framed through tall loops
     int16_t psy = py - camY;
-    if (psy < 18) camY = py - 18;
-    if (psy > 46) camY = py - 46;
+    if (psy < 20) camY = py - 20;
+    if (psy > 44) camY = py - 44;
   }
 
   if (!bossOn && !goalT && px >= actEnd - 8) {
@@ -1445,20 +1460,20 @@ void gameStepInner(uint8_t e) {
 
     if (o.kind == 2) { // crab leashed to home
       o.x += o.vx;
-      if (o.x < o.home - 18 || o.x > o.home + 18) o.vx = -o.vx;
-      o.y = groundAt(o.x) - 5;
+      if (o.x < o.home - 22 || o.x > o.home + 22) o.vx = -o.vx;
+      o.y = groundAt(o.x) - 6;
     }
     if (o.kind == 4) { // bee patrol near home
       if (o.state == 0) {
         o.x += o.vx;
-        if (o.x < o.home - 30 || o.x > o.home + 30) o.vx = -o.vx;
+        if (o.x < o.home - 37 || o.x > o.home + 37) o.vx = -o.vx;
         if (o.timer) o.timer--; else { o.state = 1; o.timer = 26; }
       } else if (o.state == 1) {
         if (o.timer) o.timer--;
         else {
           if (beesShoot()) {
             int8_t dir = (px < o.x) ? -1 : 1;
-            addShot(o.x + dir * 3, o.y + 3, dir * 2, 2);
+            addShot(o.x + dir * 4, o.y + 4, dir * 2, 2);
             beep(480, 16);
           }
           o.state = 2; o.timer = 10;
@@ -1479,7 +1494,7 @@ void gameStepInner(uint8_t e) {
     if (o.kind == 11) {                        // fish: wait in the pool, leap, splash back down
       if (o.state == 0) {
         if (o.timer) o.timer--;
-        else { o.state = 1; o.vx = -10; }      // vx doubles as vertical speed
+        else { o.state = 1; o.vx = -11; }      // vx doubles as vertical speed
       } else {
         o.y += o.vx;
         o.vx++;
@@ -1494,8 +1509,8 @@ void gameStepInner(uint8_t e) {
   for (auto &s : shots) {
     if (!s.live || s.vy == 99) continue; // skip ball marker
     s.x += s.vx; s.y += s.vy;
-    if (s.x < cam - 8 || s.x > cam + 140 || s.y > 70) { s.live = false; continue; }
-    if (!invul && abs(s.x - px) < 5 && abs(s.y - py) < 6) { s.live = false; hurt(); }
+    if (s.x < cam - 8 || s.x > cam + 140 || s.y > camY + 72) { s.live = false; continue; }
+    if (!invul && abs(s.x - px) < 6 && abs(s.y - py) < 8) { s.live = false; hurt(); }
   }
 
   updateScatter();
@@ -1508,14 +1523,14 @@ void gameStepInner(uint8_t e) {
     if (!o.live) continue;
     if (!onScreen(o.x, 20)) continue;
     if (o.kind == 1) {
-      if (nearPlayerSwept(o.x, o.y, 6, 7)) {
+      if (nearPlayerSwept(o.x, o.y, 8, 9)) {
         o.live = false; rings++; score += 10; beep(1800, 22);
       }
     } else if (o.kind == 0) {
       // Spikes: solid from the sides; only the tips hurt when landing on them
       int16_t gy = groundAt(o.x);
-      const int16_t spikeH = 14;
-      const int16_t spikeW = 9;
+      const int16_t spikeH = 18;
+      const int16_t spikeW = 12;
       int16_t tipY = gy - spikeH;
       int16_t feet = py + rad;
       bool hitX = (px + rad - 1 > o.x) && (px - rad + 1 < o.x + spikeW);
@@ -1527,42 +1542,42 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 2) {
       // Crab: spin/stomp destroys; otherwise solid bump
-      if (abs(px - o.x) < 8 && abs(py - o.y) < 7) {
+      if (abs(px - o.x) < 10 && abs(py - o.y) < 9) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 50; beep(1400, 50);
-          if (fvy > 0) { fvy = I2F(-4); rolling = true; syncPlayerInts(); }
+          if (fvy > 0) { fvy = ZV(-4); rolling = true; syncPlayerInts(); }
         } else if (!invul) {
           hurt();                       // ran into it upright: lose rings, or die with none
         }
       }
     } else if (o.kind == 3) {
       // Check both physics sub-steps: at top speed he moves 12 px a frame, wider than the spring
-      bool overX = abs(px - o.x) < 7 || abs(midPX - o.x) < 7 || (midPX < o.x) != (px < o.x);
-      if (overX && py + rad >= o.y - 2 && py + rad <= o.y + 7 && fvy >= 0) {
-        if (abs(px - o.x) >= 7) { fpx = I2F(o.x); syncPlayerInts(); }
+      bool overX = abs(px - o.x) < 9 || abs(midPX - o.x) < 9 || (midPX < o.x) != (px < o.x);
+      if (overX && py + rad >= o.y - 2 && py + rad <= o.y + 9 && fvy >= 0) {
+        if (abs(px - o.x) >= 9) { fpx = I2F(o.x); syncPlayerInts(); }
         fvy = -SPRING_SPD; onGround = false; rolling = true;
         jumpCut = true;            // springs ignore the jump button (only a real jump can be cut short)
         syncPlayerInts(); beep(1100, 65);
       }
     } else if (o.kind == 4) {
       // Bee: spin/stomp destroys; otherwise solid bump
-      if (abs(px - o.x) < 7 && abs(py - o.y) < 6) {
+      if (abs(px - o.x) < 9 && abs(py - o.y) < 8) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 75; beep(1400, 50);
-          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
         } else {
-          bumpFromSolid(o.x - 4, o.x + 5, o.y - 4, o.y + 4, rad);
+          bumpFromSolid(o.x - 5, o.x + 6, o.y - 5, o.y + 5, rad);
         }
       }
     } else if (o.kind == 8) {
       // flame / chem jet — only hurts while firing
-      if (o.state && abs(px - o.x) < 7 && py + rad > o.y - 14 && py < o.y + 2) hurt();
+      if (o.state && abs(px - o.x) < 9 && py + rad > o.y - 18 && py < o.y + 2) hurt();
     } else if (o.kind == 9) {
       // pinball bumper (cooldown avoids sticky re-hits / lag spikes)
-      if (o.timer == 0 && abs(px - o.x) < 9 && abs(py - o.y) < 9) {
+      if (o.timer == 0 && abs(px - o.x) < 11 && abs(py - o.y) < 11) {
         int8_t dx = (px >= o.x) ? 1 : -1;
         int8_t dy = (py >= o.y) ? 1 : -1;
-        setPlayerVel(I2F(dx * 4), I2F((dy > 0) ? 3 : -6));
+        setPlayerVel(ZV(dx * 4), ZV((dy > 0) ? 3 : -6));
         faceRight = dx > 0;
         onGround = false;
         rolling = true;
@@ -1573,20 +1588,20 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 10) {
       // Saw: spin/stomp destroys; otherwise solid bump (same as enemies)
-      if (abs(px - o.x) < 8 && abs(py - o.y) < 8) {
+      if (abs(px - o.x) < 10 && abs(py - o.y) < 10) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 80; beep(1400, 50);
-          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
         } else {
-          bumpFromSolid(o.x - 5, o.x + 5, o.y - 5, o.y + 5, rad);
+          bumpFromSolid(o.x - 6, o.x + 6, o.y - 6, o.y + 6, rad);
         }
       }
     } else if (o.kind == 11) {
       // Fish: only dangerous while it's out of the water
-      if (o.y < o.home - 4 && abs(px - o.x) < 6 && abs(py - o.y) < 8) {
+      if (o.y < o.home - 5 && abs(px - o.x) < 8 && abs(py - o.y) < 10) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 60; beep(1400, 50);
-          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
         } else if (!invul) {
           hurt();
         }
@@ -1691,11 +1706,13 @@ void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
   for (uint8_t pass = 0; pass < 2; pass++) {
     u8g2.setDrawColor(pass);
     for (uint8_t row = 0; row < SONIC_H; row++) {
-      uint16_t bits = pgm_read_byte(&src[row * 2]) | (pgm_read_byte(&src[row * 2 + 1]) << 8);
+      uint32_t bits = 0;
+      for (uint8_t k = 0; k < SONIC_ROWBYTES; k++)
+        bits |= (uint32_t)pgm_read_byte(&src[row * SONIC_ROWBYTES + k]) << (8 * k);
       if (!bits) continue;
       int16_t y = top + row;
       for (uint8_t col = 0; col < SONIC_W; col++) {
-        if (!(bits & (1u << col))) continue;
+        if (!(bits & (1ul << col))) continue;
         int16_t x = left + (faceRight ? col : (SONIC_W - 1 - col));
         if (pass) plot(x, y);
         else { plot(x - 1, y); plot(x + 1, y); plot(x, y - 1); }
@@ -1705,9 +1722,9 @@ void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
   u8g2.setDrawColor(1);
 }
 
-// Feet (or the bottom of the spin-ball + 1) at y, centred on x
+// Centre at (x, y): feet on the row y + RAD_STAND (the spin-ball's bottom is one row higher)
 void drawSonicFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
-  blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 6, id, faceRight);
+  blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 1 + RAD_STAND, id, faceRight);
 }
 
 // Simple version for the watch face: run cycle / spin-ball / idle blink by frame count
@@ -1726,46 +1743,46 @@ void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame) {
   uint8_t id;
   bool face = faceRight;
   if (roll || groundRoll) {
-    if (spd > I2F(3)) runAnim += 256; else runAnim += 128;
+    if (spd > ZV(3)) runAnim += 256; else runAnim += 128;
     id = SPR_ROLL0 + ((runAnim >> 8) & 3);
   } else if (spd == 0 && !inLoop) {
     id = ((frame & 63) < 3) ? SPR_BLINK : SPR_STAND;
     runAnim = 0;
-  } else if (onGround && !inLoop && spd > I2F(1) &&
+  } else if (onGround && !inLoop && spd > ZV(1) &&
              (((heldIn() & B_LEFT) && fvx > 0) || ((heldIn() & B_RIGHT) && fvx < 0))) {
     id = SPR_SKID;           // braking: lean back, still facing the way he's sliding
     face = fvx > 0;
-  } else if (spd >= 1400) {
+  } else if (spd >= 1750) {
     id = SPR_FAST0 + (frame & 1);
   } else {
-    runAnim += 24 + spd / 12;  // ~4 steps/s at a walk up to ~15/s near top speed
+    runAnim += 24 + spd / 15;  // ~4 steps/s at a walk up to ~15/s near top speed
     id = SPR_RUN0 + ((runAnim >> 8) & 3);
   }
   drawSonicFrame(x, y, id, face);
 }
 
 void drawLoopTrack() {
-  if (!loopTrack.live || !onScreen(loopTrack.cx, loopTrack.r + 8)) return;
+  if (!loopTrack.live || !onScreen(loopTrack.cx, loopTrack.r + 10)) return;
   int16_t x = sx(loopTrack.cx);
   int16_t y = sy(loopTrack.cy);
   int16_t r = loopTrack.r;
   // Thick track like GH checker loop (outer + mid + inner)
   circleSafe(x, y, r);
   circleSafe(x, y, r - 1);
-  circleSafe(x, y, r - 3);
-  circleSafe(x, y, r - 5);
+  circleSafe(x, y, r - 4);
+  circleSafe(x, y, r - 6);
   // Mouth openings (clear bottom-left / bottom-right notches)
   int16_t floorY = sy(loopTrack.cy + r);
   u8g2.setDrawColor(0);
-  fillBoxClipped(x - r - 1, floorY - 6, 10, 6);
-  fillBoxClipped(x + r - 8, floorY - 6, 10, 6);
+  fillBoxClipped(x - r - 1, floorY - 8, 12, 8);
+  fillBoxClipped(x + r - 10, floorY - 8, 12, 8);
   u8g2.setDrawColor(1);
   // Checker ticks around the ring
-  for (uint8_t i = 0; i < 16; i++) {
-    float th = i * (6.2831853f / 16.0f);
-    int16_t tx = x + (int16_t)((r - 2) * cosf(th));
-    int16_t ty = y + (int16_t)((r - 2) * sinf(th));
-    if ((i & 1) == 0) plot(tx, ty);
+  for (uint8_t i = 0; i < 20; i++) {
+    float th = i * (6.2831853f / 20.0f);
+    int16_t tx = x + (int16_t)((r - 2.5f) * cosf(th));
+    int16_t ty = y + (int16_t)((r - 2.5f) * sinf(th));
+    if ((i & 1) == 0) { plot(tx, ty); plot(tx + 1, ty); }
   }
 }
 
@@ -1802,40 +1819,41 @@ void drawSunflower(int16_t x, int16_t baseY) {
 }
 
 void drawRingGlyph(int16_t x, int16_t y) {
-  // Real ring: outer + inner circle (old r=3 is now the hole edge)
+  // Ring: 13 px across, 2 px band
+  circleSafe(x, y, 6);
   circleSafe(x, y, 5);
-  circleSafe(x, y, 3);
+  u8g2.setDrawColor(0); circleSafe(x, y, 3); u8g2.setDrawColor(1);
+  circleSafe(x, y, 4);
 }
 
-// Classic Sonic spikes: 3 vertical spears ~Sonic-tall, 3px bases, group ~his width
+// Classic Sonic spikes: 3 spears ~Sonic-tall, 4 px bases, group ~his width
 void drawSpikes(int16_t x, int16_t baseY) {
-  const int16_t h = 14;
+  const int16_t h = 18;
   for (uint8_t i = 0; i < 3; i++) {
-    int16_t bx = x + (int16_t)i * 3;
-    fillTriSafe(bx, baseY, bx + 3, baseY, bx + 1, baseY - h);
-    // crisp outline so they read on the OLED
-    triSafe(bx, baseY, bx + 3, baseY, bx + 1, baseY - h);
+    int16_t bx = x + (int16_t)i * 4;
+    fillTriSafe(bx, baseY, bx + 4, baseY, bx + 2, baseY - h);
+    triSafe(bx, baseY, bx + 4, baseY, bx + 2, baseY - h);
   }
+  hLineSafe(x, baseY - 1, 12);
 }
 
 void drawPalm(int16_t x, int16_t baseY) {
-  // ~48 px tall (sunflower is ~40): trunk leans right with bark bands, five drooping
+  // ~60 px tall (sunflower ~50): trunk leans right with bark bands, five drooping
   // fronds drawn two pixels thick so they survive the OLED, and a pair of coconuts.
-  const int16_t H = 40;
+  const int16_t H = 50;
   for (int16_t i = 0; i <= H; i++) {
-    int16_t cx = x + (i * i) / 320;          // gentle lean, ~5 px at the crown
+    int16_t cx = x + (i * i) / 400;          // gentle lean, ~6 px at the crown
     int16_t yy = baseY - i;
-    plot(cx, yy); plot(cx + 1, yy);
-    if ((i & 3) == 0) plot(cx + 2, yy);      // bark bands
+    plot(cx, yy); plot(cx + 1, yy); plot(cx + 2, yy);
+    if ((i & 3) == 0) plot(cx + 3, yy);      // bark bands
   }
-  int16_t tx = x + (H * H) / 320 + 1, ty = baseY - H;
-  // frond polylines: crown → mid → tip (dx, dy pairs)
+  int16_t tx = x + (H * H) / 400 + 1, ty = baseY - H;
   static const int8_t FR[5][4] = {
-    {-7, -4, -15,  3},    // long left, drooping
-    {-4, -7, -10, -6},    // upper left
-    { 1, -8,   5, -9},    // top
-    { 5, -6,  11, -5},    // upper right
-    { 8, -3,  15,  4},    // long right, drooping
+    {-9, -5, -19,  4},    // long left, drooping
+    {-5, -9, -12, -7},    // upper left
+    { 1,-10,   6,-11},    // top
+    { 6, -8,  14, -6},    // upper right
+    {10, -4,  19,  5},    // long right, drooping
   };
   for (uint8_t f = 0; f < 5; f++) {
     for (int8_t t = 0; t <= 1; t++) {
@@ -1843,40 +1861,40 @@ void drawPalm(int16_t x, int16_t baseY) {
       lineSafe(tx + FR[f][0], ty + FR[f][1] + t, tx + FR[f][2], ty + FR[f][3] + t);
     }
   }
-  discSafe(tx - 1, ty + 3, 1);
-  discSafe(tx + 2, ty + 3, 1);
+  discSafe(tx - 1, ty + 4, 2);
+  discSafe(tx + 3, ty + 4, 2);
 }
 
 void drawPipe(int16_t x, int16_t baseY) {
-  frameSafe(x - 4, baseY - 18, 10, 18);
-  hLineSafe(x - 6, baseY - 18, 14);
-  hLineSafe(x - 6, baseY - 10, 14);
-  fillBoxClipped(x - 2, baseY - 4, 6, 4);
+  frameSafe(x - 5, baseY - 22, 12, 22);
+  hLineSafe(x - 7, baseY - 22, 16);
+  hLineSafe(x - 7, baseY - 12, 16);
+  fillBoxClipped(x - 2, baseY - 5, 7, 5);
 }
 
 // Casino "neon": a card-suit outline on a pole that blinks every ~0.5 s (no text/logos —
 // they turn into blobs at 128×64). Suit picked from the position.
 void drawNeon(int16_t x, int16_t baseY) {
-  vLineSafe(x, baseY - 10, 10);
+  vLineSafe(x, baseY - 12, 12);
   if ((animFrame / 15) & 1) return;          // off phase
-  int16_t cy = baseY - 17;
+  int16_t cy = baseY - 21;
   switch ((x >> 5) & 3) {
     case 0:   // diamond
-      lineSafe(x, cy - 6, x + 5, cy); lineSafe(x + 5, cy, x, cy + 6);
-      lineSafe(x, cy + 6, x - 5, cy); lineSafe(x - 5, cy, x, cy - 6);
+      lineSafe(x, cy - 8, x + 6, cy); lineSafe(x + 6, cy, x, cy + 8);
+      lineSafe(x, cy + 8, x - 6, cy); lineSafe(x - 6, cy, x, cy - 8);
       break;
     case 1:   // heart
-      circleSafe(x - 2, cy - 2, 2); circleSafe(x + 2, cy - 2, 2);
-      lineSafe(x - 4, cy - 1, x, cy + 5); lineSafe(x + 4, cy - 1, x, cy + 5);
+      circleSafe(x - 3, cy - 2, 3); circleSafe(x + 3, cy - 2, 3);
+      lineSafe(x - 6, cy - 1, x, cy + 7); lineSafe(x + 6, cy - 1, x, cy + 7);
       break;
     case 2:   // spade
-      lineSafe(x - 4, cy + 1, x, cy - 5); lineSafe(x + 4, cy + 1, x, cy - 5);
-      circleSafe(x - 2, cy + 2, 2); circleSafe(x + 2, cy + 2, 2);
-      vLineSafe(x, cy + 3, 4);
+      lineSafe(x - 6, cy + 1, x, cy - 7); lineSafe(x + 6, cy + 1, x, cy - 7);
+      circleSafe(x - 3, cy + 2, 3); circleSafe(x + 3, cy + 2, 3);
+      vLineSafe(x, cy + 4, 5);
       break;
     default:  // club
-      circleSafe(x, cy - 3, 2); circleSafe(x - 3, cy + 1, 2); circleSafe(x + 3, cy + 1, 2);
-      vLineSafe(x, cy + 2, 5);
+      circleSafe(x, cy - 4, 3); circleSafe(x - 4, cy + 1, 3); circleSafe(x + 4, cy + 1, 3);
+      vLineSafe(x, cy + 3, 6);
       break;
   }
 }
@@ -1884,71 +1902,75 @@ void drawNeon(int16_t x, int16_t baseY) {
 // Green Hill totem pole: three stacked faces with wings on top, wireframe (background)
 void drawTotem(int16_t x, int16_t baseY) {
   for (uint8_t k = 0; k < 3; k++) {
-    int16_t top = baseY - 9 * (k + 1);
-    frameSafe(x - 4, top, 9, 9);
-    plot(x - 2, top + 3); plot(x + 2, top + 3);
-    hLineSafe(x - 2, top + 6, 5);
+    int16_t top = baseY - 11 * (k + 1);
+    frameSafe(x - 5, top, 11, 11);
+    plot(x - 2, top + 4); plot(x + 2, top + 4);
+    hLineSafe(x - 2, top + 7, 5);
   }
-  int16_t t = baseY - 27;
-  lineSafe(x - 4, t + 2, x - 9, t - 1); lineSafe(x - 9, t - 1, x - 4, t + 5);
-  lineSafe(x + 4, t + 2, x + 9, t - 1); lineSafe(x + 9, t - 1, x + 4, t + 5);
+  int16_t t = baseY - 33;
+  lineSafe(x - 5, t + 2, x - 11, t - 2); lineSafe(x - 11, t - 2, x - 5, t + 6);
+  lineSafe(x + 5, t + 2, x + 11, t - 2); lineSafe(x + 11, t - 2, x + 5, t + 6);
 }
 
 // In-game sunflower as an outline, so it reads as scenery and never as a spike.
 // (The filled version stays on the watch face.)
 void drawSunflowerOutline(int16_t x, int16_t baseY) {
-  int16_t cy = baseY - 30;
-  vLineSafe(x, cy + 6, baseY - (cy + 6));
-  triSafe(x, baseY - 8,  x - 6, baseY - 13, x - 3, baseY - 6);
-  triSafe(x, baseY - 8,  x + 6, baseY - 13, x + 3, baseY - 6);
-  triSafe(x, baseY - 16, x - 5, baseY - 20, x - 2, baseY - 14);
-  triSafe(x, baseY - 16, x + 5, baseY - 20, x + 2, baseY - 14);
-  triSafe(x,     cy - 9, x - 3, cy - 3, x + 3, cy - 3);
-  triSafe(x + 7, cy - 7, x + 1, cy - 4, x + 4, cy - 1);
-  triSafe(x + 9, cy,     x + 3, cy - 3, x + 3, cy + 3);
-  triSafe(x + 7, cy + 7, x + 1, cy + 4, x + 4, cy + 1);
-  triSafe(x,     cy + 9, x - 3, cy + 3, x + 3, cy + 3);
-  triSafe(x - 7, cy + 7, x - 1, cy + 4, x - 4, cy + 1);
-  triSafe(x - 9, cy,     x - 3, cy - 3, x - 3, cy + 3);
-  triSafe(x - 7, cy - 7, x - 1, cy - 4, x - 4, cy - 1);
-  circleSafe(x, cy, 4);
+  int16_t cy = baseY - 38;
+  vLineSafe(x, cy + 7, baseY - (cy + 7));
+  triSafe(x, baseY - 10, x - 8, baseY - 16, x - 4, baseY - 7);
+  triSafe(x, baseY - 10, x + 8, baseY - 16, x + 4, baseY - 7);
+  triSafe(x, baseY - 20, x - 6, baseY - 25, x - 2, baseY - 17);
+  triSafe(x, baseY - 20, x + 6, baseY - 25, x + 2, baseY - 17);
+  triSafe(x,      cy - 11, x - 4, cy - 4, x + 4, cy - 4);
+  triSafe(x + 9,  cy - 9,  x + 1, cy - 5, x + 5, cy - 1);
+  triSafe(x + 11, cy,      x + 4, cy - 4, x + 4, cy + 4);
+  triSafe(x + 9,  cy + 9,  x + 1, cy + 5, x + 5, cy + 1);
+  triSafe(x,      cy + 11, x - 4, cy + 4, x + 4, cy + 4);
+  triSafe(x - 9,  cy + 9,  x - 1, cy + 5, x - 5, cy + 1);
+  triSafe(x - 11, cy,      x - 4, cy - 4, x - 4, cy + 4);
+  triSafe(x - 9,  cy - 9,  x - 1, cy - 5, x - 5, cy - 1);
+  circleSafe(x, cy, 5);
+  circleSafe(x, cy, 2);
 }
 
 void drawGear(int16_t x, int16_t baseY) {
-  int16_t cy = baseY - 10;
+  int16_t cy = baseY - 12;
+  circleSafe(x, cy, 6);
   circleSafe(x, cy, 5);
   discSafe(x, cy, 2);
   uint8_t rot = (animFrame >> 3) & 3;
-  static const int8_t DX[4] = {6, 0, -6, 0};
-  static const int8_t DY[4] = {0, 6, 0, -6};
+  static const int8_t DX[4] = {8, 0, -8, 0};
+  static const int8_t DY[4] = {0, 8, 0, -8};
   for (uint8_t i = 0; i < 4; i++) {
     uint8_t a = (rot + i) & 3;
-    plot(x + DX[a], cy + DY[a]);
+    discSafe(x + DX[a], cy + DY[a], 1);
   }
 }
 
 void drawFlame(int16_t x, int16_t baseY, bool on) {
-  fillBoxClipped(x - 3, baseY - 3, 7, 3);
+  fillBoxClipped(x - 4, baseY - 4, 9, 4);
   if (on) {
-    triSafe(x, baseY - 14, x - 4, baseY - 3, x + 4, baseY - 3);
-    if (animFrame & 2) plot(x, baseY - 16);
+    triSafe(x, baseY - 18, x - 5, baseY - 4, x + 5, baseY - 4);
+    triSafe(x, baseY - 12, x - 2, baseY - 4, x + 2, baseY - 4);
+    if (animFrame & 2) plot(x, baseY - 20);
   }
 }
 
 void drawBumper(int16_t x, int16_t y, bool flash) {
-  discSafe(x, y, flash ? 7 : 6);
+  discSafe(x, y, flash ? 9 : 8);
   u8g2.setDrawColor(0);
-  discSafe(x, y, 3);
+  discSafe(x, y, 4);
   u8g2.setDrawColor(1);
-  circleSafe(x, y, 3);
+  circleSafe(x, y, 4);
+  plot(x, y);
 }
 
 void drawSaw(int16_t x, int16_t y, uint8_t spin) {
-  circleSafe(x, y, 5);
+  circleSafe(x, y, 6);
   discSafe(x, y, 2);
   uint8_t a = (spin >> 1) & 3;
-  static const int8_t DX[4] = {6, 0, -6, 0};
-  static const int8_t DY[4] = {0, 6, 0, -6};
+  static const int8_t DX[4] = {8, 0, -8, 0};
+  static const int8_t DY[4] = {0, 8, 0, -8};
   lineSafe(x - DX[a], y - DY[a], x + DX[a], y + DY[a]);
   lineSafe(x - DY[a], y + DX[a], x + DY[a], y - DX[a]);
 }
@@ -1962,59 +1984,66 @@ void drawDeco(int16_t x, int16_t baseY, uint8_t typ) {
   else drawGear(x, baseY);
 }
 
-// Fish leaping straight up: body, tail fin below, teeth + eye cut out
+// Fish leaping straight up: body, side fins, tail fin below, teeth + eye cut out
 void drawFish(int16_t x, int16_t y) {
-  fillBoxClipped(x - 2, y - 4, 5, 8);
-  plot(x - 3, y - 1); plot(x + 3, y - 1); plot(x - 3, y); plot(x + 3, y);
-  fillTriSafe(x - 3, y + 7, x + 3, y + 7, x, y + 3);
+  fillBoxClipped(x - 3, y - 5, 7, 10);
+  vLineSafe(x - 4, y - 2, 3); vLineSafe(x + 4, y - 2, 3);
+  fillTriSafe(x - 4, y + 9, x + 4, y + 9, x, y + 4);
   u8g2.setDrawColor(0);
-  plot(x - 1, y - 4); plot(x + 1, y - 4);   // teeth
-  plot(x + 1, y - 1);                        // eye
+  plot(x - 2, y - 5); plot(x, y - 5); plot(x + 2, y - 5);   // teeth
+  plot(x + 1, y - 2); plot(x + 2, y - 2);                   // eye
   u8g2.setDrawColor(1);
 }
 
+// Crab: shell with eye stalks, legs, and big claws that snap open and shut
 void drawCrab(int16_t x, int16_t y, uint8_t frame) {
   int8_t claw = (frame & 4) ? 1 : 0;
-  fillBoxClipped(x - 5, y - 2, 10, 5);
-  vLineSafe(x - 2, y - 5, 3); vLineSafe(x + 2, y - 5, 3);
-  discSafe(x - 2, y - 5, 1); discSafe(x + 2, y - 5, 1);
-  triSafe(x - 5, y, x - 9 - claw, y - 3, x - 9 - claw, y + 2);
-  triSafe(x + 5, y, x + 9 + claw, y - 3, x + 9 + claw, y + 2);
+  fillBoxClipped(x - 6, y - 3, 13, 6);
+  u8g2.setDrawColor(0); hLineSafe(x - 4, y - 1, 9); u8g2.setDrawColor(1);
+  vLineSafe(x - 3, y - 7, 4); vLineSafe(x + 3, y - 7, 4);
+  discSafe(x - 3, y - 7, 1); discSafe(x + 3, y - 7, 1);
+  for (int8_t k = -1; k <= 1; k += 2) {
+    lineSafe(x + k * 3, y + 3, x + k * 6, y + 6);            // legs
+    lineSafe(x + k * 6, y,     x + k * 9, y - 2);            // arm
+    fillTriSafe(x + k * 9, y - 2, x + k * (12 + claw), y - 6 - claw, x + k * (12 + claw), y - 1);
+    fillTriSafe(x + k * 9, y - 2, x + k * (12 + claw), y + 2 + claw, x + k * (12 + claw), y - 1 + claw);
+  }
 }
 
 void drawBee(int16_t x, int16_t y, uint8_t frame, uint8_t state) {
-  discSafe(x, y, 3); fillBoxClipped(x - 1, y - 2, 5, 4);
-  u8g2.setDrawColor(0); vLineSafe(x + 1, y - 2, 4); u8g2.setDrawColor(1);
-  discSafe(x - 3, y, 2);
-  u8g2.setDrawColor(0); plot(x - 4, y - 1); u8g2.setDrawColor(1);
-  triSafe(x + 4, y, x + 7, y - 1, x + 7, y + 1);
-  hLineSafe(x - 1, y - ((frame & 1) ? 5 : 4), 4);
-  if (state == 1) plot(x - 5, y + 2);
+  discSafe(x, y, 4); fillBoxClipped(x - 1, y - 3, 6, 6);
+  u8g2.setDrawColor(0); vLineSafe(x + 1, y - 3, 6); vLineSafe(x + 4, y - 2, 4); u8g2.setDrawColor(1);
+  discSafe(x - 4, y, 3);
+  u8g2.setDrawColor(0); plot(x - 5, y - 1); u8g2.setDrawColor(1);
+  triSafe(x + 5, y, x + 9, y - 1, x + 9, y + 1);
+  int16_t wy = y - ((frame & 1) ? 7 : 5);
+  hLineSafe(x - 1, wy, 5); hLineSafe(x, wy - 1, 3);
+  if (state == 1) discSafe(x - 7, y + 3, 1);
 }
 
 void drawEggWrecker() {
   int16_t ex = sx(eggX);
-  discSafe(ex, eggY + 4, 6);
-  fillBoxClipped(ex - 5, eggY + 8, 10, 3);
+  discSafe(ex, eggY + 5, 8);
+  fillBoxClipped(ex - 7, eggY + 10, 14, 4);
   u8g2.setDrawColor(0);
-  for (int16_t i = -4; i <= 4; i += 3) vLineSafe(ex + i, eggY + 8, 3);
+  for (int16_t i = -5; i <= 5; i += 4) vLineSafe(ex + i, eggY + 10, 4);
   u8g2.setDrawColor(1);
-  discSafe(ex, eggY, 3);
+  discSafe(ex, eggY, 4);
   u8g2.setDrawColor(0);
-  plot(ex - 1, eggY - 1);
-  plot(ex + 1, eggY - 1);
+  plot(ex - 2, eggY - 1);
+  plot(ex + 2, eggY - 1);
   u8g2.setDrawColor(1);
-  hLineSafe(ex - 2, eggY + 2, 5);
+  hLineSafe(ex - 3, eggY + 3, 7);
 
   int16_t bx = sx(ballWX), by = ballWY;
-  lineSafe(ex, eggY + 8, bx, by);
-  discSafe(bx, by, 4);
+  lineSafe(ex, eggY + 10, bx, by);
+  discSafe(bx, by, 5);
   u8g2.setDrawColor(0);
-  plot(bx - 1, by - 1);
+  plot(bx - 2, by - 2); plot(bx - 1, by - 2);
   u8g2.setDrawColor(1);
 
-  frameSafe(2, 56, 50, 6);
-  fillBoxClipped(4, 58, bossHP * 5, 2);
+  frameSafe(2, 57, 50, 6);
+  fillBoxClipped(4, 59, bossHP * 5, 2);
 }
 
 void drawBanner() {
@@ -2044,29 +2073,32 @@ void drawGame() {
   // Pools under the bridges: rippling surface a few px below the deck
   for (auto &b : bridges) {
     if (!b.live) continue;
-    int16_t wy = sy(b.y + 8);
+    int16_t wy = sy(b.y + 10);
     for (int16_t u = b.x0 + 2; u < b.x1 - 1; u += 2) {
       int16_t xs = sx(u);
       if (xs < 0 || xs > 127) continue;
       plot(xs, wy + (((u >> 3) + (animFrame >> 2)) & 1));
-      if ((u & 7) == 0) plot(xs, wy + 4);
+      if ((u & 7) == 0) plot(xs, wy + 5);
     }
   }
 
   for (auto &p : plats) {
     if (!p.live) continue;
-    if (p.w <= 0 || p.w > 48) continue;
+    if (p.w <= 0 || p.w > 64) continue;
     int16_t y = sy(p.y);
-    if (y < -4 || y > 66) continue;
-    fillBoxClipped(sx(p.x), y, p.w, 3);
+    if (y < -5 || y > 66) continue;
+    fillBoxClipped(sx(p.x), y, p.w, 4);
+    u8g2.setDrawColor(0);
+    for (int16_t u = 4; u < p.w - 2; u += 8) plot(sx(p.x) + u, y + 2);   // rivets
+    u8g2.setDrawColor(1);
   }
 
   for (auto &o : objs) {
     if (!o.live) continue;
     int16_t x = sx(o.x);
     int16_t y = sy(o.y);
-    if (x < -14 || x > 142) continue;
-    if (y < -24 || y > 80) continue;
+    if (x < -24 || x > 152) continue;
+    if (y < -30 || y > 100) continue;
     u8g2.setDrawColor(1);
     if (o.kind == 0) {
       drawSpikes(x, sy(groundAt(o.x)));
@@ -2074,49 +2106,53 @@ void drawGame() {
       drawRingGlyph(x, y);
     } else if (o.kind == 2) drawCrab(x, y, animFrame);
     else if (o.kind == 3) {
-      fillBoxClipped(x - 4, y - 2, 8, 3);
-      hLineSafe(x - 3, y - 4, 6);
+      fillBoxClipped(x - 6, y - 2, 12, 4);                 // spring: base, coil, pad
+      plot(x - 3, y - 3); plot(x + 3, y - 3); plot(x - 2, y - 4); plot(x + 2, y - 4);
+      fillBoxClipped(x - 5, y - 6, 10, 2);
     } else if (o.kind == 4) drawBee(x, y, animFrame, o.state);
     else if (o.kind == 5) drawDeco(x, y, o.state);
     else if (o.kind == 6) {
       int16_t gh = groundAt(o.x) - o.y;
-      if (gh > 0 && gh < 50) vLineSafe(x, y + 6, gh - 6);
+      if (gh > 0 && gh < 60) { vLineSafe(x, y + 8, gh - 8); vLineSafe(x + 1, y + 8, gh - 8); }
       if (goalT && goalT < 55) {
         // spinning: panel width follows |cos|, alternating faces
         float c = cosf(goalT * 0.45f);
-        int16_t w = (int16_t)(fabsf(c) * 6.0f) + 1;
-        if (c > 0) fillBoxClipped(x - w, y - 2, w * 2, 10);
-        else frameSafe(x - w, y - 2, w * 2, 10);
+        int16_t w = (int16_t)(fabsf(c) * 8.0f) + 1;
+        if (c > 0) fillBoxClipped(x - w + 1, y - 3, w * 2, 12);
+        else frameSafe(x - w + 1, y - 3, w * 2, 12);
       } else if (goalT) {
-        frameSafe(x - 6, y - 2, 12, 10);       // settled: ring emblem
-        circleSafe(x, y + 3, 3);
+        frameSafe(x - 7, y - 3, 16, 12);       // settled: ring emblem
+        circleSafe(x + 1, y + 3, 4);
       } else {
-        fillBoxClipped(x - 6, y - 2, 12, 10);  // not yet passed
+        fillBoxClipped(x - 7, y - 3, 16, 12);  // not yet passed
       }
     } else if (o.kind == 7) {
-      int16_t h = o.state ? o.state : 14;
-      fillBoxClipped(x, y - h, 6, h);
+      int16_t h = o.state ? o.state : 18;
+      fillBoxClipped(x, y - h, 8, h);
+      u8g2.setDrawColor(0);
+      for (int16_t k = 4; k < h - 1; k += 6) hLineSafe(x + 2, y - h + k, 4);   // block seams
+      u8g2.setDrawColor(1);
     } else if (o.kind == 8) drawFlame(x, y, o.state);
     else if (o.kind == 9) drawBumper(x, y, o.timer > 0);
     else if (o.kind == 10) drawSaw(x, y, o.timer);
-    else if (o.kind == 11 && o.y < o.home - 4) drawFish(x, y);   // hidden while underwater
+    else if (o.kind == 11 && o.y < o.home - 5) drawFish(x, y);   // hidden while underwater
   }
 
   // Bridge decks: logs with a gap, following the sag; posts at each end
   for (uint8_t i = 0; i < 6; i++) {
     const Bridge &b = bridges[i];
     if (!b.live || b.x1 < cam - 8 || b.x0 > cam + 136) continue;
-    for (int16_t u = b.x0; u < b.x1; u += 6) {
-      int16_t top = b.y + bridgeSag(i, u + 2);
-      fillBoxClipped(sx(u), sy(top), 5, 3);
+    for (int16_t u = b.x0; u < b.x1; u += 8) {
+      int16_t top = b.y + bridgeSag(i, u + 3);
+      fillBoxClipped(sx(u), sy(top), 7, 4);
     }
-    vLineSafe(sx(b.x0), sy(b.y - 5), 8);
-    vLineSafe(sx(b.x1), sy(b.y - 5), 8);
+    fillBoxClipped(sx(b.x0) - 1, sy(b.y - 6), 2, 10);
+    fillBoxClipped(sx(b.x1) - 1, sy(b.y - 6), 2, 10);
   }
 
   for (auto &s : shots) {
     if (!s.live || s.vy == 99) continue;
-    discSafe(sx(s.x), sy(s.y), 1);
+    discSafe(sx(s.x), sy(s.y), 2);
   }
 
   for (auto &r : scat) {

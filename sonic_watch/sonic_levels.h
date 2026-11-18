@@ -9,8 +9,9 @@
 //            ledge to fall off. Keep crabs ≥ 30 px and spikes/walls/flames ≥ 14 px from a cliff.
 //   Objects: {x, h, kind, arg}; h = height above the local ground (px).
 //
-// Rough sizes for designing: Sonic ≈ 16 px tall, jump ≈ 38 px, spring ≈ 62 px,
-// screen = 128 × 64, top speed 6 px/step (~360 px/s).
+// Everything here is in DESIGN units; the game draws the world 5/4 bigger (see Z() in the
+// sketch), so on screen 1 design px = 1.25 px and the 128 × 64 screen shows ~102 × 51 of it.
+// Rough sizes (design units): Sonic ≈ 18 tall, jump ≈ 38, spring ≈ 62, top speed 6 px/step.
 //
 // Par = the fastest realistic clear, in seconds (rank: A+ ≤ par+5, B ≤ par+12, else D).
 // These are estimates (length / ~240 px/s + set pieces / boss) — tune them after playtesting.

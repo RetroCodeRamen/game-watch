@@ -125,8 +125,9 @@ RP2040 has headroom, but keep watch games tiny:
 - Campaign: Green Hill → Chemical Plant → Casino Night → Scrap Brain (2 acts each + Egg Wrecker).
 - Levels are hand-designed in `sonic_levels.h`: per act a terrain profile (`{x, groundY}` points) and an object list (`{x, h above ground, kind, arg}`) with builders for ring rows/arcs, spike runs, platforms, the loop and the Chemical Plant wavy cross. Act 1 ≈ 5.5–5.9k px, Act 2 ≈ 2.3–2.5k px + boss.
 - Terrain can have **cliffs** (two points 1 px apart): a rise is a wall to jump (≤ 30 px) or spring up (a spring ~26 px before the face), a drop is a ledge. Act 1s span ~3–5 screens of height.
-- Physics follows Sonic 1 proportions: jump ≈ 38 px (2.4× Sonic's height), yellow spring ≈ 62 px, slope pull 0.125·sin, Sonic sticks to the ground over crests and down slopes, side contact with walls/spikes just stops him (no knock-back).
-- Sprite art lives in `assets/sonic_sprite/sonic.txt` (16×18 ASCII frames); `python3 scripts/gen_sonic_sprite.py` regenerates `sonic_sprites.h`.
+- **Zoom:** the world is drawn 5/4 bigger than the level data (`Z()` in the sketch). `sonic_levels.h` and its rules stay in design units; positions, sizes, hitboxes, speeds and accelerations are all scaled ×1.25, so timing is unchanged.
+- Physics follows Sonic 1 proportions: jump ≈ 38 design px (48 on screen, ~2.2× Sonic's height), yellow spring ≈ 62 (77 on screen), slope pull 0.125·sin, Sonic sticks to the ground over crests and down slopes, side contact with walls/spikes just stops him (no knock-back).
+- Sprite art lives in `assets/sonic_sprite/sonic.txt` (20×22 ASCII frames); `python3 scripts/gen_sonic_sprite.py` regenerates `sonic_sprites.h`.
 - Host tests (no watch needed): `tools/sonic_test/build.sh`, then `out/check` (level-data rules: slopes, cliffs, spike clearance, bridges, capacity) and `out/bot` (a bot plays the real game code through every act; `GOD=1` makes hazards harmless so it only tests "can you get through").
 - Act end: Act 1 signpost spins (~2.5 s, input locked) → tally (time, rings, bonus count-up, speed rank, fanfare). Act 2 tallies after the boss.
 - Speed rank vs each act's `parSec`: **A+** ≤ par + 5 s, **B** ≤ par + 12 s, else **D**. Par values are estimates — tune after playtesting.
