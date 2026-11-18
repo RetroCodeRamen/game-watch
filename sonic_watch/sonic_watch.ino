@@ -1,0 +1,2134 @@
+// Sonic-style platformer + watch for RP2040-Zero
+// 4 zones × 2 acts, Egg Wrecker bosses, special-stage emeralds
+// Board: Waveshare RP2040-Zero | Core: Earle Philhower | Lib: U8g2
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <math.h>
+// 16-bit coords — 8-bit u8g2_uint_t wraps x=128..130 into columns 0..2 on SH1106
+#define U8G2_16BIT
+#include <U8g2lib.h>
+#include "title_bitmap.h"
+#include "sonic_sprites.h"
+
+// Fixed-point type must be visible before Arduino's auto-prototypes
+typedef int32_t fx;
+
+const uint8_t P_LEFT = 2, P_MID = 3, P_RIGHT = 6, P_MODE = 7, P_GAME = 8;
+const uint8_t P_BUZ = 15, P_SDA = 4, P_SCL = 5;
+
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame);
+void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, bool moving);
+void drawSunflower(int16_t x, int16_t baseY);
+void drawRingGlyph(int16_t x, int16_t y);
+void plot(int16_t x, int16_t y);
+void hLineSafe(int16_t x, int16_t y, int16_t w);
+void vLineSafe(int16_t x, int16_t y, int16_t h);
+void circleSafe(int16_t cx, int16_t cy, int16_t r);
+void triSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
+void fillTriSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
+void lineSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1);
+void discSafe(int16_t cx, int16_t cy, int16_t r);
+
+enum : uint8_t { B_LEFT = 1, B_MID = 2, B_RIGHT = 4, B_MODE = 8, B_GAME = 16 };
+const uint8_t BPIN[5] = {P_LEFT, P_MID, P_RIGHT, P_MODE, P_GAME};
+uint8_t held = 0, lastRaw = 0, pending = 0;
+unsigned long changedAt[5];
+
+uint8_t readButtons() {
+  unsigned long now = millis();
+  uint8_t edges = 0;
+  for (uint8_t i = 0; i < 5; i++) {
+    uint8_t bit = 1 << i;
+    bool raw = !digitalRead(BPIN[i]);
+    if (raw != ((lastRaw & bit) != 0)) { lastRaw ^= bit; changedAt[i] = now; }
+    if (now - changedAt[i] >= 20) {
+      bool isHeld = held & bit;
+      if (raw != isHeld) { held ^= bit; if (raw) edges |= bit; }
+    }
+  }
+  return edges;
+}
+
+void beep(uint16_t f, uint16_t ms) { tone(P_BUZ, f, ms); }
+
+enum : uint8_t { SPLASH, VIEW, SETM, RING, GAME, MENU, OVER, WIN, SPECIAL, CLEAR };
+uint8_t mode = VIEW;   // boot straight into watch face
+uint8_t splashFrame = 0;
+
+// Clock-face power save (VIEW only): full → software-dim @10s → off @20s; any key wakes
+// (This SH1106 ignores setContrast, so "dim" is a checkerboard punch-out of lit pixels.)
+unsigned long lastInputMs = 0;
+uint8_t idleStage = 0;   // 0 full, 1 dim, 2 screen off
+
+void displayWake() {
+  idleStage = 0;
+  lastInputMs = millis();
+  u8g2.setPowerSave(0);
+}
+
+void displayEnsureOn() {
+  if (idleStage != 0) displayWake();
+  else u8g2.setPowerSave(0);
+}
+
+// ~half the lit pixels cleared — visible dim without contrast hardware
+void applySoftwareDim() {
+  u8g2.setDrawColor(0);
+  for (uint8_t y = 0; y < 64; y++) {
+    for (uint8_t x = (y & 1); x < 128; x += 2)
+      u8g2.drawPixel(x, y);
+  }
+  u8g2.setDrawColor(1);
+}
+
+void updateClockIdle() {
+  if (mode != VIEW) {
+    if (idleStage != 0) displayWake();
+    return;
+  }
+  unsigned long idle = millis() - lastInputMs;
+  if (idle >= 20000UL) {
+    if (idleStage != 2) {
+      idleStage = 2;
+      u8g2.clearBuffer();
+      u8g2.sendBuffer();
+      u8g2.setPowerSave(1);
+    }
+  } else if (idle >= 10000UL) {
+    if (idleStage != 1) {
+      idleStage = 1;
+      u8g2.setPowerSave(0);
+    }
+  } else if (idleStage != 0) {
+    displayWake();
+  }
+}
+
+// Watch-face Sonic vignette (walk + spin-jump for a ring)
+int16_t wfX = -14;
+int16_t wfY = 54;
+int8_t  wfVy = 0;
+uint8_t wfAnim = 0;
+uint8_t wfRingCD = 0;     // frames until ring respawns
+uint8_t wfPause = 0;      // brief hold before looping from the left
+bool    wfRingLive = true;
+bool    wfAir = false;
+
+const uint8_t MDAYS[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+const char MONS[] = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC";
+uint32_t tod = 43200;
+uint8_t mon = 1, dday = 1;
+uint32_t alarmTod = 25200;
+bool alarmOn = false;
+unsigned long lastSec = 0;
+
+void tick() {
+  if (++tod >= 86400UL) {
+    tod = 0;
+    if (++dday > MDAYS[mon - 1]) { dday = 1; if (++mon > 12) mon = 1; }
+  }
+  if (alarmOn && tod == alarmTod && (mode == VIEW || mode == GAME || mode == SPECIAL))
+    mode = RING;
+}
+
+void two(uint8_t v) { if (v < 10) u8g2.print('0'); u8g2.print(v); }
+void monthName(uint8_t m) {
+  for (uint8_t i = 0; i < 3; i++) u8g2.print(MONS[(m - 1) * 3 + i]);
+}
+
+void drawSplash() {
+  // Title screen shown when GAME button is pressed from watch mode
+  u8g2.drawXBMP(0, 0, TITLE_W, TITLE_H, titleBitmap);
+
+  if (splashFrame < 16) {
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(splashFrame * 8, 0, 128 - splashFrame * 8, 64);
+    u8g2.setDrawColor(1);
+  }
+
+  if (splashFrame > 18 && ((splashFrame / 8) & 1)) {
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(10, 54, 108, 10);
+    u8g2.setDrawColor(1);
+    u8g2.drawFrame(10, 54, 108, 10);
+    u8g2.setFont(u8g2_font_6x10_tr);
+    u8g2.setCursor(16, 62);
+    u8g2.print(F("PUSH JUMP TO START"));
+  }
+}
+
+void stepWatchFace() {
+  const int16_t ground = 54;
+  const int16_t ringX = 118;
+  const int16_t ringY = 20;
+  wfAnim++;
+
+  if (wfRingCD) {
+    wfRingCD--;
+    if (!wfRingCD) wfRingLive = true;
+  }
+
+  // Pause off the left before the next lap
+  if (wfPause) { wfPause--; return; }
+
+  if (!wfAir) {
+    wfX += 2;
+    if (wfRingLive && wfX >= 100 && wfX <= 106) {
+      wfAir = true;
+      wfVy = -8;  // high enough to reach the clock-side ring
+    }
+  } else {
+    // Keep sprite fully clear of the right edge (12px wide, center=wfX)
+    if (wfX < 114) wfX += 2;
+    wfY += wfVy;
+    wfVy += 1;
+    int16_t by = wfY - 6;
+    if (wfRingLive && abs(wfX - ringX) < 14 && abs(by - ringY) < 12) {
+      wfRingLive = false;
+      wfRingCD = 100;
+      beep(1400, 40);
+    }
+    if (wfY >= ground) {
+      wfY = ground;
+      wfVy = 0;
+      wfAir = false;
+    }
+  }
+
+  // After the jump, leave before the sprite can kiss column 128 (wraps to col 0-2)
+  if (!wfAir && wfX > 118) {
+    wfX = -16;
+    wfY = ground;
+    wfVy = 0;
+    wfPause = 90;
+  }
+}
+
+void drawView() {
+  u8g2.setDrawColor(1);
+  for (uint8_t i = 0; i < 128; i += 8) hLineSafe(i, 56, 4);
+
+  // Left deco / center time / right ring — sized so they don't collide
+  drawSunflower(10, 54);
+
+  u8g2.setFont(u8g2_font_logisoso24_tn);
+  u8g2.setCursor(30, 36); two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60);
+
+  if (wfRingLive) drawRingGlyph(118, 20);
+  else if ((wfRingCD > 70) && ((wfAnim >> 1) & 1)) {
+    plot(118, 18); plot(116, 20); plot(120, 20); plot(118, 22);
+  }
+
+  drawHogAt(wfX, wfY, wfAir, true, wfAnim, !wfAir);
+
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(2, 63); monthName(mon); u8g2.print(' '); two(dday);
+  u8g2.setCursor(100, 63); two(tod % 60);
+  if (alarmOn) {
+    u8g2.setCursor(40, 9); u8g2.print(F("ALM "));
+    two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60);
+  }
+}
+
+uint8_t setPage = 0, setField = 0;
+void adjust(int8_t d) {
+  if (setPage == 0) {
+    uint8_t h = tod / 3600, m = (tod / 60) % 60, s = tod % 60;
+    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
+    tod = h * 3600UL + m * 60UL + s;
+  } else if (setPage == 1) {
+    if (setField == 0) mon = (mon - 1 + d + 12) % 12 + 1;
+    uint8_t dim = MDAYS[mon - 1];
+    if (dday > dim) dday = dim;
+    if (setField == 1) dday = (dday - 1 + d + dim) % dim + 1;
+  } else {
+    if (setField == 2) { alarmOn = !alarmOn; return; }
+    uint8_t h = alarmTod / 3600, m = (alarmTod / 60) % 60;
+    if (setField == 0) h = (h + d + 24) % 24; else m = (m + d + 60) % 60;
+    alarmTod = h * 3600UL + m * 60UL;
+  }
+}
+void setLoop(uint8_t e) {
+  if (e & B_MODE) { setPage++; setField = 0; if (setPage > 2) mode = VIEW; return; }
+  if (e & B_LEFT) adjust(-1);
+  if (e & B_RIGHT) adjust(1);
+  if (e & B_MID) {
+    setField++;
+    if (setField >= ((setPage == 2) ? 3 : 2)) { setField = 0; mode = VIEW; }
+  }
+}
+void drawSet() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(setPage == 2 ? 40 : 30, 12);
+  u8g2.print(setPage == 0 ? F("SET TIME") : setPage == 1 ? F("SET DATE") : F("ALARM"));
+  u8g2.setFont(u8g2_font_logisoso20_tn);
+  u8g2.setCursor(20, 40);
+  if (setPage == 0) { two(tod / 3600); u8g2.print(':'); two((tod / 60) % 60); }
+  else if (setPage == 1) { monthName(mon); u8g2.print(' '); two(dday); }
+  else { two(alarmTod / 3600); u8g2.print(':'); two((alarmTod / 60) % 60); }
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(0, 54); u8g2.print(F("L/R change"));
+  u8g2.setCursor(0, 63);
+  if (setPage == 2 && setField == 2) { u8g2.print(F("ALARM ")); u8g2.print(alarmOn ? F("ON") : F("OFF")); }
+  else if (setPage == 1) u8g2.print(setField ? F("DAY") : F("MONTH"));
+  else u8g2.print(setField ? F("MINUTE") : F("HOUR"));
+  u8g2.setCursor(72, 63); u8g2.print(F("MID next"));
+}
+
+void ringLoop() {
+  static bool on = false;
+  bool want = (millis() % 1000) < 300;
+  if (want != on) { on = want; if (on) tone(P_BUZ, 1200); else noTone(P_BUZ); }
+}
+void drawRing() {
+  if ((millis() / 400) & 1) {
+    u8g2.setFont(u8g2_font_ncenB14_tr);
+    u8g2.setCursor(18, 30); u8g2.print(F("WAKE UP!"));
+  }
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(18, 50); u8g2.print(F("PRESS ANY BUTTON"));
+}
+
+// ===================== GAME =====================
+// kinds: 0 spike 1 ring 2 crab 3 spring 4 bee
+//        5 deco (state: 0 sun 1 palm 2 pipe 3 neon 4 gear)
+//        6 goal 7 wall 8 flame/chem trap 9 bumper 10 saw
+struct Obj { int16_t x, y, home; uint8_t kind, state, timer; int8_t vx; bool live; };
+struct Plat { int16_t x, y, w; bool live; };
+struct Shot { int16_t x, y; int8_t vx, vy; bool live; };
+struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
+
+// Whole act stays resident — no scroll-despawn (draw/AI cull only)
+Obj objs[48];
+Plat plats[24];
+Shot shots[6];
+Scatter scat[3];
+const uint8_t SCATTER_LIFE = 90;
+const uint8_t SCATTER_GRACE = 30;
+int16_t ballWX, ballWY;
+uint8_t gStrip[128];
+
+const int16_t ACT1_LEN[4] = {1200, 1300, 1400, 1400};  // slightly shorter = fewer objects
+const int16_t ACT2_LEN[4] = {380, 400, 420, 420};
+
+// Deterministic layout hash (no random() in level gen)
+uint8_t h8(uint16_t n) {
+  n = (uint16_t)(n ^ (n << 7));
+  n = (uint16_t)(n ^ (n >> 5));
+  n = (uint16_t)(n ^ (n << 3));
+  return (uint8_t)n;
+}
+
+// Fixed-point physics (1/256 px), 60Hz steps.
+// Watch-tuned: snappy accel, firmer coast (less slippery), hard skid ≈11× accel.
+static const fx FX_ONE      = 256;
+static const fx ACCEL       = 30;      // ~0.117 — snappy launch
+static const fx FRICTION    = 56;      // firmer coast than accel (watch grip)
+static const fx BRAKE       = 330;     // ~11× accel — deliberate skid
+static const fx TOP_SPD     = 1536;    // 6 px/frame
+static const fx START_KICK  = 128;     // 0.5 — immediate bite from standstill
+static const fx AIR_ACCEL   = 18;      // air steer so jumps feel controllable
+static const fx JUMP_SPD    = 475;     // 6.5 × (64/224) ≈ 1.86
+static const fx GRAVITY     = 16;      // 0.21875 × (64/224) = 0.0625
+static const fx ROLL_FRIC   = 8;
+static const fx MAX_FALL    = 1170;
+static const fx SLOPE_RUN   = 24;
+static const fx SLOPE_ROLL  = 60;      // ~2.5× run
+static const fx LOOP_ENTER  = 1024;    // ≥4 px/frame to commit to the loop
+
+fx fpx, fpy, fvx, fvy;
+int16_t px, py, pvx, pvy, cam, camY;   // camY unlocks tall loops
+int16_t actEnd, genAt;
+uint16_t rings, score;
+uint8_t lives, invul, intro, animFrame, menuSel;
+uint8_t zone, act;          // zone 0..3, act 0=Act1 1=Act2
+uint8_t emeralds, clearT;
+uint8_t lastTapDir;         // 1=L 2=R
+unsigned long lastTapMs;
+bool onGround, rolling, faceRight, groundRoll, jumpCut;
+bool bossOn;
+
+struct LoopTrack { int16_t cx, cy, r; bool live; };
+LoopTrack loopTrack;
+bool inLoop;
+float loopAng;       // radians; 0=right, π/2=bottom, π=left, 3π/2=top (y-down)
+fx loopGspd;         // signed speed along +angle tangent (carry / gravity / input)
+float loopTravel;    // progress in entry direction only (slides back reduce it)
+float loopSense;     // −1 left entry (far/right wall first), +1 right entry
+bool loopReadyExit;  // true only after a full loop, never after a fall-back
+uint8_t bossHP, bossCool, bossPhase;
+int16_t eggX, eggY, ballAngle;   // Egg Wrecker (screen/arena space)
+int8_t eggDir;
+int16_t arenaOrigin;             // world X where boss arena starts
+
+// Special stage
+uint8_t spRings, spGot;
+uint16_t spTimer;
+int16_t spEX, spEY;
+
+const int8_t HILL[16] = {6,8,10,12,12,12,10,8,6,4,2,0,0,0,2,4};
+int16_t groundAt(int32_t wx) {
+  if (wx < 0) wx = 0;
+  // Boss arena: flat ground
+  if (bossOn && wx >= arenaOrigin) return 52;
+  // Flatten a long runway into / under the loop (solid floor — no pits)
+  if (loopTrack.live) {
+    int16_t floorY = loopTrack.cy + loopTrack.r;
+    int16_t x0 = loopTrack.cx - loopTrack.r - 100;
+    int16_t x1 = loopTrack.cx + loopTrack.r + 48;
+    if (wx >= x0 && wx <= x1) return floorY;
+  }
+  uint8_t i = ((uint32_t)wx >> 5) & 15;
+  uint8_t f = (uint32_t)wx & 31;
+  int16_t a = HILL[i], b = HILL[(i + 1) & 15];
+  // Zone terrain flavor
+  int16_t base = 54 - (a + (b - a) * (int16_t)f / 32);
+  if (zone == 1) base = 51 + ((a + b) / 10);          // Chemical Plant: flatter slabs
+  if (zone == 2) base = 52 - ((a + b) / 6);            // Casino: gentle bowls
+  if (zone == 3) base -= (i & 1) + (f > 20 ? 1 : 0);   // Scrap Brain: choppy
+  return base;
+}
+
+int16_t sx(int16_t wx) { return wx - cam; }
+int16_t sy(int16_t wy) { return wy - camY; }
+
+bool onScreen(int16_t wx, int16_t margin = 16) {
+  int16_t s = wx - cam;
+  return s >= -margin && s <= 128 + margin;
+}
+
+static inline fx I2F(int16_t v) { return (fx)v * FX_ONE; }
+static inline int16_t F2I(fx v) {
+  return (int16_t)((v >= 0) ? ((v + 128) >> 8) : -(((-v) + 128) >> 8));
+}
+void syncPlayerInts() {
+  px = F2I(fpx); py = F2I(fpy);
+  pvx = F2I(fvx); pvy = F2I(fvy);
+}
+void setPlayerPos(int16_t x, int16_t y) {
+  fpx = I2F(x); fpy = I2F(y); syncPlayerInts();
+}
+void setPlayerVel(fx vx, fx vy) {
+  fvx = vx; fvy = vy; syncPlayerInts();
+}
+
+// Approx slope: + = downhill to the right (ground Y grows downward)
+int16_t slopeAt(int16_t wx) {
+  return groundAt(wx + 4) - groundAt(wx - 4);
+}
+
+void placeGreenHillLoop(int16_t x) {
+  // Diameter > screen height — camera must scroll vertically through it
+  loopTrack.r = 38;
+  int16_t g = 52;
+  loopTrack.cx = x + loopTrack.r;
+  loopTrack.cy = g - loopTrack.r;   // bottom of track on the floor
+  loopTrack.live = true;
+  // Spring at the START of the runway only — then clear flat into the mouth
+  addObj(x - 100, g - 4, 3);
+  addObj(x - 70, g - 16, 1);
+  addObj(x - 50, g - 18, 1);
+}
+
+// Strip hazards from the loop approach + ≥100px after the exit
+void clearLoopRunway() {
+  if (!loopTrack.live) return;
+  int16_t L = loopTrack.cx - loopTrack.r - 110;
+  int16_t R = loopTrack.cx + loopTrack.r + 100;
+  for (auto &o : objs) {
+    if (!o.live) continue;
+    if (o.x < L || o.x > R) continue;
+    if (o.kind == 1 || o.kind == 5 || o.kind == 6) continue;  // rings / deco / goal
+    // Keep the run-up spring if it's near the start of the clear zone
+    if (o.kind == 3 && o.x < L + 40) continue;
+    o.live = false;
+  }
+  for (auto &p : plats) {
+    if (!p.live) continue;
+    if (p.x + p.w < L || p.x > R) continue;
+    p.live = false;
+  }
+}
+
+// Chemical Plant signature: two wavy crossing tube runs
+void placeChemWavyCross(int16_t x0) {
+  static const int8_t A[7] = { 0, -5, -10, -14, -10, -5, 0 };
+  static const int8_t B[7] = { -14, -10, -5, 0, -5, -10, -14 };
+  int16_t g = groundAt(x0 + 40);
+  for (uint8_t i = 0; i < 7; i++) {
+    int16_t x = x0 + (int16_t)i * 16;
+    addPlat(x, g + A[i], 18);
+    addPlat(x + 6, g + B[i], 18);
+    if ((i & 1) == 0) addDeco(x + 2, 2);
+  }
+  addObj(x0 + 48, g + A[3] - 6, 1);
+  addObj(x0 + 64, g + B[4] - 6, 1);
+  addObj(x0 + 30, 0, 8);
+}
+
+bool beesShoot() { return zone >= 2; }  // Casino Night+
+
+const __FlashStringHelper* zoneName() {
+  switch (zone) {
+    case 0: return F("GREEN HILL");
+    case 1: return F("CHEM PLANT");
+    case 2: return F("CASINO NIGHT");
+    default: return F("SCRAP BRAIN");
+  }
+}
+
+bool addObj(int16_t x, int16_t y, uint8_t kind) {
+  for (auto &o : objs) {
+    if (o.live) continue;
+    o.live = true;
+    o.x = x; o.y = y; o.home = x;
+    o.kind = kind;
+    o.state = 0; o.timer = 0;
+    o.vx = (kind == 4 || kind == 2) ? -1 : 0;
+    if (kind == 4) o.timer = 30 + (h8((uint16_t)x) & 31);
+    if (kind == 5 || kind == 8) o.y = groundAt(x);
+    if (kind == 8) { o.state = 0; o.timer = 20 + (h8((uint16_t)(x + 3)) & 31); }
+    if (kind == 9) { o.y = y; o.timer = 0; }
+    if (kind == 10) o.timer = 0;
+    return true;
+  }
+  return false;
+}
+
+void addDeco(int16_t x, uint8_t decoType) {
+  for (auto &o : objs) {
+    if (o.live) continue;
+    o.live = true;
+    o.x = x; o.home = x; o.y = groundAt(x);
+    o.kind = 5; o.state = decoType; o.timer = 0; o.vx = 0;
+    return;
+  }
+}
+
+void addWall(int16_t x, uint8_t h) {
+  int16_t g = groundAt(x);
+  for (auto &o : objs) {
+    if (o.live) continue;
+    o.live = true; o.x = x; o.y = g; o.kind = 7;
+    o.state = h; o.timer = 0; o.vx = 0;
+    return;
+  }
+}
+bool addPlat(int16_t x, int16_t y, int16_t w) {
+  for (auto &p : plats) {
+    if (p.live) continue;
+    p.live = true; p.x = x; p.y = y; p.w = w;
+    return true;
+  }
+  return false;
+}
+void addShot(int16_t x, int16_t y, int8_t vx, int8_t vy) {
+  for (auto &s : shots) {
+    if (s.live) continue;
+    s.live = true; s.x = x; s.y = y; s.vx = vx; s.vy = vy;
+    return;
+  }
+}
+
+void clearWorld() {
+  for (auto &o : objs) o.live = false;
+  for (auto &p : plats) p.live = false;
+  for (auto &s : shots) s.live = false;
+  for (auto &r : scat) r.live = false;
+  loopTrack.live = false;
+  inLoop = false;
+  loopAng = 0;
+  loopGspd = 0;
+  loopTravel = 0;
+  loopSense = 0;
+  loopReadyExit = false;
+}
+
+void spillRings() {
+  // At most 3 rings fly out; flung hard so you actually lose them
+  static const int8_t XV[3] = { -5, 5, -3 };
+  static const int8_t YV[3] = { -7, -7, -9 };
+  for (uint8_t i = 0; i < 3; i++) {
+    scat[i].live = true;
+    scat[i].x = px + (int16_t)(i - 1) * 12;
+    scat[i].y = py - 4;
+    scat[i].vx = XV[i];
+    scat[i].vy = YV[i];
+    scat[i].life = SCATTER_LIFE;
+  }
+  beep(400, 100);
+}
+
+void updateScatter() {
+  for (auto &r : scat) {
+    if (!r.live) continue;
+    if (r.life) r.life--;
+    else { r.live = false; continue; }
+
+    r.vy++;
+    if (r.vy > 6) r.vy = 6;
+    r.x += r.vx;
+    r.y += r.vy;
+
+    int16_t g = groundAt(r.x) - 3;
+    if (r.y >= g && r.vy > 0) {
+      r.y = g;
+      r.vy = (int8_t)(-(r.vy * 2) / 3);
+      if (r.vy > -2) r.vy = -2;
+      if (r.vx > 1) r.vx--;
+      else if (r.vx < -1) r.vx++;
+    }
+    for (auto &p : plats) {
+      if (!p.live) continue;
+      if (r.x < p.x || r.x > p.x + p.w) continue;
+      if (r.vy > 0 && r.y >= p.y - 3 && r.y <= p.y + 4) {
+        r.y = p.y - 3;
+        r.vy = (int8_t)(-(r.vy * 2) / 3);
+        if (r.vy > -2) r.vy = -2;
+      }
+    }
+
+    // Grace period: spilled rings are not grab-able until they've flown out
+    if (r.life > SCATTER_LIFE - SCATTER_GRACE) continue;
+    if (abs(px - r.x) < 6 && abs(py - r.y) < 6) {
+      r.live = false;
+      rings++;
+      score += 10;
+      beep(1800, 22);
+    }
+  }
+}
+
+void cacheGroundStrip() {
+  for (uint8_t i = 0; i < 128; i++) {
+    int16_t g = sy(groundAt(cam + i));
+    // Store screen-Y; 255 = off-screen (drawn only if 0..63)
+    if (g < 0 || g > 63) gStrip[i] = 255;
+    else gStrip[i] = (uint8_t)g;
+  }
+}
+
+void hurt() {
+  if (invul) return;
+  if (rings) {
+    // Ring hit: spill rings, keep going
+    beep(200, 140);
+    rings = 0;
+    spillRings();
+    invul = 55;
+    setPlayerVel(faceRight ? I2F(-2) : I2F(2), I2F(-5));
+    onGround = false;
+    rolling = true;
+    groundRoll = false;
+    inLoop = false;
+    return;
+  }
+  // No rings = death: lose a life and restart this act from the beginning
+  if (lives) lives--;
+  if (!lives) {
+    mode = OVER;
+    beep(120, 400);
+    return;
+  }
+  beep(150, 350);
+  uint8_t z = zone, a = act;
+  startAct(z, a);          // rebuild stage; lives/score/emeralds kept
+  invul = 45;
+}
+
+// ---- Level chunk builders (zone-themed) ----
+// deco state: 0 sun 1 palm 2 pipe 3 neon 4 gear
+void placeZoneDeco(int16_t x) {
+  if (zone == 0) addDeco(x, h8((uint16_t)x) & 1);  // sunflower or palm
+  else if (zone == 1) addDeco(x, 2);
+  else if (zone == 2) addDeco(x, 3);
+  else addDeco(x, 4);
+}
+
+void spawnChunkAct1(int16_t x0) {
+  uint8_t style = (uint8_t)(((uint16_t)x0 / 140 + zone * 3 + act) & 7);
+  int16_t g = groundAt(x0 + 50);
+
+  if (zone == 2) { // Casino — denser bumpers, light deco
+    if (style < 4) {
+      addObj(x0 + 40, g - 18, 9);
+      addObj(x0 + 75, g - 26, 9);
+      addObj(x0 + 55, groundAt(x0 + 55) - 4, 3);
+      addObj(x0 + 50, g - 34, 1);
+      addObj(x0 + 65, g - 34, 1);
+      if ((style & 1) == 0) placeZoneDeco(x0 + 10);
+    } else {
+      addPlat(x0 + 25, g - 18, 22);
+      addObj(x0 + 36, g - 24, 9);
+      addObj(x0 + 70, g - 16, 9);
+      addObj(x0 + 50, groundAt(x0 + 50) - 4, 3);
+    }
+    return;
+  }
+
+  if (zone == 1) { // Chemical
+    if (style < 3) {
+      addObj(x0 + 45, 0, 8);
+      addObj(x0 + 70, 0, 0);
+      addPlat(x0 + 50, g - 20, 32);
+      addObj(x0 + 60, g - 26, 1);
+      if (style == 0) placeZoneDeco(x0 + 15);
+    } else if (style < 5) {
+      addObj(x0 + 30, 0, 0);
+      addObj(x0 + 50, 0, 8);
+      addPlat(x0 + 20, g - 18, 40);
+      addWall(x0 + 100, 14);
+    } else {
+      addObj(x0 + 35, groundAt(x0 + 35) - 4, 3);
+      addPlat(x0 + 55, g - 24, 28);
+      addObj(x0 + 70, 0, 8);
+      addObj(x0 + 95, groundAt(x0 + 95) - 5, 2);
+    }
+    return;
+  }
+
+  if (zone == 3) { // Scrap Brain
+    if (style < 4) {
+      addObj(x0 + 40, g - 10, 10);
+      addPlat(x0 + 55, g - 22, 26);
+      addObj(x0 + 70, g - 28, 1);
+      if (style == 0) placeZoneDeco(x0 + 8);
+    } else {
+      addObj(x0 + 30, 0, 0);
+      addObj(x0 + 55, g - 12, 10);
+      addObj(x0 + 80, groundAt(x0 + 80) - 4, 3);
+      addPlat(x0 + 95, g - 26, 28);
+    }
+    return;
+  }
+
+  // Green Hill — lighter object load
+  switch (style & 3) {
+    case 0:
+      addPlat(x0 + 20, g - 16, 24);
+      addPlat(x0 + 60, g - 28, 24);
+      addObj(x0 + 35, groundAt(x0 + 35) - 4, 3);
+      addObj(x0 + 70, g - 34, 1);
+      placeZoneDeco(x0 + 8);
+      break;
+    case 1:
+      addObj(x0 + 35, 0, 0);
+      addObj(x0 + 55, 0, 0);
+      addPlat(x0 + 25, g - 18, 36);
+      addObj(x0 + 80, groundAt(x0 + 80) - 5, 2);
+      placeZoneDeco(x0 + 100);
+      break;
+    case 2:
+      addObj(x0 + 25, g - 12, 1);
+      addObj(x0 + 40, g - 18, 1);
+      addObj(x0 + 55, g - 12, 1);
+      addPlat(x0 + 70, g - 22, 28);
+      placeZoneDeco(x0 + 10);
+      break;
+    default:
+      addPlat(x0 + 30, g - 18, 26);
+      addObj(x0 + 45, groundAt(x0 + 45) - 4, 3);
+      addObj(x0 + 90, 0, 0);
+      placeZoneDeco(x0 + 60);
+      break;
+  }
+}
+
+void spawnChunkAct2(int16_t x0) {
+  int16_t g = groundAt(x0 + 40);
+  uint8_t style = h8((uint16_t)(x0 + zone * 17)) & 1;
+  if (zone == 2) {
+    addObj(x0 + 40, g - 16, 9);
+    addObj(x0 + 70, g - 22, 9);
+    addObj(x0 + 25, groundAt(x0 + 25) - 4, 3);
+  } else if (zone == 1) {
+    addObj(x0 + 40, 0, 8);
+    addObj(x0 + 65, 0, 0);
+    addPlat(x0 + 25, g - 16, 28);
+  } else if (zone == 3) {
+    addObj(x0 + 45, g - 10, 10);
+    addPlat(x0 + 70, g - 20, 26);
+  } else {
+    addPlat(x0 + 25, g - 16, 26);
+    addObj(x0 + 50, 0, 0);
+    if (style) placeZoneDeco(x0 + 10);
+  }
+}
+
+void placeGoal(int16_t x) { addObj(x, groundAt(x) - 20, 6); }
+
+void announce() {
+  intro = 45;
+  beep(600 + zone * 80 + act * 40, 70);
+}
+
+void startEggWrecker() {
+  bossOn = true;
+  bossHP = 8;
+  bossCool = 0;
+  bossPhase = 0;
+  arenaOrigin = px + 20;
+  setPlayerPos(arenaOrigin + 30, groundAt(arenaOrigin + 30) - 5);
+  setPlayerVel(0, 0);
+  inLoop = false;
+  cam = arenaOrigin;
+  camY = 0;
+  clearWorld();
+  // two floating platforms (world)
+  addPlat(arenaOrigin + 28, 34, 26);
+  addPlat(arenaOrigin + 78, 34, 26);
+  eggX = arenaOrigin + 100;
+  eggY = 16;
+  eggDir = -1;
+  ballAngle = 0;
+  intro = 40;
+  beep(280, 250);
+}
+
+void buildAct() {
+  // Fixed deterministic layout for the whole act — stays loaded while you explore
+  clearWorld();
+  // Place loop first so runway clearing knows the keep-out zone
+  if (zone == 0 && act == 0) placeGreenHillLoop(320);
+  if (zone == 1 && act == 0) placeChemWavyCross(36);
+  int16_t step = (act == 0) ? 140 : 110;
+  int16_t startX = (zone == 1 && act == 0) ? 160 : 40;
+  for (int16_t x = startX; x < actEnd - 50; x += step) {
+    if (act == 0) spawnChunkAct1(x);
+    else spawnChunkAct2(x);
+  }
+  if (zone == 0 && act == 0) clearLoopRunway();
+  placeGoal(actEnd);
+}
+
+void startAct(uint8_t z, uint8_t a) {
+  zone = z; act = a;
+  bossOn = false;
+  actEnd = (a == 0) ? ACT1_LEN[z] : ACT2_LEN[z];
+  cam = 0; camY = 0;
+  setPlayerPos(24, groundAt(24) - 5);
+  setPlayerVel(0, 0);
+  onGround = true; rolling = false; groundRoll = false; faceRight = true;
+  jumpCut = false; inLoop = false;
+  loopAng = 0; loopGspd = 0; loopTravel = 0; loopSense = 0; loopReadyExit = false;
+  invul = 0; animFrame = 0;
+  lastTapDir = 0; lastTapMs = 0;
+  genAt = actEnd;   // nothing left to stream
+  buildAct();
+  mode = GAME;
+  announce();
+}
+
+void startGame() {
+  randomSeed(micros());
+  rings = 0; score = 0; lives = 3; emeralds = 0;
+  startAct(0, 0);
+}
+
+void advanceAfterClear() {
+  // Chance for special stage (~28%, better with many rings)
+  uint8_t chance = 22 + (rings > 20 ? 10 : 0) + (rings > 40 ? 10 : 0);
+  if (emeralds < 7 && random(100) < chance) {
+    // enter special
+    mode = SPECIAL;
+    spRings = 0; spTimer = 200; // ~6.6s * frames? 200 frames ~6.6s at 30fps — bump
+    spTimer = 450; // ~15s
+    spGot = 0;
+    px = 64; py = 40; pvx = 0; pvy = 0;
+    spEX = 64; spEY = 28;
+    clearWorld();
+    for (uint8_t i = 0; i < 8; i++)
+      addObj(20 + i * 12, 18 + (i & 1) * 14, 1);
+    intro = 35;
+    beep(1200, 80);
+    return;
+  }
+  // next act / zone
+  if (act == 0) startAct(zone, 1);
+  else if (zone < 3) startAct(zone + 1, 0);
+  else { mode = WIN; beep(1000, 500); }
+}
+
+void beginClear() {
+  mode = CLEAR;
+  clearT = 55;
+  score += 100 + rings * 2;
+  beep(1400, 120);
+}
+
+// ---- physics helpers ----
+void resolveLanding(int16_t rad) {
+  syncPlayerInts();
+  int16_t g = groundAt(px);
+  int16_t feet = py + rad;
+  // Use actual fixed-point delta so fast falls can't tunnel past the surface
+  int16_t prevFeet = F2I(fpy - fvy) + rad;
+  bool landed = false;
+
+  // Solid world floor: if falling/standing and feet meet or penetrate ground, snap on top.
+  // (Old "must cross within 3px" test let high-speed steps fall straight through.)
+  if (fvy >= 0 && feet >= g) {
+    fpy = I2F(g - rad);
+    fvy = 0;
+    landed = true;
+  }
+
+  for (auto &p : plats) {
+    if (!p.live) continue;
+    if (px + (rad - 1) < p.x || px - (rad - 1) > p.x + p.w) continue;
+    // One-way platforms still require crossing from above
+    if (fvy >= 0 && prevFeet <= p.y + 2 && feet >= p.y) {
+      int16_t top = p.y - rad;
+      if (!landed || top < F2I(fpy)) {
+        fpy = I2F(top);
+        fvy = 0;
+        landed = true;
+      }
+    }
+  }
+
+  syncPlayerInts();
+  // Safety: never leave Sonic buried under terrain
+  g = groundAt(px);
+  if (py + rad > g) {
+    fpy = I2F(g - rad);
+    fvy = 0;
+    landed = true;
+    syncPlayerInts();
+  }
+
+  if (landed) {
+    onGround = true;
+    jumpCut = false;
+    if (!groundRoll) rolling = false;
+  } else {
+    onGround = false;
+  }
+}
+
+// U8g2 treats coords as unsigned — any negative x/y wraps to ~65535 and
+// paints garbage scanlines (worse while scrolling when objects exit left).
+void plot(int16_t x, int16_t y) {
+  // Signed clip — never hand U8g2 an out-of-range pixel (SH1106 will wrap it)
+  if (x < 0 || y < 0 || x >= 128 || y >= 64) return;
+  u8g2.drawPixel((u8g2_uint_t)x, (u8g2_uint_t)y);
+}
+
+void fillBoxClipped(int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (w <= 0 || h <= 0) return;
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x >= 128 || y >= 64) return;
+  if (x + w > 128) w = 128 - x;
+  if (y + h > 64) h = 64 - y;
+  if (w > 0 && h > 0) u8g2.drawBox((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)w, (u8g2_uint_t)h);
+}
+
+void hLineSafe(int16_t x, int16_t y, int16_t w) {
+  if (y < 0 || y >= 64 || w <= 0) return;
+  if (x < 0) { w += x; x = 0; }
+  if (x >= 128) return;
+  if (x + w > 128) w = 128 - x;
+  if (w > 0) u8g2.drawHLine((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)w);
+}
+
+void vLineSafe(int16_t x, int16_t y, int16_t h) {
+  if (x < 0 || x >= 128 || h <= 0) return;
+  if (y < 0) { h += y; y = 0; }
+  if (y >= 64) return;
+  if (y + h > 64) h = 64 - y;
+  if (h > 0) u8g2.drawVLine((u8g2_uint_t)x, (u8g2_uint_t)y, (u8g2_uint_t)h);
+}
+
+void lineSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+  int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  int16_t dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  int16_t err = dx + dy;
+  for (;;) {
+    plot(x0, y0);
+    if (x0 == x1 && y0 == y1) break;
+    int16_t e2 = err << 1;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+
+void discSafe(int16_t cx, int16_t cy, int16_t r) {
+  if (r < 0) return;
+  // Skip if fully off-screen
+  if (cx + r < 0 || cy + r < 0 || cx - r >= 128 || cy - r >= 64) return;
+  for (int16_t y = -r; y <= r; y++) {
+    for (int16_t x = -r; x <= r; x++) {
+      if (x * x + y * y <= r * r) plot(cx + x, cy + y);
+    }
+  }
+}
+
+void circleSafe(int16_t cx, int16_t cy, int16_t r) {
+  if (r < 0) return;
+  if (cx + r < 0 || cy + r < 0 || cx - r >= 128 || cy - r >= 64) return;
+  int16_t x = -r, y = 0, err = 2 - 2 * r;
+  do {
+    plot(cx - x, cy + y);
+    plot(cx - y, cy - x);
+    plot(cx + x, cy - y);
+    plot(cx + y, cy + x);
+    r = err;
+    if (r <= y) err += ++y * 2 + 1;
+    if (r > x || err > y) err += ++x * 2 + 1;
+  } while (x < 0);
+}
+
+void triSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  lineSafe(x0, y0, x1, y1);
+  lineSafe(x1, y1, x2, y2);
+  lineSafe(x2, y2, x0, y0);
+}
+
+// Filled triangle via bbox + barycentric (clip-safe)
+void fillTriSafe(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  int16_t minX = x0, maxX = x0, minY = y0, maxY = y0;
+  if (x1 < minX) minX = x1; if (x1 > maxX) maxX = x1;
+  if (x2 < minX) minX = x2; if (x2 > maxX) maxX = x2;
+  if (y1 < minY) minY = y1; if (y1 > maxY) maxY = y1;
+  if (y2 < minY) minY = y2; if (y2 > maxY) maxY = y2;
+  if (maxX < 0 || maxY < 0 || minX >= 128 || minY >= 64) return;
+  if (minX < 0) minX = 0; if (minY < 0) minY = 0;
+  if (maxX > 127) maxX = 127; if (maxY > 63) maxY = 63;
+  int16_t a = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  if (a == 0) { triSafe(x0, y0, x1, y1, x2, y2); return; }
+  for (int16_t y = minY; y <= maxY; y++) {
+    for (int16_t x = minX; x <= maxX; x++) {
+      int16_t w0 = (x1 - x) * (y2 - y) - (x2 - x) * (y1 - y);
+      int16_t w1 = (x2 - x) * (y0 - y) - (x0 - x) * (y2 - y);
+      int16_t w2 = (x0 - x) * (y1 - y) - (x1 - x) * (y0 - y);
+      if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+        plot(x, y);
+    }
+  }
+}
+
+void frameSafe(int16_t x, int16_t y, int16_t w, int16_t h) {
+  hLineSafe(x, y, w);
+  hLineSafe(x, y + h - 1, w);
+  vLineSafe(x, y, h);
+  vLineSafe(x + w - 1, y, h);
+}
+
+void stopRoll() {
+  groundRoll = false;
+  if (onGround) rolling = false;
+}
+
+// Push Sonic out of a solid AABB and kill inward speed (side bump)
+void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_t rad) {
+  if (py + rad <= top || py - rad >= bot) return;
+  if (px + rad <= left || px - rad >= right) return;
+  int16_t mid = (left + right) / 2;
+  if (px < mid) {
+    fpx = I2F(left - rad);
+    if (fvx > 0) fvx = I2F(-2);
+  } else {
+    fpx = I2F(right + rad);
+    if (fvx < 0) fvx = I2F(2);
+  }
+  faceRight = fvx >= 0;
+  if (groundRoll) stopRoll();
+  syncPlayerInts();
+}
+
+void applyWalls(int16_t rad) {
+  syncPlayerInts();
+  for (auto &o : objs) {
+    if (!o.live || o.kind != 7) continue;
+    int16_t h = o.state ? o.state : 14;
+    bumpFromSolid(o.x, o.x + 6, o.y - h, o.y, rad);
+  }
+  syncPlayerInts();
+}
+
+// True if spin-rolling or stomping down onto a target
+bool canBreakEnemy(int16_t ey) {
+  if (rolling || groundRoll) return true;
+  return (fvy > 0 && py < ey);
+}
+
+void handleDoubleTapRoll(uint8_t e) {
+  unsigned long now = millis();
+  bool startedRoll = false;
+
+  if (e & B_RIGHT) {
+    if (!groundRoll && lastTapDir == 2 && now - lastTapMs < 280 && onGround &&
+        (fvx > 0 || (held & B_RIGHT))) {
+      groundRoll = true;
+      rolling = true;
+      startedRoll = true;
+      if (fvx < I2F(3)) fvx = I2F(3);
+      syncPlayerInts();
+      beep(700, 25);
+    }
+    lastTapDir = 2;
+    lastTapMs = now;
+  }
+  if (e & B_LEFT) {
+    if (!groundRoll && lastTapDir == 1 && now - lastTapMs < 280 && onGround &&
+        (fvx < 0 || (held & B_LEFT))) {
+      groundRoll = true;
+      rolling = true;
+      startedRoll = true;
+      if (fvx > I2F(-3)) fvx = I2F(-3);
+      syncPlayerInts();
+      beep(700, 25);
+    }
+    lastTapDir = 1;
+    lastTapMs = now;
+  }
+
+  // Stay in spin until a later Left/Right tap (not the one that started it) or a wall
+  if (groundRoll && !startedRoll && (e & (B_LEFT | B_RIGHT))) stopRoll();
+
+  // Keep ball form while spin-rolling (through jumps / ledges too)
+  if (groundRoll) rolling = true;
+}
+
+// ---- Egg Wrecker ----
+void eggStep(int16_t rad) {
+  eggX += eggDir;
+  if (eggX < arenaOrigin + 30) eggDir = 1;
+  if (eggX > arenaOrigin + 110) eggDir = -1;
+  eggY = 14 + ((animFrame >> 4) & 1);
+
+  int16_t speed = 4 + zone;
+  ballAngle += speed;
+  if (ballAngle >= 360) ballAngle -= 360;
+  int16_t a = ballAngle;
+  int16_t swing = (a < 180) ? (-40 + (a * 80) / 180) : (40 - ((a - 180) * 80) / 180);
+  ballWX = eggX + swing;
+  ballWY = eggY + 22 + abs(swing) / 8;
+
+  if (bossCool) bossCool--;
+
+  // Touch Egg Mobile (flying craft): always bounce off; damage if spinning into it
+  if (abs(px - eggX) < 12 && abs(py - eggY) < 11) {
+    bool attack = rolling && bossCool == 0;
+    setPlayerVel((px < eggX) ? I2F(-4) : I2F(4),
+                 (py <= eggY + 2) ? I2F(5) : I2F(-5));
+    onGround = false;
+    rolling = true;
+    faceRight = fvx > 0;
+    if (attack) {
+      bossHP--;
+      bossCool = 28;
+      score += 100;
+      beep(1500, 100);
+      if (!bossHP) {
+        bossOn = false;
+        beginClear();
+        return;
+      }
+    } else if (bossCool == 0 && !invul) {
+      hurt();
+    }
+  }
+
+  // Wrecking ball — safe under / on platforms
+  bool underPlat = false;
+  for (auto &p : plats) {
+    if (!p.live) continue;
+    if (px + rad < p.x || px - rad > p.x + p.w) continue;
+    if (py + rad >= p.y - 2 && py < p.y + 8) underPlat = true;
+  }
+  if (!underPlat && !invul && abs(px - ballWX) < 7 && abs(py - ballWY) < 7) hurt();
+}
+
+void applyGroundControl() {
+  bool pinball = (zone == 2 && (rolling || abs(fvx) >= I2F(2)));
+  fx top = pinball ? I2F(5) : (groundRoll ? I2F(4) : TOP_SPD);
+  int16_t slope = onGround ? slopeAt(px) : 0;
+
+  if (groundRoll && onGround) {
+    // Holding forward adds no roll speed; slope does (2.5×)
+    fvx += (fx)slope * SLOPE_ROLL;
+    if (fvx > 0) { fvx -= ROLL_FRIC; if (fvx < 0) fvx = 0; }
+    else if (fvx < 0) { fvx += ROLL_FRIC; if (fvx > 0) fvx = 0; }
+  } else if (onGround) {
+    fvx += (fx)slope * SLOPE_RUN;
+    bool left = held & B_LEFT, right = held & B_RIGHT;
+    if (right && !left) {
+      if (fvx < 0) fvx += BRAKE;          // skid
+      else {
+        if (fvx == 0) fvx = START_KICK;  // leave standstill immediately
+        fvx += ACCEL;
+      }
+      faceRight = true;
+    } else if (left && !right) {
+      if (fvx > 0) fvx -= BRAKE;
+      else {
+        if (fvx == 0) fvx = -START_KICK;
+        fvx -= ACCEL;
+      }
+      faceRight = false;
+    } else {
+      // coast — same rate as accel
+      if (fvx > 0) { fvx -= FRICTION; if (fvx < 0) fvx = 0; }
+      else if (fvx < 0) { fvx += FRICTION; if (fvx > 0) fvx = 0; }
+    }
+  } else if (pinball) {
+    if (held & B_LEFT)  { fvx -= ACCEL; faceRight = false; }
+    if (held & B_RIGHT) { fvx += ACCEL; faceRight = true; }
+  } else {
+    // Air steer — classic Sonic still answers the D-pad off the ground
+    if (held & B_LEFT)  { fvx -= AIR_ACCEL; faceRight = false; }
+    if (held & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
+  }
+
+  if (fvx > top) fvx = top;
+  if (fvx < -top) fvx = -top;
+}
+
+// The loop is a solid gate: you cannot run/jump through it. The road curves
+// into the track; the only way past is completing the full inner loop.
+void collideLoopBarrier(int16_t rad) {
+  if (!loopTrack.live || inLoop || bossOn) return;
+
+  int16_t r = loopTrack.r;
+  int16_t cx = loopTrack.cx, cy = loopTrack.cy;
+  int16_t floorY = cy + r;
+  int16_t mouthL = cx - r, mouthR = cx + r;
+  int16_t dx = px - cx, dy = py - cy;
+  int32_t d2 = (int32_t)dx * dx + (int32_t)dy * dy;
+  int32_t rIn = (int32_t)(r - 7) * (r - 7);
+  int32_t rOut = (int32_t)(r + 6) * (r + 6);
+
+  // Solid road-block through the middle — mouth zones only lead INTO the loop
+  int16_t plugL = mouthL + 12;
+  int16_t plugR = mouthR - 12;
+  if (px + rad > plugL && px - rad < plugR && py + rad > floorY - 24) {
+    if (px < cx) {
+      fpx = I2F(plugL - rad);
+      if (fvx > 0) fvx = 0;
+    } else {
+      fpx = I2F(plugR + rad);
+      if (fvx < 0) fvx = 0;
+    }
+    if (groundRoll) stopRoll();
+    syncPlayerInts();
+  }
+
+  // Tube wall: push to the outside — no clipping through the ring
+  bool nearMouthL = (dy > r - 14) && (dx >= -r - 2) && (dx <= -r + 16);
+  bool nearMouthR = (dy > r - 14) && (dx <=  r + 2) && (dx >=  r - 16);
+  if (!nearMouthL && !nearMouthR && d2 >= rIn && d2 <= rOut) {
+    float len = sqrtf((float)d2);
+    if (len >= 1.0f) {
+      float scale = (float)(r + 7) / len;
+      fpx = I2F(cx + (int16_t)(dx * scale));
+      fpy = I2F(cy + (int16_t)(dy * scale));
+      fvx = (fx)(-fvx / 4);
+      if (fvy < 0) fvy = 0;
+      syncPlayerInts();
+    }
+  }
+
+  // Hollow interior after a failed run: cannot sneak out the far side
+  if (d2 < rIn) {
+    if (px > cx && fvx > 0) { fpx = I2F(cx - rad); fvx = 0; syncPlayerInts(); }
+    if (px < cx && fvx < 0) { fpx = I2F(cx + rad); fvx = 0; syncPlayerInts(); }
+  }
+}
+
+// Inner-track radius (feet against inside face of the ring)
+static float loopTrackR(int16_t rad) {
+  float R = (float)loopTrack.r - (float)rad - 3.0f;
+  return (R < 12.0f) ? 12.0f : R;
+}
+
+// Unit tangent for +angle (θ increasing): (-sin, cos) in y-down space
+static void loopTangent(float th, float *tx, float *ty) {
+  *tx = -sinf(th);
+  *ty =  cosf(th);
+}
+
+void loopDetach(int16_t rad) {
+  float tx, ty;
+  loopTangent(loopAng, &tx, &ty);
+  float sp = (float)loopGspd / (float)FX_ONE;
+  fvx = (fx)(sp * tx * (float)FX_ONE);
+  fvy = (fx)(sp * ty * (float)FX_ONE);
+  // Nudge slightly off the track into the hollow so we don't instantly re-stick
+  float R = loopTrackR(rad) - 2.0f;
+  fpx = I2F(loopTrack.cx + (int16_t)(R * cosf(loopAng)));
+  fpy = I2F(loopTrack.cy + (int16_t)(R * sinf(loopAng)));
+  inLoop = false;
+  loopReadyExit = false;
+  onGround = false;
+  rolling = true;
+  groundRoll = false;
+  syncPlayerInts();
+}
+
+void tryEnterLoop(int16_t rad) {
+  if (inLoop || !loopTrack.live || bossOn) return;
+  int16_t floorY = loopTrack.cy + loopTrack.r;
+  if (py + rad < floorY - 10 || py + rad > floorY + 8) return;
+  if (!onGround && py + rad < floorY - 4) return;
+
+  int16_t mouthL = loopTrack.cx - loopTrack.r;
+  int16_t mouthR = loopTrack.cx + loopTrack.r;
+
+  // Left approach → up the RIGHT (far) wall, left across top, down left, exit right
+  if (fvx >= LOOP_ENTER && px >= mouthL - 8 && px <= mouthL + 14) {
+    inLoop = true;
+    loopAng = (float)HALF_PI - 0.20f;          // bottom, slightly toward right
+    loopGspd = -fvx;                           // −θ = up the right side
+    if (loopGspd > -LOOP_ENTER) loopGspd = -LOOP_ENTER;
+    loopSense = -1.0f;
+    loopTravel = 0;
+    loopReadyExit = false;
+    onGround = false;
+    rolling = true;
+    groundRoll = true;
+    beep(950, 35);
+    return;
+  }
+  // Right approach (mirror) → up the LEFT wall, right across top, down right, exit left
+  if (fvx <= -LOOP_ENTER && px <= mouthR + 8 && px >= mouthR - 14) {
+    inLoop = true;
+    loopAng = (float)HALF_PI + 0.20f;          // bottom, slightly toward left
+    loopGspd = -fvx;                           // fvx negative → +θ
+    if (loopGspd < LOOP_ENTER) loopGspd = LOOP_ENTER;
+    loopSense = 1.0f;
+    loopTravel = 0;
+    loopReadyExit = false;
+    onGround = false;
+    rolling = true;
+    groundRoll = true;
+    beep(950, 35);
+  }
+}
+
+void stepLoop(int16_t rad) {
+  float R = loopTrackR(rad);
+  float th = loopAng;
+  float tx, ty;
+  loopTangent(th, &tx, &ty);
+
+  // Gravity along the track (pulls +Y). a = G · tangent_+θ = G * ty
+  loopGspd += (fx)((float)GRAVITY * ty);
+
+  // Forward = the direction you ENTERED (hold right on a left→right run keeps
+  // loop momentum even while the sprite moves left across the ceiling).
+  // Opposite only brakes through zero — never snaps onto the mirror path.
+  fx along = (fx)(loopSense * (float)ACCEL);  // left entry: sense=-1 → along=-ACCEL
+  if ((loopSense < 0 && (held & B_RIGHT)) || (loopSense > 0 && (held & B_LEFT)))
+    loopGspd += along;          // accelerate further along the loop
+  if ((loopSense < 0 && (held & B_LEFT)) || (loopSense > 0 && (held & B_RIGHT)))
+    loopGspd -= along;          // brake / reverse only through zero
+  if (loopGspd > TOP_SPD) loopGspd = TOP_SPD;
+  if (loopGspd < -TOP_SPD) loopGspd = -TOP_SPD;
+
+  // Advance on INNER surface
+  float ds = (float)loopGspd / (float)FX_ONE;
+  float dAng = ds / R;
+  loopAng += dAng;
+  // Progress only in the entry direction; sliding back unwinds progress
+  loopTravel += dAng * loopSense;
+  if (loopTravel < 0) loopTravel = 0;
+
+  while (loopAng < 0) loopAng += (float)TWO_PI;
+  while (loopAng >= (float)TWO_PI) loopAng -= (float)TWO_PI;
+
+  th = loopAng;
+  fpx = I2F(loopTrack.cx + (int16_t)(R * cosf(th)));
+  fpy = I2F(loopTrack.cy + (int16_t)(R * sinf(th)));
+  fvy = 0;
+  loopTangent(th, &tx, &ty);
+  fvx = (fx)(ds * tx * (float)FX_ONE);
+  syncPlayerInts();
+
+  // Full loop in the entry direction → may take through-exit
+  if (loopTravel >= (float)TWO_PI - 0.40f) loopReadyExit = true;
+
+  // Detach on ceiling / high walls if too slow — fall with carried velocity
+  fx absSpd = loopGspd >= 0 ? loopGspd : -loopGspd;
+  bool onCeiling = sinf(th) < -0.20f;                 // upper half
+  bool onHighWall = fabsf(cosf(th)) > 0.70f && sinf(th) < 0.25f;
+  if ((onCeiling || onHighWall) && absSpd < (LOOP_ENTER * 3) / 4) {
+    loopDetach(rad);
+    return;
+  }
+
+  // Through-exit ONLY after completing the loop, when back near the bottom
+  bool nearBottom = fabsf(th - (float)HALF_PI) < 0.60f;
+  if (loopReadyExit && nearBottom) {
+    int16_t floorY = loopTrack.cy + loopTrack.r;
+    fx outSpd = absSpd;
+    if (outSpd < TOP_SPD / 2) outSpd = TOP_SPD / 2;
+    if (loopSense < 0) {
+      setPlayerPos(loopTrack.cx + loopTrack.r + 6, floorY - rad);
+      setPlayerVel(outSpd, 0);
+    } else {
+      setPlayerPos(loopTrack.cx - loopTrack.r - 6, floorY - rad);
+      setPlayerVel(-outSpd, 0);
+    }
+    inLoop = false;
+    loopReadyExit = false;
+    onGround = false;
+    rolling = true;
+    groundRoll = true;
+    faceRight = fvx > 0;
+  }
+}
+
+void physicsStep(uint8_t e) {
+  int16_t rad = rolling ? 4 : 5;
+
+  if ((e & B_MID) && onGround && !inLoop) {
+    fvy = -JUMP_SPD;
+    onGround = false;
+    rolling = true;          // jump keeps horizontal momentum
+    jumpCut = false;
+    beep(900, 30);
+  }
+  // Variable jump: release early cuts the rise
+  if (!onGround && !jumpCut && !(held & B_MID) && fvy < 0) {
+    fvy >>= 1;
+    jumpCut = true;
+  }
+  if (!onGround || groundRoll) rolling = true;
+
+  if (inLoop) {
+    stepLoop(rad);
+    return;
+  }
+
+  tryEnterLoop(rad);
+  if (inLoop) { stepLoop(rad); return; }
+
+  applyGroundControl();
+
+  if (!onGround) {
+    fvy += GRAVITY;
+    if (fvy > MAX_FALL) fvy = MAX_FALL;
+  }
+
+  fpx += fvx;
+  fpy += fvy;
+  syncPlayerInts();
+
+  int16_t minX = bossOn ? arenaOrigin : 8;
+  if (px < minX) {
+    fpx = I2F(minX); fvx = 0;
+    if (groundRoll) stopRoll();
+    syncPlayerInts();
+  }
+  // Allow climbing above y=0 for tall loops; only clamp extreme escape
+  if (py < -90) {
+    fpy = I2F(-90);
+    if (fvy < 0) fvy = 0;
+    syncPlayerInts();
+  }
+
+  collideLoopBarrier(rad);
+  applyWalls(rad);
+  resolveLanding(rad);
+  // Final floor clamp after shell/wall pushes
+  {
+    int16_t g = groundAt(px);
+    if (py + rad > g) {
+      fpy = I2F(g - rad);
+      fvy = 0;
+      onGround = true;
+      syncPlayerInts();
+    }
+  }
+}
+
+void gameStep(uint8_t e) {
+  if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
+  if (e & B_MODE) { mode = VIEW; return; }
+
+  if (invul) invul--;
+  if (intro) intro--;
+  animFrame++;
+
+  handleDoubleTapRoll(e);
+
+  // Two 60Hz physics steps per ~30 FPS display frame
+  physicsStep(e);
+  physicsStep(0);
+
+  syncPlayerInts();
+  int16_t rad = rolling ? 4 : 5;
+
+  if (bossOn) {
+    cam = arenaOrigin;
+    camY = 0;
+  } else {
+    int16_t psx = px - cam;
+    if (psx < 32) cam = px - 32;
+    if (psx > 96) cam = px - 96;
+    if (cam < 0) cam = 0;
+    // Vertical follow — keeps Sonic framed through tall loops
+    int16_t psy = py - camY;
+    if (psy < 18) camY = py - 18;
+    if (psy > 46) camY = py - 46;
+  }
+
+  if (!bossOn && px >= actEnd - 8) {
+    if (act == 0) beginClear();
+    else startEggWrecker();
+    return;
+  }
+
+  // Update only nearby objects (level stays fully loaded)
+  for (auto &o : objs) {
+    if (!o.live) continue;
+    if (!onScreen(o.x, 40)) continue;
+
+    if (o.kind == 5 || o.kind == 8) o.y = groundAt(o.x);
+
+    if (o.kind == 2) { // crab leashed to home
+      o.x += o.vx;
+      if (o.x < o.home - 18 || o.x > o.home + 18) o.vx = -o.vx;
+      o.y = groundAt(o.x) - 5;
+    }
+    if (o.kind == 4) { // bee patrol near home
+      if (o.state == 0) {
+        o.x += o.vx;
+        if (o.x < o.home - 30 || o.x > o.home + 30) o.vx = -o.vx;
+        if (o.timer) o.timer--; else { o.state = 1; o.timer = 26; }
+      } else if (o.state == 1) {
+        if (o.timer) o.timer--;
+        else {
+          if (beesShoot()) {
+            int8_t dir = (px < o.x) ? -1 : 1;
+            addShot(o.x + dir * 3, o.y + 3, dir * 2, 2);
+            beep(480, 16);
+          }
+          o.state = 2; o.timer = 10;
+        }
+      } else {
+        if (o.timer) o.timer--; else { o.state = 0; o.timer = 40; }
+      }
+    }
+    if (o.kind == 8) {
+      if (o.timer) o.timer--;
+      else {
+        o.state ^= 1;
+        o.timer = o.state ? (18 + zone * 2) : (30 + (h8((uint16_t)o.x) & 15));
+      }
+    }
+    if (o.kind == 9 && o.timer) o.timer--;
+    if (o.kind == 10) o.timer++;
+  }
+
+  for (auto &s : shots) {
+    if (!s.live || s.vy == 99) continue; // skip ball marker
+    s.x += s.vx; s.y += s.vy;
+    if (s.x < cam - 8 || s.x > cam + 140 || s.y > 70) { s.live = false; continue; }
+    if (!invul && abs(s.x - px) < 5 && abs(s.y - py) < 6) { s.live = false; hurt(); }
+  }
+
+  updateScatter();
+
+  if (bossOn) { eggStep(rad); return; }
+
+  // collisions — nearby only
+  for (auto &o : objs) {
+    if (!o.live) continue;
+    if (!onScreen(o.x, 20)) continue;
+    if (o.kind == 1) {
+      if (abs(px - o.x) < 6 && abs(py - o.y) < 7) {
+        o.live = false; rings++; score += 10; beep(1800, 22);
+      }
+    } else if (o.kind == 0) {
+      // Spikes: solid from the sides; only the tips hurt when landing on them
+      int16_t gy = groundAt(o.x);
+      const int16_t spikeH = 14;
+      const int16_t spikeW = 9;
+      int16_t tipY = gy - spikeH;
+      int16_t feet = py + rad;
+      bool hitX = (px + rad - 1 > o.x) && (px - rad + 1 < o.x + spikeW);
+      bool onTips = hitX && (feet >= tipY - 1) && (feet <= tipY + 4) && (py <= tipY + rad);
+      if (onTips && fvy >= 0) {
+        hurt();
+      } else {
+        bumpFromSolid(o.x, o.x + spikeW, tipY + 2, gy, rad);
+      }
+    } else if (o.kind == 2) {
+      // Crab: spin/stomp destroys; otherwise solid bump
+      if (abs(px - o.x) < 8 && abs(py - o.y) < 7) {
+        if (canBreakEnemy(o.y)) {
+          o.live = false; score += 50; beep(1400, 50);
+          if (fvy > 0) { fvy = I2F(-4); rolling = true; syncPlayerInts(); }
+        } else {
+          bumpFromSolid(o.x - 5, o.x + 5, o.y - 5, o.y + 4, rad);
+        }
+      }
+    } else if (o.kind == 3) {
+      if (abs(px - o.x) < 7 && py + rad >= o.y - 2 && py + rad <= o.y + 7 && fvy >= 0) {
+        fvy = -(JUMP_SPD + JUMP_SPD / 2); onGround = false; rolling = true; jumpCut = false;
+        syncPlayerInts(); beep(1100, 65);
+      }
+    } else if (o.kind == 4) {
+      // Bee: spin/stomp destroys; otherwise solid bump
+      if (abs(px - o.x) < 7 && abs(py - o.y) < 6) {
+        if (canBreakEnemy(o.y)) {
+          o.live = false; score += 75; beep(1400, 50);
+          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+        } else {
+          bumpFromSolid(o.x - 4, o.x + 5, o.y - 4, o.y + 4, rad);
+        }
+      }
+    } else if (o.kind == 8) {
+      // flame / chem jet — only hurts while firing
+      if (o.state && abs(px - o.x) < 7 && py + rad > o.y - 14 && py < o.y + 2) hurt();
+    } else if (o.kind == 9) {
+      // pinball bumper (cooldown avoids sticky re-hits / lag spikes)
+      if (o.timer == 0 && abs(px - o.x) < 9 && abs(py - o.y) < 9) {
+        int8_t dx = (px >= o.x) ? 1 : -1;
+        int8_t dy = (py >= o.y) ? 1 : -1;
+        setPlayerVel(I2F(dx * 4), I2F((dy > 0) ? 3 : -6));
+        faceRight = dx > 0;
+        onGround = false;
+        rolling = true;
+        groundRoll = true;
+        o.timer = 12;
+        score += 5;
+        beep(1200, 30);
+      }
+    } else if (o.kind == 10) {
+      // Saw: spin/stomp destroys; otherwise solid bump (same as enemies)
+      if (abs(px - o.x) < 8 && abs(py - o.y) < 8) {
+        if (canBreakEnemy(o.y)) {
+          o.live = false; score += 80; beep(1400, 50);
+          if (fvy > 0) { fvy = I2F(-4); syncPlayerInts(); }
+        } else {
+          bumpFromSolid(o.x - 5, o.x + 5, o.y - 5, o.y + 5, rad);
+        }
+      }
+    }
+    // kind 5 deco: no collision
+  }
+}
+
+void specialStep(uint8_t e) {
+  if (e & B_MODE) { mode = VIEW; return; }
+  if (intro) intro--;
+  animFrame++;
+  if (spTimer) spTimer--;
+  else {
+    // failed — continue game without emerald
+    beep(200, 200);
+    if (act == 0) startAct(zone, 1);
+    else if (zone < 3) startAct(zone + 1, 0);
+    else mode = WIN;
+    return;
+  }
+
+  if (held & B_LEFT) fpx -= I2F(2);
+  if (held & B_RIGHT) fpx += I2F(2);
+  if (e & B_MID) fvy = I2F(-5);
+  if (fvy < I2F(4)) fvy += GRAVITY * 2;
+  fpy += fvy;
+  syncPlayerInts();
+  if (px < 10) setPlayerPos(10, py);
+  if (px > 118) setPlayerPos(118, py);
+  if (py > 50) { setPlayerPos(px, 50); fvy = 0; }
+  if (py < 12) { setPlayerPos(px, 12); fvy = 0; }
+
+  // collect rings
+  for (auto &o : objs) {
+    if (!o.live || o.kind != 1) continue;
+    // drift
+    o.y += ((animFrame + o.x) & 8) ? 0 : (((animFrame >> 2) & 1) ? 1 : -1);
+    if (o.y < 14) o.y = 14;
+    if (o.y > 48) o.y = 48;
+    if (abs(px - o.x) < 6 && abs(py - o.y) < 6) {
+      o.live = false; spRings++; score += 20; beep(1800, 20);
+    }
+  }
+
+  // emerald appears after 6 rings
+  if (spRings >= 6 && !spGot) {
+    if (abs(px - spEX) < 8 && abs(py - spEY) < 8) {
+      spGot = 1;
+      emeralds++;
+      score += 500;
+      beep(1600, 200);
+      clearT = 40;
+      // brief then advance
+    }
+  }
+  // bob emerald
+  spEY = 26 + ((animFrame >> 2) & 3);
+
+  if (spGot) {
+    if (clearT) clearT--;
+    else {
+      if (act == 0) startAct(zone, 1);
+      else if (zone < 3) startAct(zone + 1, 0);
+      else mode = WIN;
+    }
+  }
+}
+
+void clearStep(uint8_t e) {
+  (void)e;
+  if (clearT) clearT--;
+  else advanceAfterClear();
+}
+
+// ---------- draw ----------
+// Blit a 16x20 XBM frame; mirror when facing left
+void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
+  const uint8_t *src = sonicFrames[frameId];
+  const uint8_t rowBytes = (SONIC_W + 7) / 8;
+  u8g2.setDrawColor(1);
+  for (uint8_t row = 0; row < SONIC_H; row++) {
+    int16_t py = top + row;
+    if (py < 0 || py >= 64) continue;
+    for (uint8_t col = 0; col < SONIC_W; col++) {
+      uint8_t byte = pgm_read_byte(&src[row * rowBytes + (col >> 3)]);
+      if (!(byte & (1 << (col & 7)))) continue;
+      int16_t px = left + (faceRight ? col : (SONIC_W - 1 - col));
+      if (px < 0 || px >= 128) continue;
+      plot(px, py);
+    }
+  }
+}
+
+void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, bool moving) {
+  uint8_t id;
+  if (roll) id = SPR_ROLL;
+  else if (moving) id = SPR_RUN0 + ((frame >> 1) & 3);
+  else id = ((frame >> 3) & 1) ? SPR_STAND1 : SPR_STAND0;
+  int16_t top = y - (int16_t)SONIC_H + 6;
+  int16_t left = x - (int16_t)SONIC_W / 2;
+  blitSonic(left, top, id, faceRight);
+}
+
+void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame) {
+  drawHogAt(x, y, roll || groundRoll, faceRight, frame, fvx != 0 || inLoop);
+}
+
+void drawLoopTrack() {
+  if (!loopTrack.live || !onScreen(loopTrack.cx, loopTrack.r + 8)) return;
+  int16_t x = sx(loopTrack.cx);
+  int16_t y = sy(loopTrack.cy);
+  int16_t r = loopTrack.r;
+  // Thick track like GH checker loop (outer + mid + inner)
+  circleSafe(x, y, r);
+  circleSafe(x, y, r - 1);
+  circleSafe(x, y, r - 3);
+  circleSafe(x, y, r - 5);
+  // Mouth openings (clear bottom-left / bottom-right notches)
+  int16_t floorY = sy(loopTrack.cy + r);
+  u8g2.setDrawColor(0);
+  fillBoxClipped(x - r - 1, floorY - 3, 10, 8);
+  fillBoxClipped(x + r - 8, floorY - 3, 10, 8);
+  u8g2.setDrawColor(1);
+  // Checker ticks around the ring
+  for (uint8_t i = 0; i < 16; i++) {
+    float th = i * (6.2831853f / 16.0f);
+    int16_t tx = x + (int16_t)((r - 2) * cosf(th));
+    int16_t ty = y + (int16_t)((r - 2) * sinf(th));
+    if ((i & 1) == 0) plot(tx, ty);
+  }
+}
+
+// Sonic GHZ sunflower — solid center disc, 8 sharp petals, tall stem + leaf pairs
+void drawSunflower(int16_t x, int16_t baseY) {
+  int16_t cy = baseY - 30;
+
+  // stem
+  vLineSafe(x, cy + 6, baseY - (cy + 6));
+
+  // three leaf pairs (pointed, angled up & out)
+  fillTriSafe(x, baseY - 8,  x - 6, baseY - 13, x - 3, baseY - 6);
+  fillTriSafe(x, baseY - 8,  x + 6, baseY - 13, x + 3, baseY - 6);
+  fillTriSafe(x, baseY - 16, x - 5, baseY - 20, x - 2, baseY - 14);
+  fillTriSafe(x, baseY - 16, x + 5, baseY - 20, x + 2, baseY - 14);
+  fillTriSafe(x, baseY - 23, x - 4, baseY - 26, x - 2, baseY - 21);
+  fillTriSafe(x, baseY - 23, x + 4, baseY - 26, x + 2, baseY - 21);
+
+  // 8 filled triangular petals (N/NE/E/SE/S/SW/W/NW)
+  fillTriSafe(x,     cy - 9, x - 3, cy - 3, x + 3, cy - 3);  // N
+  fillTriSafe(x + 7, cy - 7, x + 1, cy - 4, x + 4, cy - 1);  // NE
+  fillTriSafe(x + 9, cy,     x + 3, cy - 3, x + 3, cy + 3);  // E
+  fillTriSafe(x + 7, cy + 7, x + 1, cy + 4, x + 4, cy + 1);  // SE
+  fillTriSafe(x,     cy + 9, x - 3, cy + 3, x + 3, cy + 3);  // S
+  fillTriSafe(x - 7, cy + 7, x - 1, cy + 4, x - 4, cy + 1);  // SW
+  fillTriSafe(x - 9, cy,     x - 3, cy - 3, x - 3, cy + 3);  // W
+  fillTriSafe(x - 7, cy - 7, x - 1, cy - 4, x - 4, cy - 1);  // NW
+
+  // solid round face on the petal bases (dark center like the reference)
+  discSafe(x, cy, 4);
+  u8g2.setDrawColor(0);
+  discSafe(x, cy, 2);
+  u8g2.setDrawColor(1);
+}
+
+void drawRingGlyph(int16_t x, int16_t y) {
+  // Real ring: outer + inner circle (old r=3 is now the hole edge)
+  circleSafe(x, y, 5);
+  circleSafe(x, y, 3);
+}
+
+// Classic Sonic spikes: 3 vertical spears ~Sonic-tall, 3px bases, group ~his width
+void drawSpikes(int16_t x, int16_t baseY) {
+  const int16_t h = 14;
+  for (uint8_t i = 0; i < 3; i++) {
+    int16_t bx = x + (int16_t)i * 3;
+    fillTriSafe(bx, baseY, bx + 3, baseY, bx + 1, baseY - h);
+    // crisp outline so they read on the OLED
+    triSafe(bx, baseY, bx + 3, baseY, bx + 1, baseY - h);
+  }
+}
+
+void drawPalm(int16_t x, int16_t baseY) {
+  vLineSafe(x, baseY - 20, 20);
+  lineSafe(x, baseY - 20, x - 6, baseY - 14);
+  lineSafe(x, baseY - 20, x + 6, baseY - 14);
+  lineSafe(x, baseY - 21, x - 4, baseY - 26);
+  lineSafe(x, baseY - 21, x + 4, baseY - 26);
+  plot(x - 1, baseY - 20);
+  plot(x + 1, baseY - 20);
+}
+
+void drawPipe(int16_t x, int16_t baseY) {
+  frameSafe(x - 4, baseY - 18, 10, 18);
+  hLineSafe(x - 6, baseY - 18, 14);
+  hLineSafe(x - 6, baseY - 10, 14);
+  fillBoxClipped(x - 2, baseY - 4, 6, 4);
+}
+
+void drawNeon(int16_t x, int16_t baseY) {
+  frameSafe(x - 6, baseY - 20, 14, 10);
+  if ((animFrame >> 2) & 1) {
+    plot(x - 3, baseY - 16);
+    plot(x, baseY - 15);
+    plot(x + 3, baseY - 16);
+  }
+  vLineSafe(x, baseY - 10, 10);
+}
+
+void drawGear(int16_t x, int16_t baseY) {
+  int16_t cy = baseY - 10;
+  circleSafe(x, cy, 5);
+  discSafe(x, cy, 2);
+  uint8_t rot = (animFrame >> 3) & 3;
+  static const int8_t DX[4] = {6, 0, -6, 0};
+  static const int8_t DY[4] = {0, 6, 0, -6};
+  for (uint8_t i = 0; i < 4; i++) {
+    uint8_t a = (rot + i) & 3;
+    plot(x + DX[a], cy + DY[a]);
+  }
+}
+
+void drawFlame(int16_t x, int16_t baseY, bool on) {
+  fillBoxClipped(x - 3, baseY - 3, 7, 3);
+  if (on) {
+    triSafe(x, baseY - 14, x - 4, baseY - 3, x + 4, baseY - 3);
+    if (animFrame & 2) plot(x, baseY - 16);
+  }
+}
+
+void drawBumper(int16_t x, int16_t y, bool flash) {
+  discSafe(x, y, flash ? 7 : 6);
+  u8g2.setDrawColor(0);
+  discSafe(x, y, 3);
+  u8g2.setDrawColor(1);
+  circleSafe(x, y, 3);
+}
+
+void drawSaw(int16_t x, int16_t y, uint8_t spin) {
+  circleSafe(x, y, 5);
+  discSafe(x, y, 2);
+  uint8_t a = (spin >> 1) & 3;
+  static const int8_t DX[4] = {6, 0, -6, 0};
+  static const int8_t DY[4] = {0, 6, 0, -6};
+  lineSafe(x - DX[a], y - DY[a], x + DX[a], y + DY[a]);
+  lineSafe(x - DY[a], y + DX[a], x + DY[a], y - DX[a]);
+}
+
+void drawDeco(int16_t x, int16_t baseY, uint8_t typ) {
+  if (typ == 0) drawSunflower(x, baseY);
+  else if (typ == 1) drawPalm(x, baseY);
+  else if (typ == 2) drawPipe(x, baseY);
+  else if (typ == 3) drawNeon(x, baseY);
+  else drawGear(x, baseY);
+}
+
+void drawCrab(int16_t x, int16_t y, uint8_t frame) {
+  int8_t claw = (frame & 4) ? 1 : 0;
+  fillBoxClipped(x - 5, y - 2, 10, 5);
+  vLineSafe(x - 2, y - 5, 3); vLineSafe(x + 2, y - 5, 3);
+  discSafe(x - 2, y - 5, 1); discSafe(x + 2, y - 5, 1);
+  triSafe(x - 5, y, x - 9 - claw, y - 3, x - 9 - claw, y + 2);
+  triSafe(x + 5, y, x + 9 + claw, y - 3, x + 9 + claw, y + 2);
+}
+
+void drawBee(int16_t x, int16_t y, uint8_t frame, uint8_t state) {
+  discSafe(x, y, 3); fillBoxClipped(x - 1, y - 2, 5, 4);
+  u8g2.setDrawColor(0); vLineSafe(x + 1, y - 2, 4); u8g2.setDrawColor(1);
+  discSafe(x - 3, y, 2);
+  u8g2.setDrawColor(0); plot(x - 4, y - 1); u8g2.setDrawColor(1);
+  triSafe(x + 4, y, x + 7, y - 1, x + 7, y + 1);
+  hLineSafe(x - 1, y - ((frame & 1) ? 5 : 4), 4);
+  if (state == 1) plot(x - 5, y + 2);
+}
+
+void drawEggWrecker() {
+  int16_t ex = sx(eggX);
+  discSafe(ex, eggY + 4, 6);
+  fillBoxClipped(ex - 5, eggY + 8, 10, 3);
+  u8g2.setDrawColor(0);
+  for (int16_t i = -4; i <= 4; i += 3) vLineSafe(ex + i, eggY + 8, 3);
+  u8g2.setDrawColor(1);
+  discSafe(ex, eggY, 3);
+  u8g2.setDrawColor(0);
+  plot(ex - 1, eggY - 1);
+  plot(ex + 1, eggY - 1);
+  u8g2.setDrawColor(1);
+  hLineSafe(ex - 2, eggY + 2, 5);
+
+  int16_t bx = sx(ballWX), by = ballWY;
+  lineSafe(ex, eggY + 8, bx, by);
+  discSafe(bx, by, 4);
+  u8g2.setDrawColor(0);
+  plot(bx - 1, by - 1);
+  u8g2.setDrawColor(1);
+
+  frameSafe(2, 56, 50, 6);
+  fillBoxClipped(4, 58, bossHP * 5, 2);
+}
+
+void drawBanner() {
+  u8g2.setDrawColor(0); u8g2.drawBox(14, 12, 100, 28);
+  u8g2.setDrawColor(1); u8g2.drawFrame(14, 12, 100, 28);
+  u8g2.setCursor(22, 24); u8g2.print(zoneName());
+  u8g2.setCursor(36, 36);
+  if (bossOn) u8g2.print(F("EGG WRECKER"));
+  else { u8g2.print(F("ACT ")); u8g2.print(act + 1); }
+}
+
+void drawGame() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setDrawColor(1);
+
+  // Terrain in camera space (vertical scroll for tall loops)
+  cacheGroundStrip();
+  for (uint8_t i = 0; i < 128; i++) {
+    if (gStrip[i] > 63) continue;
+    u8g2.drawPixel(i, gStrip[i]);
+    if ((i & 15) == 0 && gStrip[i] + 2 < 64) u8g2.drawPixel(i, gStrip[i] + 2);
+  }
+
+  drawLoopTrack();
+
+  for (auto &p : plats) {
+    if (!p.live) continue;
+    if (p.w <= 0 || p.w > 48) continue;
+    int16_t y = sy(p.y);
+    if (y < -4 || y > 66) continue;
+    fillBoxClipped(sx(p.x), y, p.w, 3);
+  }
+
+  for (auto &o : objs) {
+    if (!o.live) continue;
+    int16_t x = sx(o.x);
+    int16_t y = sy(o.y);
+    if (x < -14 || x > 142) continue;
+    if (y < -24 || y > 80) continue;
+    u8g2.setDrawColor(1);
+    if (o.kind == 0) {
+      drawSpikes(x, sy(groundAt(o.x)));
+    } else if (o.kind == 1) {
+      drawRingGlyph(x, y);
+    } else if (o.kind == 2) drawCrab(x, y, animFrame);
+    else if (o.kind == 3) {
+      fillBoxClipped(x - 4, y - 2, 8, 3);
+      hLineSafe(x - 3, y - 4, 6);
+    } else if (o.kind == 4) drawBee(x, y, animFrame, o.state);
+    else if (o.kind == 5) drawDeco(x, y, o.state);
+    else if (o.kind == 6) {
+      int16_t gh = groundAt(o.x) - o.y;
+      if (gh > 0 && gh < 50) vLineSafe(x, y, gh);
+      fillBoxClipped(x - 4, y, 10, 6);
+    } else if (o.kind == 7) {
+      int16_t h = o.state ? o.state : 14;
+      fillBoxClipped(x, y - h, 6, h);
+    } else if (o.kind == 8) drawFlame(x, y, o.state);
+    else if (o.kind == 9) drawBumper(x, y, o.timer > 0);
+    else if (o.kind == 10) drawSaw(x, y, o.timer);
+  }
+
+  for (auto &s : shots) {
+    if (!s.live || s.vy == 99) continue;
+    discSafe(sx(s.x), sy(s.y), 1);
+  }
+
+  for (auto &r : scat) {
+    if (!r.live) continue;
+    if (r.life < 30 && ((r.life >> 1) & 1)) continue;
+    drawRingGlyph(sx(r.x), sy(r.y));
+  }
+
+  if (bossOn) drawEggWrecker();
+
+  bool blink = invul && ((invul >> 2) & 1);
+  if (!blink) drawHog(sx(px), sy(py), rolling, faceRight, animFrame);
+
+  u8g2.setCursor(0, 9); u8g2.print(F("R")); u8g2.print(rings);
+  u8g2.setCursor(32, 9); u8g2.print(F("Z")); u8g2.print(zone + 1);
+  u8g2.print(F("-")); u8g2.print(act + 1);
+  for (uint8_t i = 0; i < emeralds && i < 7; i++) plot(70 + i * 4, 3);
+  for (uint8_t i = 0; i < lives; i++) discSafe(122 - i * 9, 5, 3);
+  if (intro) drawBanner();
+}
+
+void drawSpecial() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  // star field
+  for (uint8_t i = 0; i < 18; i++) {
+    uint8_t sx0 = (i * 37 + animFrame) & 127;
+    uint8_t sy0 = (i * 19) & 63;
+    u8g2.drawPixel(sx0, sy0);
+  }
+  u8g2.setCursor(28, 10); u8g2.print(F("SPECIAL STAGE"));
+  for (auto &o : objs) if (o.live && o.kind == 1) {
+    drawRingGlyph(o.x, o.y);
+  }
+  if (spRings >= 6 && !spGot) {
+    // emerald diamond
+    u8g2.drawTriangle(spEX, spEY - 5, spEX - 4, spEY, spEX + 4, spEY);
+    u8g2.drawTriangle(spEX, spEY + 5, spEX - 4, spEY, spEX + 4, spEY);
+  }
+  if (spGot) { u8g2.setCursor(34, 36); u8g2.print(F("EMERALD!")); }
+  drawHog(px, py, false, true, animFrame);
+  u8g2.setCursor(0, 63); u8g2.print(F("GET ")); u8g2.print(spRings); u8g2.print(F("/6  T"));
+  u8g2.print(spTimer / 30);
+}
+
+void drawClear() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(34, 22); u8g2.print(F("ACT CLEAR"));
+  u8g2.setCursor(28, 36); u8g2.print(zoneName());
+  u8g2.setCursor(40, 50); u8g2.print(F("SCORE ")); u8g2.print(score);
+}
+
+void drawOver() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(34, 16); u8g2.print(F("GAME OVER"));
+  u8g2.setCursor(34, 30); u8g2.print(F("SCORE ")); u8g2.print(score);
+  u8g2.setCursor(4, 46); u8g2.print(F("MID=retry GAME=quit"));
+}
+void drawWin() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(22, 16); u8g2.print(F("ZONE COMPLETE"));
+  u8g2.setCursor(28, 30); u8g2.print(F("EMERALDS ")); u8g2.print(emeralds);
+  u8g2.setCursor(34, 44); u8g2.print(F("SCORE ")); u8g2.print(score);
+  u8g2.setCursor(30, 58); u8g2.print(F("PRESS ANY"));
+}
+
+void menuLoop(uint8_t e) {
+  if (e & B_GAME) { mode = GAME; return; }
+  if (e & (B_LEFT | B_RIGHT)) menuSel = (menuSel + ((e & B_LEFT) ? 2 : 1)) % 3;
+  if (e & B_MID) {
+    if (menuSel == 0) mode = GAME;
+    else if (menuSel == 1) startGame();
+    else mode = VIEW;
+  }
+}
+void drawMenu() {
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(46, 12); u8g2.print(F("PAUSED"));
+  u8g2.setCursor(30, 28); u8g2.print(menuSel == 0 ? F("> CONTINUE") : F("  CONTINUE"));
+  u8g2.setCursor(30, 40); u8g2.print(menuSel == 1 ? F("> RESTART") : F("  RESTART"));
+  u8g2.setCursor(30, 52); u8g2.print(menuSel == 2 ? F("> QUIT") : F("  QUIT"));
+  u8g2.setCursor(0, 63); u8g2.print(F("L/R pick  MID ok"));
+}
+
+void update(uint8_t e) {
+  switch (mode) {
+    case SPLASH:
+      if (splashFrame < 250) splashFrame++;
+      if (e & B_MID) startGame();
+      else if (e & (B_MODE | B_GAME | B_LEFT | B_RIGHT)) mode = VIEW;
+      break;
+    case VIEW:
+      if (idleStage < 2) stepWatchFace();
+      if (e & B_MODE) { displayEnsureOn(); mode = SETM; setPage = 0; setField = 0; }
+      else if (e & B_GAME) { displayEnsureOn(); splashFrame = 0; mode = SPLASH; }
+      break;
+    case SETM: setLoop(e); break;
+    case RING: if (e) { mode = VIEW; noTone(P_BUZ); } else ringLoop(); break;
+    case GAME: gameStep(e); break;
+    case SPECIAL: specialStep(e); break;
+    case CLEAR: clearStep(e); break;
+    case MENU: menuLoop(e); break;
+    case OVER:
+      if (e & B_MID) startGame();
+      else if (e & B_GAME) mode = VIEW;
+      break;
+    case WIN: if (e) mode = VIEW; break;
+  }
+}
+
+void render() {
+  switch (mode) {
+    case SPLASH: drawSplash(); break;
+    case VIEW: drawView(); break;
+    case SETM: drawSet(); break;
+    case RING: drawRing(); break;
+    case GAME: drawGame(); break;
+    case SPECIAL: drawSpecial(); break;
+    case CLEAR: drawClear(); break;
+    case MENU: drawMenu(); break;
+    case OVER: drawOver(); break;
+    case WIN: drawWin(); break;
+  }
+}
+
+void setup() {
+  for (uint8_t i = 0; i < 5; i++) pinMode(BPIN[i], INPUT_PULLUP);
+  pinMode(P_BUZ, OUTPUT);
+  Wire.setSDA(P_SDA); Wire.setSCL(P_SCL); Wire.setClock(400000);
+  u8g2.begin();
+  u8g2.setBitmapMode(1);   // bitmap 0-bits are transparent, not a black mask
+  lastSec = millis();
+  displayWake();
+}
+
+void loop() {
+  pending |= readButtons();
+  unsigned long now = millis();
+  if (now - lastSec >= 1000) { lastSec += 1000; tick(); }
+
+  // Any button press resets idle; wakes a blanked clock face
+  if (pending) {
+    lastInputMs = now;
+    if (mode == VIEW && idleStage != 0) displayWake();
+  }
+
+  static unsigned long lastFrame = 0;
+  if (now - lastFrame < 33) return;
+  lastFrame = now;
+  uint8_t ev = pending; pending = 0;
+
+  update(ev);
+  updateClockIdle();
+
+  // Screen off on clock face — skip OLED traffic until a key wakes it
+  if (mode == VIEW && idleStage == 2) return;
+
+  u8g2.clearBuffer();
+  render();
+  if (mode == VIEW && idleStage == 1) applySoftwareDim();
+  u8g2.sendBuffer();
+}

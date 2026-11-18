@@ -1,0 +1,17 @@
+# arduino-cli build output (if --output-dir / --export-binaries is used)
+build/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.map
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
