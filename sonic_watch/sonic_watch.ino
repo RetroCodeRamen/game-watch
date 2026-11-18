@@ -350,6 +350,8 @@ uint8_t lastTapDir;         // 1=L 2=R
 unsigned long lastTapMs;
 bool onGround, rolling, faceRight, groundRoll, jumpCut;
 bool bossOn;
+bool restartPending;        // death → rebuild act at end of gameStep()
+int16_t midPX, midPY;       // player pos after the 1st of 2 physics steps (sweep sample)
 
 struct LoopTrack { int16_t cx, cy, r; bool live; };
 LoopTrack loopTrack;
@@ -612,7 +614,7 @@ void cacheGroundStrip() {
 }
 
 void hurt() {
-  if (invul) return;
+  if (invul || restartPending) return;
   if (rings) {
     // Ring hit: spill rings, keep going
     beep(200, 140);
@@ -634,9 +636,8 @@ void hurt() {
     return;
   }
   beep(150, 350);
-  uint8_t z = zone, a = act;
-  startAct(z, a);          // rebuild stage; lives/score/emeralds kept
-  invul = 45;
+  // Rebuild after gameStep() finishes — hurt() is called mid-iteration over objs
+  restartPending = true;
 }
 
 // ---- Level chunk builders (zone-themed) ----
@@ -834,10 +835,12 @@ void advanceAfterClear() {
   if (emeralds < 7 && random(100) < chance) {
     // enter special
     mode = SPECIAL;
-    spRings = 0; spTimer = 200; // ~6.6s * frames? 200 frames ~6.6s at 30fps — bump
-    spTimer = 450; // ~15s
+    spRings = 0;
+    spTimer = 450; // ~15s at 30 FPS
     spGot = 0;
-    px = 64; py = 40; pvx = 0; pvy = 0;
+    // Must set the fixed-point state too, or syncPlayerInts() restores the act position
+    setPlayerPos(64, 40);
+    setPlayerVel(0, 0);
     spEX = 64; spEY = 28;
     clearWorld();
     for (uint8_t i = 0; i < 8; i++)
@@ -1114,8 +1117,9 @@ void eggStep(int16_t rad) {
   // Touch Egg Mobile (flying craft): always bounce off; damage if spinning into it
   if (abs(px - eggX) < 12 && abs(py - eggY) < 11) {
     bool attack = rolling && bossCool == 0;
+    // Bounce AWAY from the craft: above → up (−y), below → down (+y)
     setPlayerVel((px < eggX) ? I2F(-4) : I2F(4),
-                 (py <= eggY + 2) ? I2F(5) : I2F(-5));
+                 (py <= eggY + 2) ? I2F(-5) : I2F(5));
     onGround = false;
     rolling = true;
     faceRight = fvx > 0;
@@ -1447,7 +1451,25 @@ void physicsStep(uint8_t e) {
   }
 }
 
+// True if (x,y) is within (rx,ry) of the player at either physics sub-step.
+// At top speed Sonic moves 12 px per display frame — more than a ring's pickup window.
+bool nearPlayerSwept(int16_t x, int16_t y, int16_t rx, int16_t ry) {
+  if (abs(px - x) < rx && abs(py - y) < ry) return true;
+  return abs(midPX - x) < rx && abs(midPY - y) < ry;
+}
+
+void gameStepInner(uint8_t e);
+
 void gameStep(uint8_t e) {
+  gameStepInner(e);
+  if (restartPending) {
+    restartPending = false;
+    startAct(zone, act);   // rebuild stage; lives/score/emeralds kept
+    invul = 45;
+  }
+}
+
+void gameStepInner(uint8_t e) {
   if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
   if (e & B_MODE) { mode = VIEW; return; }
 
@@ -1459,6 +1481,7 @@ void gameStep(uint8_t e) {
 
   // Two 60Hz physics steps per ~30 FPS display frame
   physicsStep(e);
+  midPX = px; midPY = py;
   physicsStep(0);
 
   syncPlayerInts();
@@ -1539,10 +1562,11 @@ void gameStep(uint8_t e) {
 
   // collisions — nearby only
   for (auto &o : objs) {
+    if (restartPending || mode != GAME) break;  // died this frame — stop colliding
     if (!o.live) continue;
     if (!onScreen(o.x, 20)) continue;
     if (o.kind == 1) {
-      if (abs(px - o.x) < 6 && abs(py - o.y) < 7) {
+      if (nearPlayerSwept(o.x, o.y, 6, 7)) {
         o.live = false; rings++; score += 10; beep(1800, 22);
       }
     } else if (o.kind == 0) {
@@ -2074,7 +2098,7 @@ void update(uint8_t e) {
     case MENU: menuLoop(e); break;
     case OVER:
       if (e & B_MID) startGame();
-      else if (e & B_GAME) mode = VIEW;
+      else if (e & (B_GAME | B_MODE)) mode = VIEW;  // Mode always escapes to clock
       break;
     case WIN: if (e) mode = VIEW; break;
   }
