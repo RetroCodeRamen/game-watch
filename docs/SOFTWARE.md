@@ -128,12 +128,13 @@ RP2040 has headroom, but keep watch games tiny:
 - **Zoom:** the world is drawn 5/4 bigger than the level data (`Z()` in the sketch). `sonic_levels.h` and its rules stay in design units; positions, sizes, hitboxes, speeds and accelerations are all scaled ×1.25, so timing is unchanged.
 - Physics follows Sonic 1 proportions: jump ≈ 38 design px (48 on screen, ~2.2× Sonic's height), yellow spring ≈ 62 (77 on screen), slope pull 0.125·sin, Sonic sticks to the ground over crests and down slopes, side contact with walls/spikes just stops him (no knock-back).
 - Sprite art lives in `assets/sonic_sprite/sonic.txt` (20×22 ASCII frames); `python3 scripts/gen_sonic_sprite.py` regenerates `sonic_sprites.h`.
-- Host tests (no watch needed): `tools/sonic_test/build.sh`, then `out/check` (level-data rules: slopes, cliffs, spike clearance, bridges, capacity) and `out/bot` (a bot plays the real game code through every act; `GOD=1` makes hazards harmless so it only tests "can you get through").
+- Host tests (no watch needed): `tools/sonic_test/build.sh`, then `out/check` (level-data rules: slopes, cliffs, spike clearance, bridges, capacity) and `out/stops` (reports every place Sonic gets stopped with no wall, spike, enemy or real cliff nearby, via the sketch's `STOP_HOOK`) and `out/bot` (a bot plays the real game code through every act; `GOD=1` makes hazards harmless so it only tests "can you get through").
 - Act end: Act 1 signpost spins (~2.5 s, input locked) → tally (time, rings, bonus count-up, speed rank, fanfare). Act 2 tallies after the boss.
 - Speed rank vs each act's `parSec`: **A+** ≤ par + 5 s, **B** ≤ par + 12 s, else **D**. Par values are estimates — tune after playtesting.
 - Rings reset each act (and on a restart), as in Sonic.
 - After each act clear: chance of Special Stage (collect 6 rings, grab emerald).
 - Zone deco (kind 5): sunflower/palm/pipe/neon/gear — decoration only.
 - Chemical flame jets (8), Casino bumpers (9), Scrap saws (10).
-- Bees: fly → pause → shoot (Casino+) → continue.
+- Bees: fly → pause → shoot → continue (every zone). The shot is a slow ball (~1.6 px/frame) aimed at Sonic, only fired while the bee is on screen, and pops on the ground — about 1–2 s of flight.
+- Spin-roll (double-tap): holding forward adds no speed; once the roll slows below 0.5 px/frame Sonic stands back up and runs (Genesis rule), so an accidental double-tap never parks him in a ball.
 - Object kinds: spike, ring, crab, spring, bee, deco, goal, wall, flame, bumper, saw.

@@ -142,7 +142,7 @@ void drawView() {
 //        6 goal 7 wall 8 flame/chem trap 9 bumper 10 saw
 struct Obj { int16_t x, y, home; uint8_t kind, state, timer; int8_t vx; bool live; };
 struct Plat { int16_t x, y, w; bool live; };
-struct Shot { int16_t x, y; int8_t vx, vy; bool live; };
+struct Shot { int16_t x, y; int16_t vx, vy; int16_t qx, qy; bool live; };   // q/v in 1/16 px
 struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
 
 // Whole act stays resident — no scroll-despawn (draw/AI cull only)
@@ -189,6 +189,10 @@ static const fx SPRING_SPD  = 890;     // 712 — yellow spring ≈ 77 px (level
 static const fx GRAVITY     = 20;      // 16
 static const fx ROLL_FRIC   = 10;      // 8
 static const fx MAX_FALL    = 1462;    // 1170
+// Host tests define this to log every place Sonic gets stopped (no-op on the watch)
+#ifndef STOP_HOOK
+#define STOP_HOOK(reason, x0, x1)
+#endif
 static const int16_t CLIFF_STEP = 7;   // ground rising more than this within Sonic's half-width = a wall
 static const int16_t RAD_STAND = 6, RAD_ROLL = 5;   // feet below centre (5 / 4 before the zoom)
 // Slope pull per px of height change over 10 px (slopeAt). Genesis proportions to our ACCEL:
@@ -196,6 +200,7 @@ static const int16_t RAD_STAND = 6, RAD_ROLL = 5;   // feet below centre (5 / 4 
 static const fx SLOPE_RUN     = 10;
 static const fx SLOPE_ROLL    = 25;
 static const fx SLOPE_ROLL_UP = 6;
+static const fx UNROLL_SPD    = ZV(1) / 2;   // roll slower than this → stand up
 // Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
 // LOOP_SLP is the slope factor: Genesis 0.125 px/frame² on a much bigger loop; scaled up for
 // our ~40 px-radius track so it takes the same share of top speed to get round.
@@ -386,7 +391,6 @@ void placeChemWavyCross(int16_t x0) {
   addObj(x0 + Z(30), 0, 8);
 }
 
-bool beesShoot() { return zone >= 2; }  // Casino Night+
 
 const __FlashStringHelper* zoneName() {
   switch (zone) {
@@ -475,10 +479,11 @@ int16_t surfaceAt(int16_t x) {
   return groundAt(x);
 }
 
-void addShot(int16_t x, int16_t y, int8_t vx, int8_t vy) {
+// vx/vy in 1/16 px per frame
+void addShot(int16_t x, int16_t y, int16_t vx, int16_t vy) {
   for (auto &s : shots) {
     if (s.live) continue;
-    s.live = true; s.x = x; s.y = y; s.vx = vx; s.vy = vy;
+    s.live = true; s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.qx = 0; s.qy = 0;
     return;
   }
 }
@@ -882,6 +887,7 @@ void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_
   int16_t mid = (left + right) / 2;
   // Genesis: touching a solid's side just stops you (no knock-back), so you can jump
   // straight up beside a wall or spikes and steer over the top.
+  STOP_HOOK("solid", left, right);
   if (px < mid) {
     fpx = I2F(left - rad);
     if (fvx > 0) fvx = 0;
@@ -1012,6 +1018,9 @@ void applyGroundControl() {
     fvx += (fx)slope * (downhill ? SLOPE_ROLL : SLOPE_ROLL_UP);
     if (fvx > 0) { fvx -= ROLL_FRIC; if (fvx < 0) fvx = 0; }
     else if (fvx < 0) { fvx += ROLL_FRIC; if (fvx > 0) fvx = 0; }
+    // Genesis: a roll that slows below 0.5 px/frame stands back up, so holding a direction
+    // runs again (otherwise an accidental double-tap leaves him parked in a ball)
+    if (abs(fvx) < UNROLL_SPD) stopRoll();
   } else if (onGround) {
     fvx += (fx)slope * SLOPE_RUN;
     bool left = heldIn() & B_LEFT, right = heldIn() & B_RIGHT;
@@ -1151,7 +1160,7 @@ void stepHollow(int16_t rad) {
   float fwd = ((float)fpx / FX_ONE - loopTrack.cx) * fwdDir;
   if (fwd > R) {
     fpx = I2F(loopTrack.cx + (int16_t)(R * fwdDir));
-    if ((float)fvx * fwdDir > 0) fvx = 0;
+    if ((float)fvx * fwdDir > 0) { STOP_HOOK("hollow", loopTrack.cx, 0); fvx = 0; }
   }
   syncPlayerInts();
 
@@ -1290,6 +1299,7 @@ void loopGate(int16_t prevX, int16_t rad) {
       float scale = (float)(r + 9) / len;
       fpx = I2F(cx + (int16_t)(idx * scale));
       fpy = I2F(cy + (int16_t)(idy * scale));
+      STOP_HOOK("loopshell", cx, idy);
       fvx = (fx)(-fvx / 4);
       if (fvy < 0) fvy = 0;
       syncPlayerInts();
@@ -1344,6 +1354,7 @@ void physicsStep(uint8_t e) {
     for (uint8_t k = 0; k < 8; k++) {
       int16_t lead = px + dir * (rad - 1);
       if (py + rad - groundAt(lead) <= CLIFF_STEP) break;
+      if (k == 0) STOP_HOOK("cliff", lead, py + rad - groundAt(lead));
       fpx -= dir * FX_ONE;
       fvx = 0;
       if (groundRoll) stopRoll();
@@ -1471,12 +1482,17 @@ void gameStepInner(uint8_t e) {
       } else if (o.state == 1) {
         if (o.timer) o.timer--;
         else {
-          if (beesShoot()) {
-            int8_t dir = (px < o.x) ? -1 : 1;
-            addShot(o.x + dir * 4, o.y + 4, dir * 2, 2);
+          // Buzz-bomber shot: a slow ball aimed at Sonic (~1.6 px/frame, 1-2 s to cross the
+          // screen). Only fires while on screen so it never comes out of nowhere.
+          if (onScreen(o.x, 0) && abs(px - o.x) < 120) {
+            int16_t dx = px - o.x, dy = py - (o.y + 4);
+            if (dy < 8) dy = 8;                         // always at least a little downward
+            float len = sqrtf((float)dx * dx + (float)dy * dy);
+            const float SPD = 26.0f;                    // 1/16 px per frame
+            addShot(o.x + (dx < 0 ? -4 : 4), o.y + 4, (int16_t)(dx * SPD / len), (int16_t)(dy * SPD / len));
             beep(480, 16);
           }
-          o.state = 2; o.timer = 10;
+          o.state = 2; o.timer = 14;
         }
       } else {
         if (o.timer) o.timer--; else { o.state = 0; o.timer = 40; }
@@ -1508,8 +1524,11 @@ void gameStepInner(uint8_t e) {
 
   for (auto &s : shots) {
     if (!s.live || s.vy == 99) continue; // skip ball marker
-    s.x += s.vx; s.y += s.vy;
-    if (s.x < cam - 8 || s.x > cam + 140 || s.y > camY + 72) { s.live = false; continue; }
+    s.qx += s.vx; s.qy += s.vy;
+    s.x += s.qx / 16; s.qx %= 16;
+    s.y += s.qy / 16; s.qy %= 16;
+    if (s.x < cam - 6 || s.x > cam + 134 || s.y < camY - 6 || s.y > camY + 70) { s.live = false; continue; }
+    if (s.y > groundAt(s.x)) { s.live = false; continue; }     // pops on the ground
     if (!invul && abs(s.x - px) < 6 && abs(s.y - py) < 8) { s.live = false; hurt(); }
   }
 
@@ -2152,7 +2171,9 @@ void drawGame() {
 
   for (auto &s : shots) {
     if (!s.live || s.vy == 99) continue;
-    discSafe(sx(s.x), sy(s.y), 2);
+    // dark rim so the ball reads against grass / pipes, lit core
+    u8g2.setDrawColor(0); discSafe(sx(s.x), sy(s.y), 3);
+    u8g2.setDrawColor(1); discSafe(sx(s.x), sy(s.y), 2);
   }
 
   for (auto &r : scat) {
