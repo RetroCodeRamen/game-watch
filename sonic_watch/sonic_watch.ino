@@ -442,7 +442,9 @@ bool addObj(int16_t x, int16_t y, uint8_t kind) {
     o.state = 0; o.timer = 0;
     o.vx = (kind == 4 || kind == 2) ? -1 : 0;
     if (kind == 4) o.timer = 30 + (h8((uint16_t)x) & 31);
-    if (kind == 5 || kind == 8) o.y = groundAt(x);
+    // Ground-anchored kinds keep their real height: the draw pass culls by o.y, so spikes left
+    // at y 0 vanished on high ground while staying solid (the "invisible wall" stops)
+    if (kind == 0 || kind == 5 || kind == 8) o.y = groundAt(x);
     if (kind == 8) { o.state = 0; o.timer = 20 + (h8((uint16_t)(x + 3)) & 31); }
     if (kind == 9) { o.y = y; o.timer = 0; }
     if (kind == 10) o.timer = 0;
@@ -1560,7 +1562,7 @@ void gameStepInner(uint8_t e) {
     if (!o.live) continue;
     if (!onScreen(o.x, 40)) continue;
 
-    if (o.kind == 5 || o.kind == 8) o.y = groundAt(o.x);
+    if (o.kind == 0 || o.kind == 5 || o.kind == 8) o.y = groundAt(o.x);
 
     if (o.kind == 2) { // crab leashed to home
       o.x += o.vx;
