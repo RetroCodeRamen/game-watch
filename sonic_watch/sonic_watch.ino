@@ -837,7 +837,19 @@ float spSpeed, spSub, spAng, spAngV, spH, spHV;
 bool spAir; float spPX, spPY, spVX, spVY;
 uint16_t spEmPos;
 
-uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds * 4; }
+// One row per Special Stage (= emeralds already held). Quotas are per leg and add up.
+struct SpStageDef { uint8_t quota[3]; uint8_t bombsPerLeg; uint8_t bombWeight; float speed; };
+static const SpStageDef SP_STAGES[EMERALD_MAX] = {
+  //  quotas/leg     bombs  bomb-pattern  speed
+  { {  8, 10, 12 },     0,       0,       2.0f },   // 1: rings only — hard to lose
+  { { 13, 15, 17 },     2,       1,       2.1f },   // 2: meet the bombs, one or two per leg
+  { { 20, 23, 26 },   255,       3,       2.3f },   // 3: the full mix
+  { { 24, 26, 28 },   255,       4,       2.45f },  // 4: the ultimate-power emerald: dialled up
+};
+// (a macro, not a function: Arduino's generated prototypes would land above the struct)
+#define spStage() (SP_STAGES[emeralds < EMERALD_MAX ? emeralds : EMERALD_MAX - 1])
+uint8_t spQuotaFor(uint8_t leg) { return spStage().quota[leg < 3 ? leg : 2]; }
+uint8_t spGenLeg, spGenBombs;       // bombs laid so far in the leg being generated
 
 void spAdd(int16_t pos, int8_t ang, uint8_t kind) {
   for (auto &o : spObj) if (!o.live) { o.pos = pos; o.ang = ang; o.kind = kind; o.live = true; return; }
@@ -845,9 +857,22 @@ void spAdd(int16_t pos, int8_t ang, uint8_t kind) {
 
 // Lay one pattern starting at course position p; returns its length
 int16_t spPattern(int16_t p) {
-  uint8_t level = emeralds + spLeg;            // 0 … 5
+  const SpStageDef &st = spStage();
   int8_t a = (int8_t)(random(-5, 6) * 10);     // centre angle, −50 … 50
-  switch (random(level >= 2 ? 6 : level >= 1 ? 5 : 4)) {
+  // Ring patterns 0-2; bomb patterns 3 (one bomb), 4 (a pair), 5 (a gate of three).
+  // bombWeight = how many of every 6 picks are bomb patterns; bombsPerLeg caps them.
+  uint8_t legLeft = st.bombsPerLeg > spGenBombs ? st.bombsPerLeg - spGenBombs : 0;
+  uint8_t pick = random(3);
+  if (st.bombWeight && legLeft && (uint8_t)random(6) < st.bombWeight) {
+    if (st.bombsPerLeg == 255) pick = 3 + random(3);
+    else pick = (legLeft >= 2 && random(2)) ? 4 : 3;   // stage 2: single bombs or one pair
+  }
+  // Stage 2 promises at least one bomb per leg: lay it in the back half if none came yet
+  if (st.bombsPerLeg != 255 && st.bombsPerLeg && !spGenBombs && (p % SP_LEG) > SP_LEG / 2) pick = 3;
+  if (pick == 3) spGenBombs += 1;
+  else if (pick == 4) spGenBombs += 2;
+  else if (pick == 5) spGenBombs += 3;
+  switch (pick) {
     case 0:                                     // straight line of rings
       for (uint8_t k = 0; k < 6; k++) spAdd(p + k * 10, a, SPO_RING);
       return 60;
@@ -884,6 +909,7 @@ void spGenerate() {
     uint16_t legStart = (spGen / SP_LEG) * SP_LEG, legEnd = legStart + SP_LEG;
     if (spGen < legStart + 50) { spGen = legStart + 50; continue; }
     if (spGen > legEnd - 90 || spGen / SP_LEG >= 3) { spGen = legEnd + 50; if (spGen / SP_LEG >= 3) return; continue; }
+    if (spGen / SP_LEG != spGenLeg) { spGenLeg = spGen / SP_LEG; spGenBombs = 0; }
     spGen += spPattern((int16_t)spGen) + 24;
   }
 }
@@ -895,7 +921,8 @@ void startSpecial() {
   for (auto &o : spObj) o.live = false;
   clearWorld();
   spPhase = SP_RUN; spLeg = 0; spRings = 0; spQuota = spQuotaFor(0);
-  spDist = 0; spGen = 0; spSub = 0; spSpeed = 2.0f + emeralds * 0.15f;   // a bit quicker per emerald held
+  spDist = 0; spGen = 0; spSub = 0; spSpeed = spStage().speed;
+  spGenLeg = 0; spGenBombs = 0;
   spAng = 0; spAngV = 0; spH = 0; spHV = 0; spAir = false; spHurt = 0; spWon = false; spResultT = 0;
   spBannerShow(0);                             // "GET n RINGS"
   animFrame = 0;
