@@ -201,6 +201,13 @@ static const fx SLOPE_RUN     = 10;
 static const fx SLOPE_ROLL    = 25;
 static const fx SLOPE_ROLL_UP = 6;
 static const fx UNROLL_SPD    = ZV(1) / 2;   // roll slower than this → stand up
+// Vertical launches, set against the jump (gravity here is scaled for the 64-px screen, so
+// Genesis ysp values can't be copied directly). Heights: jump 46, hurt ~20, stomp = the fall.
+static const fx HURT_VY       = 470;         // Genesis hurt ysp −4 vs jump −6.5 → ~0.45× jump height
+static const fx BOSS_BOUNCE   = 560;         // off the top of the Egg Mobile (~30 px)
+static const fx BUMPER_VY     = 780;         // Casino bumper launch up (~60 px)
+// Stomp: reverse the fall like the Genesis (ysp = −ysp), kept between ½ and 1 jump
+inline fx stompVY(fx fall) { if (fall > JUMP_SPD) fall = JUMP_SPD; if (fall < JUMP_SPD / 2) fall = JUMP_SPD / 2; return -fall; }
 // Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
 // LOOP_SLP is the slope factor: Genesis 0.125 px/frame² on a much bigger loop; scaled up for
 // our ~40 px-radius track so it takes the same share of top speed to get round.
@@ -265,8 +272,16 @@ bool loopPassed;     // completed the lap — don't re-grab the track until he's
 bool loopRolled;     // entered the loop rolling (uses rolling slope factors, no forward push)
 uint8_t loopLock;    // Genesis control lock after slipping off a wall (counts down on ground)
 uint8_t bossHP, bossCool, bossPhase;
-int16_t eggX, eggY, ballAngle;   // Egg Wrecker (screen/arena space)
+int16_t eggX, eggY;              // Egg Wrecker ship centre (world)
 int8_t eggDir;
+// Egg Wrecker motion: the ship glides between the arena ends, pausing to turn; the ball hangs
+// on a chain from its belly and swings as a pendulum (rises at the ends, fastest at the bottom)
+enum { EGG_ENTER, EGG_LOWER, EGG_FIGHT, EGG_BLOWUP, EGG_FLEE };
+float eggFX;                     // sub-pixel ship x
+float pendPhase, pendAmp;        // swing phase (radians) and amplitude
+float chainLen;                  // grows from 0 when the ball is let down
+float ballAng;                   // current chain angle (0 = straight down, + = to the right)
+uint8_t eggT, eggPause, eggLaugh;
 int16_t arenaOrigin;             // world X where boss arena starts
 
 // Special stage
@@ -597,7 +612,7 @@ void hurt() {
     rings = 0;
     spillRings();
     invul = 55;
-    setPlayerVel(faceRight ? ZV(-2) : ZV(2), ZV(-5));
+    setPlayerVel(faceRight ? ZV(-2) : ZV(2), -HURT_VY);
     jumpCut = true;            // knock-back isn't a jump: releasing the button can't shorten it
     onGround = false;
     rolling = true;
@@ -664,13 +679,14 @@ void startEggWrecker() {
   cam = arenaOrigin;
   camY = 0;
   clearWorld();
-  // two floating platforms (world)
-  addPlat(arenaOrigin + 24, 31, 30);
-  addPlat(arenaOrigin + 76, 31, 30);
-  eggX = arenaOrigin + 100;
-  eggY = 16;
+  // Flat arena, like the original: the ship flies in from the top right
+  eggFX = arenaOrigin + 160;
+  eggX = (int16_t)eggFX;
+  eggY = -24;
   eggDir = -1;
-  ballAngle = 0;
+  bossPhase = EGG_ENTER;
+  eggT = 0; eggPause = 0; eggLaugh = 0;
+  chainLen = 0; pendPhase = 0; pendAmp = 0; ballAng = 0;
   intro = 60;
   beep(280, 250);
 }
@@ -954,55 +970,94 @@ void handleDoubleTapRoll(uint8_t e) {
 }
 
 // ---- Egg Wrecker ----
+static const int16_t EGG_HOVER = 10;          // ship centre height while fighting
+static const int16_t EGG_LEFT = 26, EGG_RIGHT = 102;   // patrol ends (from arenaOrigin)
+static const float CHAIN_LEN = 24.0f;          // pivot → ball centre
+static const int16_t BALL_R = 6;
+
+int16_t eggPivotY() { return eggY + 11; }
+
+void eggPlaceBall() {
+  ballAng = pendAmp * sinf(pendPhase);
+  ballWX = eggX + (int16_t)lroundf(chainLen * sinf(ballAng));
+  ballWY = eggPivotY() + (int16_t)lroundf(chainLen * cosf(ballAng));
+}
+
 void eggStep(int16_t rad) {
-  eggX += eggDir;
-  if (eggX < arenaOrigin + 30) eggDir = 1;
-  if (eggX > arenaOrigin + 110) eggDir = -1;
-  eggY = 14 + ((animFrame >> 4) & 1);
-
-  int16_t speed = 4 + zone;
-  ballAngle += speed;
-  if (ballAngle >= 360) ballAngle -= 360;
-  int16_t a = ballAngle;
-  int16_t swing = (a < 180) ? (-40 + (a * 80) / 180) : (40 - ((a - 180) * 80) / 180);
-  ballWX = eggX + swing;
-  ballWY = eggY + 24 + abs(swing) / 8;
-
+  eggT++;
   if (bossCool) bossCool--;
+  if (eggLaugh) eggLaugh--;
+  float swingRate = 2.0f * (float)PI / (84 - zone * 6);   // ~2.8 s per full swing, quicker later
+  float shipSpd = 0.6f + zone * 0.15f;
 
-  // Touch Egg Mobile (flying craft): always bounce off; damage if spinning into it
+  switch (bossPhase) {
+    case EGG_ENTER: {                             // glide in diagonally from off-screen
+      float tx = arenaOrigin + EGG_RIGHT;
+      eggFX += (tx - eggFX) * 0.06f - 0.4f;
+      if (eggY < EGG_HOVER) eggY++;
+      if (eggFX <= tx + 1 && eggY >= EGG_HOVER) { eggFX = tx; bossPhase = EGG_LOWER; eggT = 0; beep(300, 60); }
+      break;
+    }
+    case EGG_LOWER:                               // let the ball down, then start it swinging
+      eggY = EGG_HOVER;
+      if (chainLen < CHAIN_LEN) chainLen += 0.6f;
+      else if (eggT > 50) { bossPhase = EGG_FIGHT; eggPause = 20; }
+      break;
+    case EGG_FIGHT:
+      eggY = EGG_HOVER + ((eggT >> 4) & 1);       // gentle bob
+      if (pendAmp < 1.15f) pendAmp += 0.02f;      // swing builds to ~65°
+      pendPhase += swingRate;
+      if (pendPhase > 2 * (float)PI) pendPhase -= 2 * (float)PI;
+      if (eggPause) eggPause--;
+      else {
+        eggFX += eggDir * shipSpd;
+        if (eggFX <= arenaOrigin + EGG_LEFT)  { eggFX = arenaOrigin + EGG_LEFT;  eggDir = 1;  eggPause = 40; }
+        if (eggFX >= arenaOrigin + EGG_RIGHT) { eggFX = arenaOrigin + EGG_RIGHT; eggDir = -1; eggPause = 40; }
+      }
+      break;
+    case EGG_BLOWUP:                              // shudders and smokes, the ball drops away
+      if ((eggT & 3) == 0) beep(150 + (h8(eggT) & 127), 30);
+      if (ballWY < 70) chainLen += 1.5f;
+      pendAmp *= 0.9f;
+      if (eggT > 60) { bossPhase = EGG_FLEE; eggT = 0; beep(700, 80); }
+      break;
+    case EGG_FLEE:                                // limps off to the right, climbing
+      eggFX += 2.0f;
+      if (eggT & 1) eggY--;
+      if (eggX > arenaOrigin + 150) { bossOn = false; beginClear(); return; }
+      break;
+  }
+  eggX = (int16_t)eggFX;
+  eggPlaceBall();
+  if (bossPhase >= EGG_BLOWUP) return;            // can't hurt or be hurt any more
+
+  // Touch the ship: always bounce off; spinning into it scores a hit
   if (abs(px - eggX) < 14 && abs(py - eggY) < 13) {
     bool attack = rolling && bossCool == 0;
-    // Bounce AWAY from the craft: above → up (−y), below → down (+y)
-    setPlayerVel((px < eggX) ? ZV(-4) : ZV(4),
-                 (py <= eggY + 2) ? ZV(-5) : ZV(5));
+    setPlayerVel((px < eggX) ? ZV(-2) : ZV(2),
+                 (py <= eggY + 2) ? -BOSS_BOUNCE : BOSS_BOUNCE / 2);
     jumpCut = true;
     onGround = false;
     rolling = true;
     faceRight = fvx > 0;
     if (attack) {
       bossHP--;
-      bossCool = 28;
+      bossCool = 32;                              // flashes; can't be hit again yet
       score += 100;
       beep(1500, 100);
-      if (!bossHP) {
-        bossOn = false;
-        beginClear();
-        return;
-      }
+      if (!bossHP) { bossPhase = EGG_BLOWUP; eggT = 0; score += 1000; }
     } else if (bossCool == 0 && !invul) {
       hurt();
+      eggLaugh = 40;
     }
   }
 
-  // Wrecking ball — safe under / on platforms
-  bool underPlat = false;
-  for (auto &p : plats) {
-    if (!p.live) continue;
-    if (px + rad < p.x || px - rad > p.x + p.w) continue;
-    if (py + rad >= p.y - 2 && py < p.y + 8) underPlat = true;
+  // Wrecking ball
+  if (!invul && chainLen > 4) {
+    int16_t dx = px - ballWX, dy = py - ballWY;
+    int16_t reach = BALL_R + rad - 1;
+    if ((int32_t)dx * dx + (int32_t)dy * dy < (int32_t)reach * reach) { hurt(); eggLaugh = 40; }
   }
-  if (!underPlat && !invul && abs(px - ballWX) < 8 && abs(py - ballWY) < 8) hurt();
 }
 
 void applyGroundControl() {
@@ -1347,6 +1402,11 @@ void physicsStep(uint8_t e) {
     if (groundRoll) stopRoll();
     syncPlayerInts();
   }
+  if (bossOn && px > arenaOrigin + 122) {       // arena's right wall (screen edge)
+    fpx = I2F(arenaOrigin + 122); fvx = 0;
+    if (groundRoll) stopRoll();
+    syncPlayerInts();
+  }
   // Terrain cliffs: a rise steeper than any slope is a wall face — stop at it (no snap-up).
   // Downhill drops are just ledges to fall off.
   if (px != prevX) {
@@ -1426,7 +1486,11 @@ void gameStepInner(uint8_t e) {
 
   if (bossOn) {
     cam = arenaOrigin;
-    camY = 0;
+    // Floor stays at the bottom; the view rises to keep Sonic in sight above the Egg Mobile
+    int16_t want = py - 16;
+    if (want > 0) want = 0;
+    if (camY > want) camY -= (camY - want + 1) / 2;
+    else if (camY < want) camY += (want - camY + 3) / 4;
   } else {
     // Look-ahead: the faster you run, the further the camera leads — at top speed Sonic sits
     // 24 px from the trailing edge with 104 px of sightline. Eased 1 px/frame so it never snaps;
@@ -1564,7 +1628,7 @@ void gameStepInner(uint8_t e) {
       if (abs(px - o.x) < 10 && abs(py - o.y) < 9) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 50; beep(1400, 50);
-          if (fvy > 0) { fvy = ZV(-4); rolling = true; syncPlayerInts(); }
+          if (fvy > 0) { fvy = stompVY(fvy); rolling = true; syncPlayerInts(); }
         } else if (!invul) {
           hurt();                       // ran into it upright: lose rings, or die with none
         }
@@ -1583,7 +1647,7 @@ void gameStepInner(uint8_t e) {
       if (abs(px - o.x) < 9 && abs(py - o.y) < 8) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 75; beep(1400, 50);
-          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
         } else {
           bumpFromSolid(o.x - 5, o.x + 6, o.y - 5, o.y + 5, rad);
         }
@@ -1596,7 +1660,7 @@ void gameStepInner(uint8_t e) {
       if (o.timer == 0 && abs(px - o.x) < 11 && abs(py - o.y) < 11) {
         int8_t dx = (px >= o.x) ? 1 : -1;
         int8_t dy = (py >= o.y) ? 1 : -1;
-        setPlayerVel(ZV(dx * 4), ZV((dy > 0) ? 3 : -6));
+        setPlayerVel(ZV(dx * 4), (dy > 0) ? BUMPER_VY / 3 : -BUMPER_VY);
         faceRight = dx > 0;
         onGround = false;
         rolling = true;
@@ -1610,7 +1674,7 @@ void gameStepInner(uint8_t e) {
       if (abs(px - o.x) < 10 && abs(py - o.y) < 10) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 80; beep(1400, 50);
-          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
         } else {
           bumpFromSolid(o.x - 6, o.x + 6, o.y - 6, o.y + 6, rad);
         }
@@ -1620,7 +1684,7 @@ void gameStepInner(uint8_t e) {
       if (o.y < o.home - 5 && abs(px - o.x) < 8 && abs(py - o.y) < 10) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 60; beep(1400, 50);
-          if (fvy > 0) { fvy = ZV(-4); syncPlayerInts(); }
+          if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
         } else if (!invul) {
           hurt();
         }
@@ -2041,25 +2105,60 @@ void drawBee(int16_t x, int16_t y, uint8_t frame, uint8_t state) {
 }
 
 void drawEggWrecker() {
-  int16_t ex = sx(eggX);
-  discSafe(ex, eggY + 5, 8);
-  fillBoxClipped(ex - 7, eggY + 10, 14, 4);
-  u8g2.setDrawColor(0);
-  for (int16_t i = -5; i <= 5; i += 4) vLineSafe(ex + i, eggY + 10, 4);
-  u8g2.setDrawColor(1);
-  discSafe(ex, eggY, 4);
-  u8g2.setDrawColor(0);
-  plot(ex - 2, eggY - 1);
-  plot(ex + 2, eggY - 1);
-  u8g2.setDrawColor(1);
-  hLineSafe(ex - 3, eggY + 3, 7);
+  int16_t ex = sx(eggX), ey = sy(eggY);
+  bool flash = bossCool && (bossCool & 2);
+  if (bossPhase == EGG_BLOWUP) { ex += (eggT & 2) ? 1 : -1; }   // shudder
 
-  int16_t bx = sx(ballWX), by = ballWY;
-  lineSafe(ex, eggY + 10, bx, by);
-  discSafe(bx, by, 5);
+  // Chain: a link every 4 px from the belly to the ball, then the checkered ball
+  if (chainLen > 1) {
+    int16_t pxv = ex, pyv = sy(eggPivotY());
+    int16_t bx = sx(ballWX), by = sy(ballWY);
+    float sa = sinf(ballAng), ca = cosf(ballAng);
+    for (float d = 2; d < chainLen - BALL_R + 1; d += 4) {
+      int16_t lx = pxv + (int16_t)lroundf(d * sa), ly = pyv + (int16_t)lroundf(d * ca);
+      frameSafe(lx - 1, ly - 1, 3, 3);
+    }
+    // checker quarters turn with the chain
+    for (int16_t yy = -BALL_R; yy <= BALL_R; yy++)
+      for (int16_t xx = -BALL_R; xx <= BALL_R; xx++) {
+        int16_t r2 = xx * xx + yy * yy;
+        if (r2 > BALL_R * BALL_R + 2) continue;
+        float u = xx * ca - yy * sa, v = xx * sa + yy * ca;
+        bool lit = r2 >= (BALL_R - 1) * (BALL_R - 1) || ((u >= 0) == (v >= 0));
+        if (lit) plot(bx + xx, by + yy);
+      }
+  }
+
+  // Ship: round cockpit hull, skirt with vents, pilot dome
+  if (!flash) {
+    discSafe(ex, ey + 5, 8);
+    fillBoxClipped(ex - 7, ey + 10, 14, 4);
+    u8g2.setDrawColor(0);
+    for (int16_t i = -5; i <= 5; i += 4) vLineSafe(ex + i, ey + 10, 4);
+    u8g2.setDrawColor(1);
+  } else {
+    circleSafe(ex, ey + 5, 8);
+    frameSafe(ex - 7, ey + 10, 14, 4);
+  }
+  discSafe(ex, ey, 4);
   u8g2.setDrawColor(0);
-  plot(bx - 2, by - 2); plot(bx - 1, by - 2);
+  if (bossCool || bossPhase == EGG_BLOWUP) {      // ouch: squeezed-shut eyes
+    hLineSafe(ex - 3, ey - 1, 2); hLineSafe(ex + 2, ey - 1, 2);
+  } else {
+    plot(ex - 2, ey - 1); plot(ex + 2, ey - 1);
+  }
   u8g2.setDrawColor(1);
+  if (eggLaugh && (eggLaugh & 4)) frameSafe(ex - 2, ey + 2, 5, 3);   // laughing
+  else hLineSafe(ex - 3, ey + 3, 7);
+
+  // Smoke puffs while it breaks up / escapes
+  if (bossPhase >= EGG_BLOWUP) {
+    for (uint8_t i = 0; i < 3; i++) {
+      uint8_t h = h8((uint16_t)(eggT / 3 + i * 37));
+      int16_t ox = (h & 15) - 8, oy = ((h >> 4) & 7) - 6;
+      circleSafe(ex + ox - (bossPhase == EGG_FLEE ? 6 : 0), ey + oy, 2 + (eggT + i) % 3);
+    }
+  }
 
   frameSafe(2, 57, 50, 6);
   fillBoxClipped(4, 59, bossHP * 5, 2);
