@@ -826,9 +826,11 @@ uint8_t spPhase, spLeg, spRings, spQuota, spBanner, spBannerKind, spHurt, spResu
 bool spWon;
 uint16_t spDist, spGen;             // course position travelled / generated up to
 float spSpeed, spSub, spAng, spAngV, spH, spHV;
+// Airborne: free flight in the pipe's cross-section (px, y down, centre = pipe axis)
+bool spAir; float spPX, spPY, spVX, spVY;
 uint16_t spEmPos;
 
-uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds; }
+uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds * 3; }
 
 void spAdd(int16_t pos, int8_t ang, uint8_t kind) {
   for (auto &o : spObj) if (!o.live) { o.pos = pos; o.ang = ang; o.kind = kind; o.live = true; return; }
@@ -887,7 +889,7 @@ void startSpecial() {
   clearWorld();
   spPhase = SP_RUN; spLeg = 0; spRings = 0; spQuota = spQuotaFor(0);
   spDist = 0; spGen = 0; spSub = 0; spSpeed = 2.0f + emeralds * 0.15f;   // a bit quicker per emerald held
-  spAng = 0; spAngV = 0; spH = 0; spHV = 0; spHurt = 0; spWon = false; spResultT = 0;
+  spAng = 0; spAngV = 0; spH = 0; spHV = 0; spAir = false; spHurt = 0; spWon = false; spResultT = 0;
   spBannerShow(0);                             // "GET n RINGS"
   animFrame = 0;
   spGenerate();
@@ -907,6 +909,16 @@ void spFinish(bool won) {
   spPhase = SP_RESULT; spResultT = 0;
 }
 
+// Leave the wall: running speed along it + a push toward the pipe's axis
+void spJump(float push) {
+  float a = spAng * (float)PI / 180, R = SP_R0;
+  float vt = spAngV * (float)PI / 180 * R;       // px/frame along the wall
+  spPX = sinf(a) * (R - 0.5f); spPY = cosf(a) * (R - 0.5f);
+  spVX = cosf(a) * vt - sinf(a) * push;
+  spVY = -sinf(a) * vt - cosf(a) * push;
+  spAir = true; spH = 0.5f;
+}
+
 void specialStep(uint8_t e) {
   if (e & B_MODE) { watch::exitToClock(); return; }
   animFrame++;
@@ -919,17 +931,42 @@ void specialStep(uint8_t e) {
   }
 
   // Steering: L/R push him around the wall; a gentle pull back to the bottom of the pipe
+  // On the wall: quick steering, friction and a pull to the bottom. A jump leaves the wall
+  // with his running speed plus the push off, then flies under screen gravity (like a ramp)
+  // and lands wherever the arc meets the pipe again.
   uint8_t h = watch::held();
-  if (h & B_LEFT)  spAngV -= 0.9f;
-  if (h & B_RIGHT) spAngV += 0.9f;
-  spAngV -= sinf(spAng * (float)PI / 180) * 0.35f;
-  spAngV *= 0.86f;
-  spAng += spAngV;
-  if (spAng > 80) { spAng = 80; spAngV = 0; }
-  if (spAng < -80) { spAng = -80; spAngV = 0; }
-  // Jump (off the pipe wall, toward the middle)
-  if ((e & B_MID) && spH <= 0) { spHV = 4.6f; beep(900, 30); }
-  if (spH > 0 || spHV > 0) { spH += spHV; spHV -= 0.42f; if (spH <= 0) { spH = 0; spHV = 0; } }
+  const float R = SP_R0, G = 0.42f;
+  if (!spAir) {
+    if (h & B_LEFT)  spAngV -= 1.9f;
+    if (h & B_RIGHT) spAngV += 1.9f;
+    spAngV -= sinf(spAng * (float)PI / 180) * 0.35f;
+    spAngV *= 0.82f;
+    if (spAngV > 11) spAngV = 11;
+    if (spAngV < -11) spAngV = -11;
+    spAng += spAngV;
+    if (spAng > 80) { spAng = 80; spAngV = 0; }
+    if (spAng < -80) { spAng = -80; spAngV = 0; }
+    if (e & B_MID) { spJump(4.6f); beep(900, 30); }
+  } else {
+    if (h & B_LEFT)  spVX -= 0.12f;              // a little air control
+    if (h & B_RIGHT) spVX += 0.12f;
+    spVY += G;
+    spPX += spVX; spPY += spVY;
+    float d = sqrtf(spPX * spPX + spPY * spPY);
+    if (spPY > 0 && d >= R && (spPX * spVX + spPY * spVY) > 0) {   // back on the wall
+      float a = atan2f(spPX, spPY);
+      spAng = a * 180 / (float)PI;
+      float vt = spVX * cosf(a) - spVY * sinf(a);                  // speed along the wall
+      spAngV = vt / R * 180 / (float)PI * 0.8f;
+      spAir = false; spH = 0;
+      if (spAng > 80) spAng = 80;
+      if (spAng < -80) spAng = -80;
+    } else {
+      if (spPY <= 0 && fabsf(spPX) > R * 0.97f) { spPX = (spPX > 0 ? 1 : -1) * R * 0.97f; spVX = 0; }  // over the rim: drop back in
+      spAng = atan2f(spPX, spPY) * 180 / (float)PI;
+      spH = R - d; if (spH < 0.1f) spH = 0.1f;
+    }
+  }
   if (spHurt) spHurt--;
 
   uint16_t prev = spDist;
@@ -949,7 +986,7 @@ void specialStep(uint8_t e) {
         o.live = false;
         uint8_t lose = spRings < 5 ? spRings : 5;
         spRings -= lose;
-        spHurt = 24; spHV = 3.0f; spH = 0.1f;
+        spHurt = 24; if (!spAir) spJump(3.0f);
         beep(200, 140);
       }
     }
@@ -1046,10 +1083,6 @@ void spDrawSonic() {
     y = (int16_t)lroundf(by + ry * a * K + uy * (b * K + spH));
   };
   if (spH > 0) hLineSafe(bx - 4, by - 1, 9);    // shadow on the wall
-  {                                             // dark backing so pipe dots don't run through him
-    int16_t cx0, cy0; P(0, spH > 0 ? 7 : 10, cx0, cy0);
-    u8g2.setDrawColor(0); discSafe(cx0, cy0, spH > 0 ? 10 : 14); u8g2.setDrawColor(1);
-  }
   if (spHurt && (spHurt & 2)) return;           // flicker after a bomb
   int16_t x, y, x2, y2, x3, y3;
   if (spH > 0) {                                // spin ball
