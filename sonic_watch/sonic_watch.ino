@@ -809,9 +809,12 @@ void advanceAfterClear() {
 // ===================== Special Stage: the half-pipe =====================
 // Sonic runs INTO the screen down a twisting half-pipe; rings and bombs come at him.
 // Left/Right slide him around the pipe wall, Mid jumps. Three legs, each ending in a
-// checkpoint with a ring quota ("GET 15 RINGS"); miss one and the stage ends. Clear all
+// checkpoint with a ring quota ("GET 15 RINGS"). Rings carry over and quotas add up, as in
+// Sonic 2; a bomb knocks 3 rings loose but never ends the run — the ONLY way to lose is to
+// reach a checkpoint short of its quota. Clear all
 // three and the Chaos Emerald comes down the pipe. 4 emeralds exist (one per zone); 3 is
 // the goal, the 4th is the spare. Difficulty climbs with each emerald already held.
+const uint8_t SP_BOMB_LOSS = 3;     // rings knocked loose by a bomb
 const int16_t SP_ZMAX = 120;        // farthest drawn depth
 const int16_t SP_LEG = 640;         // course length of one leg (~10 s)
 const float SP_FOCAL = 24.0f;       // perspective: scale = F / (F + z)
@@ -830,7 +833,7 @@ float spSpeed, spSub, spAng, spAngV, spH, spHV;
 bool spAir; float spPX, spPY, spVX, spVY;
 uint16_t spEmPos;
 
-uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds * 3; }
+uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds * 4; }
 
 void spAdd(int16_t pos, int8_t ang, uint8_t kind) {
   for (auto &o : spObj) if (!o.live) { o.pos = pos; o.ang = ang; o.kind = kind; o.live = true; return; }
@@ -984,7 +987,8 @@ void specialStep(uint8_t e) {
         o.live = false; spRings++; score += 10; beep(1800, 18);
       } else if (o.kind == SPO_BOMB && lane && spH < 8 && !spHurt) {
         o.live = false;
-        uint8_t lose = spRings < 5 ? spRings : 5;
+        // A bomb only knocks rings loose (never below 0); it never ends the stage
+        uint8_t lose = spRings < SP_BOMB_LOSS ? spRings : SP_BOMB_LOSS;
         spRings -= lose;
         spHurt = 24; if (!spAir) spJump(3.0f);
         beep(200, 140);
@@ -998,7 +1002,7 @@ void specialStep(uint8_t e) {
       spLeg++;
       beep(1500, 90);
       if (spLeg >= 3) { spPhase = SP_EMERALD; spEmPos = spDist + SP_ZMAX; spBannerShow(1); }
-      else { spRings = 0; spQuota = spQuotaFor(spLeg); spBannerShow(1); spBanner = 46; spBannerKind = 1; }
+      else { spQuota += spQuotaFor(spLeg); spBannerShow(1); }   // rings carry over: quotas add up
     } else {
       spBannerShow(2);
       spFinish(false);
