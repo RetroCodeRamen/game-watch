@@ -64,13 +64,17 @@ void drawSplash() {
   }
 
   if (splashFrame > 18 && ((splashFrame / 8) & 1)) {
+    // Box sized to the text (measured), centred
+    const char *msg = "PUSH JUMP TO START";
+    u8g2.setFont(u8g2_font_5x7_tr);
+    int16_t w = u8g2.getStrWidth(msg) + 8, x = (128 - w) / 2;
     u8g2.setDrawColor(0);
-    u8g2.drawBox(10, 54, 108, 10);
+    u8g2.drawBox(x, 53, w, 11);
     u8g2.setDrawColor(1);
-    u8g2.drawFrame(10, 54, 108, 10);
+    u8g2.drawFrame(x, 53, w, 11);
+    u8g2.setCursor(x + 4, 61);
+    u8g2.print(msg);
     u8g2.setFont(u8g2_font_6x10_tr);
-    u8g2.setCursor(16, 62);
-    u8g2.print(F("PUSH JUMP TO START"));
   }
 }
 
