@@ -23,6 +23,19 @@ void drawRingGlyph(int16_t x, int16_t y);
 // Game-side modes only; clock face / set / alarm are owned by WatchCore
 enum : uint8_t { SPLASH, GAME, MENU, OVER, WIN, SPECIAL, CLEAR, DEAD, SELECT };
 uint8_t mode = SPLASH;
+
+// ---- Screen transitions: dither fade out → switch screens → fade back in ----
+// Like the Genesis palette fades: nothing changes screens with a hard cut. The game freezes
+// while fading out; the new screen runs while it fades in (title cards slide in under it).
+enum : uint8_t { TR_NONE, TR_OUT, TR_IN };
+const uint8_t TR_STEPS = 8;           // frames each way (~0.27 s)
+uint8_t trState, trLevel;             // trLevel 0 = clear … TR_STEPS = fully faded
+bool trWhite;                         // fade to white (special stage) instead of black
+void (*trAction)();
+void transitionTo(void (*action)(), bool white = false) {
+  if (trState == TR_OUT) return;      // already on the way out
+  trState = TR_OUT; trWhite = white; trAction = action;
+}
 uint8_t splashFrame = 0;
 // Title-screen secret: Left Left Right Right Left Right, then Jump → level select.
 // Last six Left/Right presses, two bits each (1 = Left, 2 = Right).
@@ -193,7 +206,10 @@ static const fx MAX_FALL    = 1462;    // 1170
 #ifndef STOP_HOOK
 #define STOP_HOOK(reason, x0, x1)
 #endif
-static const int16_t CLIFF_STEP = 7;   // ground rising more than this within Sonic's half-width = a wall
+static const int16_t CLIFF_STEP = 7;
+// In the air the Genesis wall sensors sit at Sonic's middle, so a ledge whose top is level
+// with his body still catches him (floor sensors pop him up onto it). Same leniency here.
+static const int16_t CLIFF_STEP_AIR = 12;   // ground rising more than this within Sonic's half-width = a wall
 static const int16_t RAD_STAND = 6, RAD_ROLL = 5;   // feet below centre (5 / 4 before the zoom)
 // Slope pull per px of height change over 10 px (slopeAt). Genesis proportions to our ACCEL:
 // the max slope you can walk up from rest is ~21° (as in Sonic 1); rolling 2.5× down, 0.625× up.
@@ -228,10 +244,11 @@ uint8_t goalT;                     // >0: passed the signpost, counting the spin
 uint8_t lastRank;                  // 0 A+, 1 B, 2 D (for the tally)
 uint32_t tallyRingBonus, tallyTimeBonus;
 
-const uint8_t GOAL_SPIN_FRAMES = 75;  // ~2.5 s of spinning signpost before the tally
+const uint8_t GOAL_SPIN_FRAMES = 60;  // signpost spin (~2 s), slowing to a stop
+const uint8_t GOAL_MIN_FRAMES = 45;   // earliest the tally can follow
 
-// Player input — none while the signpost spins (Sonic just coasts to a stop)
-uint8_t heldIn() { return goalT ? 0 : watch::held(); }
+// Player input — past the signpost Sonic runs off to the right on his own
+uint8_t heldIn() { return goalT ? B_RIGHT : watch::held(); }
 
 // Act time in whole seconds (frames are ~33 ms)
 uint16_t actSeconds() { return (uint16_t)(((uint32_t)actFrames * 33) / 1000); }
@@ -654,16 +671,17 @@ void deathStep(uint8_t e) {
   }
   syncPlayerInts();
   if (deadT >= 60 && sy(py) > 80 && !watch::tunePlaying()) {
-    if (!lives) { mode = OVER; return; }
-    startAct(zone, act);   // rebuild stage; lives/score/emeralds kept
-    invul = 45;
+    if (!lives) transitionTo([] { mode = OVER; });
+    else transitionTo([] { startAct(zone, act); invul = 45; });   // lives/score/emeralds kept
   }
 }
 
 void placeGoal(int16_t x) { addObj(x, groundAt(x) - 25, 6); }
 
+// Title card: slides in from the right, holds ~0.8 s, then slides off to the left
+const uint8_t INTRO_LEN = 40, INTRO_IN = 6, INTRO_OUT = 10;
 void announce() {
-  intro = 60;   // ~2 s title card
+  intro = INTRO_LEN;
   beep(600 + zone * 80 + act * 40, 70);
 }
 
@@ -687,7 +705,7 @@ void startEggWrecker() {
   bossPhase = EGG_ENTER;
   eggT = 0; eggPause = 0; eggLaugh = 0;
   chainLen = 0; pendPhase = 0; pendAmp = 0; ballAng = 0;
-  intro = 60;
+  intro = INTRO_LEN;
   beep(280, 250);
 }
 
@@ -773,17 +791,18 @@ void startGame() {
   startAct(0, 0);
 }
 
-void advanceAfterClear() {
-  // Chance for special stage (~28%, better with many rings)
-  uint8_t chance = 22 + (rings > 20 ? 10 : 0) + (rings > 40 ? 10 : 0);
-  if (emeralds < 7 && random(100) < chance) {
-    startSpecial();
-    return;
-  }
-  // next act / zone
+void nextStage() {
   if (act == 0) startAct(zone, 1);
   else if (zone < 3) startAct(zone + 1, 0);
   else { mode = WIN; beep(1000, 500); }
+}
+
+void startSpecial();
+void advanceAfterClear() {
+  // Chance for special stage (~28%, better with many rings) — flashes white on the way in
+  uint8_t chance = 22 + (rings > 20 ? 10 : 0) + (rings > 40 ? 10 : 0);
+  if (emeralds < 7 && random(100) < chance) transitionTo(startSpecial, true);
+  else transitionTo(nextStage);
 }
 
 void startSpecial() {
@@ -803,6 +822,7 @@ void startSpecial() {
 }
 
 void beginClear() {
+  bool tuneAlready = goalT != 0;      // Act 1: the fanfare started at the signpost
   mode = CLEAR;
   clearT = 0;
   tallyDoneT = 0;
@@ -814,7 +834,7 @@ void beginClear() {
   static const uint16_t TIME_BONUS[3] = {5000, 2000, 500};
   tallyTimeBonus = TIME_BONUS[lastRank];
   tallyRingBonus = (uint32_t)rings * 100;
-  watch::playTune(ACT_CLEAR_TUNE, sizeof(ACT_CLEAR_TUNE) / sizeof(ACT_CLEAR_TUNE[0]));
+  if (!tuneAlready) watch::playTune(ACT_CLEAR_TUNE, sizeof(ACT_CLEAR_TUNE) / sizeof(ACT_CLEAR_TUNE[0]));
 }
 
 // ---- physics helpers ----
@@ -1024,7 +1044,7 @@ void eggStep(int16_t rad) {
     case EGG_FLEE:                                // limps off to the right, climbing
       eggFX += 2.0f;
       if (eggT & 1) eggY--;
-      if (eggX > arenaOrigin + 150) { bossOn = false; beginClear(); return; }
+      if (eggX > arenaOrigin + 150) { transitionTo([] { bossOn = false; beginClear(); }); return; }
       break;
   }
   eggX = (int16_t)eggFX;
@@ -1411,9 +1431,10 @@ void physicsStep(uint8_t e) {
   // Downhill drops are just ledges to fall off.
   if (px != prevX) {
     int8_t dir = px > prevX ? 1 : -1;
+    int16_t step = wasGrounded ? CLIFF_STEP : CLIFF_STEP_AIR;
     for (uint8_t k = 0; k < 8; k++) {
       int16_t lead = px + dir * (rad - 1);
-      if (py + rad - groundAt(lead) <= CLIFF_STEP) break;
+      if (py + rad - groundAt(lead) <= step) break;
       if (k == 0) STOP_HOOK("cliff", lead, py + rad - groundAt(lead));
       fpx -= dir * FX_ONE;
       fvx = 0;
@@ -1467,7 +1488,7 @@ void gameStepInner(uint8_t e) {
   if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
   if (e & B_MODE) { watch::exitToClock(); return; }
 
-  if (goalT) e = 0;                              // signpost spinning: no control
+  if (goalT) e = 0;                              // past the signpost: no control
   else if (actFrames < 0xFFFF) actFrames++;      // act timer (stops at the signpost)
 
   if (invul) invul--;
@@ -1502,28 +1523,36 @@ void gameStepInner(uint8_t e) {
       if (camLead < want) camLead++;
       else if (camLead > want) camLead--;
     }
-    cam = px - 64 + camLead;
-    if (cam < 0) cam = 0;
-    // Vertical follow — keeps Sonic framed through tall loops
-    int16_t psy = py - camY;
-    if (psy < 20) camY = py - 20;
-    if (psy > 44) camY = py - 44;
+    if (goalT) {
+      // Act over: the camera settles with the signpost in the middle and lets Sonic run off
+      int16_t want = actEnd - 64;
+      cam += (want - cam) / 4 + ((want > cam) ? 1 : (want < cam) ? -1 : 0);
+    } else {
+      cam = px - 64 + camLead;
+      if (cam < 0) cam = 0;
+      // Vertical follow — keeps Sonic framed through tall loops
+      int16_t psy = py - camY;
+      if (psy < 20) camY = py - 20;
+      if (psy > 44) camY = py - 44;
+    }
   }
 
   if (!bossOn && !goalT && px >= actEnd - 8) {
     if (act == 0) {
-      goalT = 1;                 // passed the signpost: timer stops, sign starts spinning
-      groundRoll = false;        // stand up so normal friction brings him to a stop
-      beep(1500, 60);
+      goalT = 1;                 // passed the signpost: timer stops, sign spins, fanfare plays
+      groundRoll = false;        // stand up and run off screen
+      watch::playTune(ACT_CLEAR_TUNE, sizeof(ACT_CLEAR_TUNE) / sizeof(ACT_CLEAR_TUNE[0]));
     } else {
-      startEggWrecker();
+      transitionTo(startEggWrecker);
       return;
     }
   }
   if (goalT) {
-    goalT++;
-    if (goalT < 50 && (goalT % 3) == 0) beep(900 + (goalT & 4) * 60, 15);   // spin clicks
-    if (goalT >= GOAL_SPIN_FRAMES) { beginClear(); return; }
+    if (goalT < 255) goalT++;
+    // Tally once Sonic is off screen and the fanfare is over (or after ~8 s regardless)
+    bool gone = sx(px) > 140;
+    if ((goalT >= GOAL_MIN_FRAMES && gone && !watch::tunePlaying()) || goalT == 255)
+      transitionTo(beginClear);
   }
 
   // Update only nearby objects (level stays fully loaded)
@@ -1702,9 +1731,7 @@ void specialStep(uint8_t e) {
   else {
     // failed — continue game without emerald
     beep(200, 200);
-    if (act == 0) startAct(zone, 1);
-    else if (zone < 3) startAct(zone + 1, 0);
-    else mode = WIN;
+    transitionTo(nextStage, true);
     return;
   }
 
@@ -1747,11 +1774,7 @@ void specialStep(uint8_t e) {
 
   if (spGot) {
     if (clearT) clearT--;
-    else {
-      if (act == 0) startAct(zone, 1);
-      else if (zone < 3) startAct(zone + 1, 0);
-      else mode = WIN;
-    }
+    else transitionTo(nextStage, true);
   }
 }
 
@@ -2172,11 +2195,17 @@ void drawBanner() {
   int16_t w = u8g2.getStrWidth(top);
   int16_t w2 = u8g2.getStrWidth(bot);
   if (w2 > w) w = w2;
-  int16_t bw = w + 10, bx = (128 - bw) / 2;
+  int16_t bw = w + 10;
+  // Slide: in from the right (eases to a stop), off to the left (accelerating)
+  uint8_t age = INTRO_LEN - intro;
+  int16_t off = 0;
+  if (age < INTRO_IN) { int16_t k = INTRO_IN - age; off = k * k * 128 / (INTRO_IN * INTRO_IN); }
+  else if (intro < INTRO_OUT) { int16_t k = INTRO_OUT - intro; off = -(k * k * (64 + bw / 2 + 4)) / (INTRO_OUT * INTRO_OUT); }
+  int16_t bx = (128 - bw) / 2 + off;
   u8g2.setDrawColor(0); u8g2.drawBox(bx, 16, bw, 20);
   u8g2.setDrawColor(1); u8g2.drawFrame(bx, 16, bw, 20);
-  u8g2.setCursor((128 - u8g2.getStrWidth(top)) / 2, 25); u8g2.print(top);
-  u8g2.setCursor((128 - u8g2.getStrWidth(bot)) / 2, 33); u8g2.print(bot);
+  u8g2.setCursor(bx + (bw - u8g2.getStrWidth(top)) / 2, 25); u8g2.print(top);
+  u8g2.setCursor(bx + (bw - u8g2.getStrWidth(bot)) / 2, 33); u8g2.print(bot);
   u8g2.setFont(u8g2_font_6x10_tr);
 }
 
@@ -2232,9 +2261,10 @@ void drawGame() {
     else if (o.kind == 6) {
       int16_t gh = groundAt(o.x) - o.y;
       if (gh > 0 && gh < 60) { vLineSafe(x, y + 8, gh - 8); vLineSafe(x + 1, y + 8, gh - 8); }
-      if (goalT && goalT < 55) {
-        // spinning: panel width follows |cos|, alternating faces
-        float c = cosf(goalT * 0.45f);
+      if (goalT && goalT < GOAL_SPIN_FRAMES) {
+        // spinning, slowing down: panel width follows |cos|, alternating faces
+        float t = goalT;
+        float c = cosf(0.6f * t - 0.0042f * t * t);
         int16_t w = (int16_t)(fabsf(c) * 8.0f) + 1;
         if (c > 0) fillBoxClipped(x - w + 1, y - 3, w * 2, 12);
         else frameSafe(x - w + 1, y - 3, w * 2, 12);
@@ -2298,6 +2328,19 @@ void drawGame() {
   for (uint8_t i = 0; i < lives; i++) discSafe(124 - i * 6, 3, 2);
   u8g2.setFont(u8g2_font_6x10_tr);
   if (intro) drawBanner();
+  if (goalT > 8) {
+    // "STAGE CLEAR" slides in from the right and sits at the top while the fanfare plays
+    u8g2.setFont(u8g2_font_ncenB10_tr);
+    const char *txt = "STAGE CLEAR";
+    int16_t w = u8g2.getStrWidth(txt);
+    int16_t k = 16 - (int16_t)goalT;               // 8 frames of slide-in
+    int16_t off = k > 0 ? k * k * 2 : 0;
+    int16_t x = (128 - w) / 2 + off;
+    u8g2.setDrawColor(0); u8g2.drawBox(x - 3, 9, w + 6, 14);
+    u8g2.setDrawColor(1); u8g2.drawFrame(x - 3, 9, w + 6, 14);
+    u8g2.setCursor(x, 20); u8g2.print(txt);
+    u8g2.setFont(u8g2_font_6x10_tr);
+  }
 }
 
 void drawSpecial() {
@@ -2323,20 +2366,27 @@ void drawSpecial() {
   u8g2.print(spTimer / 30);
 }
 
+// Tally rows slide in from the right one after another (row r starts 2 frames after r−1)
+int16_t tallyOff(uint8_t row) {
+  int16_t k = (int16_t)(row * 2 + 7) - (int16_t)clearT;
+  if (k <= 0) return 0;
+  return k > 7 ? 128 : k * k * 128 / 49;
+}
+
 void drawClear() {
   // Zone + "ACT n CLEAR!" header
   u8g2.setFont(u8g2_font_5x7_tr);
   const char *zn = (const char *)zoneName();
-  u8g2.setCursor((128 - u8g2.getStrWidth(zn)) / 2, 7); u8g2.print(zn);
+  u8g2.setCursor((128 - u8g2.getStrWidth(zn)) / 2 + tallyOff(0), 7); u8g2.print(zn);
   u8g2.setFont(u8g2_font_6x10_tr);
   const char *hd = act ? "ACT 2 CLEAR!" : "ACT 1 CLEAR!";
-  u8g2.setCursor((128 - u8g2.getStrWidth(hd)) / 2, 18); u8g2.print(hd);
-  hLineSafe(0, 21, 128);
+  u8g2.setCursor((128 - u8g2.getStrWidth(hd)) / 2 + tallyOff(1), 18); u8g2.print(hd);
+  if (tallyOff(1) < 128) hLineSafe(tallyOff(1), 21, 128);
 
-  u8g2.setCursor(2, 32); u8g2.print(F("TIME  ")); printTime(actSeconds());
-  u8g2.setCursor(2, 43); u8g2.print(F("RINGS ")); u8g2.print(rings);
-  u8g2.setCursor(2, 54); u8g2.print(F("BONUS ")); u8g2.print(tallyRingBonus + tallyTimeBonus);
-  u8g2.setCursor(2, 64); u8g2.print(F("SCORE ")); u8g2.print(score);
+  u8g2.setCursor(2 + tallyOff(2), 32); u8g2.print(F("TIME  ")); printTime(actSeconds());
+  u8g2.setCursor(2 + tallyOff(3), 43); u8g2.print(F("RINGS ")); u8g2.print(rings);
+  u8g2.setCursor(2 + tallyOff(4), 54); u8g2.print(F("BONUS ")); u8g2.print(tallyRingBonus + tallyTimeBonus);
+  u8g2.setCursor(2 + tallyOff(5), 64); u8g2.print(F("SCORE ")); u8g2.print(score);
 
   // Speed rank, revealed after a beat
   if (clearT > 20) {
@@ -2369,7 +2419,7 @@ void menuLoop(uint8_t e) {
   if (e & (B_LEFT | B_RIGHT)) menuSel = (menuSel + ((e & B_LEFT) ? 2 : 1)) % 3;
   if (e & B_MID) {
     if (menuSel == 0) mode = GAME;
-    else if (menuSel == 1) startGame();
+    else if (menuSel == 1) transitionTo(startGame);
     else watch::exitToClock();
   }
 }
@@ -2393,8 +2443,8 @@ void selectStep(uint8_t e) {
   if (e & B_MID) {
     randomSeed(micros());
     rings = 0; score = 0; lives = 3; emeralds = 0;
-    if (selIdx < 8) startAct(selIdx / 2, selIdx % 2);
-    else { zone = 0; act = 0; lvl = &ACTS[0][0]; startSpecial(); }
+    if (selIdx < 8) transitionTo([] { startAct(selIdx / 2, selIdx % 2); });
+    else transitionTo([] { zone = 0; act = 0; lvl = &ACTS[0][0]; startSpecial(); }, true);
   }
 }
 
@@ -2421,12 +2471,27 @@ void drawSelect() {
 
 // ===================== WatchCore hooks =====================
 void gameStart() {            // Game pressed on the clock face
+  trState = TR_NONE; trLevel = 0; trAction = nullptr;
   splashFrame = 0;
   codeHist = 0;
   mode = SPLASH;
 }
 
 void gameUpdate(uint8_t e) {
+  if (trState == TR_OUT) {                       // frozen while the screen fades out
+    if (++trLevel >= TR_STEPS) {
+      trLevel = TR_STEPS;
+      trState = TR_IN;
+      void (*a)() = trAction; trAction = nullptr;
+      if (a) a();
+    }
+    return;
+  }
+  if (trState == TR_IN) {
+    if (trLevel) trLevel--;
+    if (!trLevel) trState = TR_NONE;
+    e = 0;                                       // no input until the fade-in is under way
+  }
   switch (mode) {
     case SPLASH:
       // Only Jump (play) and Mode (back to the clock) act here; Left/Right feed the code
@@ -2435,7 +2500,7 @@ void gameUpdate(uint8_t e) {
       if (e & B_RIGHT) codeHist = (uint16_t)((codeHist << 2) | 2) & 0x0FFF;
       if (e & B_MID) {
         if (codeHist == LEVEL_SELECT_CODE) { selIdx = 0; mode = SELECT; beep(1800, 80); }
-        else startGame();
+        else transitionTo(startGame);
       } else if (e & B_MODE) watch::exitToClock();
       break;
     case SELECT: selectStep(e); break;
@@ -2444,11 +2509,28 @@ void gameUpdate(uint8_t e) {
     case CLEAR: clearStep(e); break;
     case MENU: menuLoop(e); break;
     case OVER:
-      if (e & B_MID) startGame();
+      if (e & B_MID) transitionTo(startGame);
       else if (e & (B_GAME | B_MODE)) watch::exitToClock();  // Mode always escapes to clock
       break;
     case WIN: if (e) watch::exitToClock(); break;
     case DEAD: deathStep(e); break;
+  }
+}
+
+// Ordered-dither fade: level 0 leaves the frame alone, TR_STEPS blanks it (or whites it out)
+void applyFade(uint8_t level, bool white) {
+  static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  uint8_t thr = (uint8_t)(level * 16 / TR_STEPS);
+  uint8_t mask[4];
+  for (uint8_t xm = 0; xm < 4; xm++) {
+    uint8_t m = 0;
+    for (uint8_t b = 0; b < 8; b++) if (BAYER[b & 3][xm] < thr) m |= (uint8_t)(1 << b);
+    mask[xm] = m;
+  }
+  uint8_t *buf = u8g2.getBufferPtr();
+  for (uint16_t i = 0; i < 8 * 128; i++) {
+    if (white) buf[i] |= mask[i & 3];
+    else buf[i] &= (uint8_t)~mask[i & 3];
   }
 }
 
@@ -2464,6 +2546,7 @@ void gameDraw() {
     case DEAD: drawGame(); break;
     case SELECT: drawSelect(); break;
   }
+  if (trLevel) applyFade(trLevel, trWhite);
 }
 
 // Alarm interrupted a run: come back to the pause menu, not straight into play

@@ -5,7 +5,7 @@
 //   Terrain: {x, groundY} points, linearly interpolated (world y; bigger = lower).
 //            Slopes: ≤ 12 px rise per 32 px (~21°, the steepest you can walk up from rest).
 //            Cliffs: two points 1 px apart, e.g. {1061, -59}, {1062, -104}. A rise is a wall
-//            (jump it if ≤ 30 px; taller needs a spring ~26 px before the face); a drop is a
+//            (jump it if ≤ 30 px; taller needs a spring flush against the face, x = cliff − 6); a drop is a
 //            ledge to fall off. Keep crabs ≥ 30 px and spikes/walls/flames ≥ 14 px from a cliff.
 //   Objects: {x, h, kind, arg}; h = height above the local ground (px).
 //
@@ -159,8 +159,8 @@ static const LvlObj GH1_O[] = {
   {5500, 0, L_DECO, D_PALM},
   {5650, 0, L_DECO, D_SUN},
   {5700, 8, L_RINGS, 3},
-  // springs up the tall cliff faces
-  {1036, 0, L_SPRING, 0}, {2146, 0, L_SPRING, 0}, {4104, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {1056, 0, L_SPRING, 0}, {2166, 0, L_SPRING, 0}, {4124, 0, L_SPRING, 0},
 };
 
 // GREEN HILL ACT 2 — shorter: hills, a spring climb, a spike valley, then the Egg Wrecker.
@@ -202,8 +202,8 @@ static const LvlObj GH2_O[] = {
   {2140, 8, L_RINGS, 6},
   {2260, 0, L_DECO, D_SUN},
   {2360, 8, L_RINGS, 4},
-  // springs up the tall cliff faces
-  {964, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {984, 0, L_SPRING, 0},
 };
 
 // =====================================================================
@@ -310,8 +310,8 @@ static const LvlObj CP1_O[] = {
   {5266, 26, L_BEE, 0},
   {5366, 0, L_CRAB, 0},
   {5440, 0, L_DECO, D_PIPE},
-  // springs up the tall cliff faces
-  {1204, 0, L_SPRING, 0}, {3624, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {1224, 0, L_SPRING, 0}, {3644, 0, L_SPRING, 0},
 };
 
 // CHEMICAL PLANT ACT 2 — a short trap run to the boss.
@@ -346,8 +346,8 @@ static const LvlObj CP2_O[] = {
   {2140, 8, L_RINGS, 6},
   {2300, 0, L_DECO, D_PIPE},
   {2400, 8, L_RINGS, 4},
-  // springs up the tall cliff faces
-  {1274, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {1294, 0, L_SPRING, 0},
 };
 
 // =====================================================================
@@ -440,8 +440,8 @@ static const LvlObj CN1_O[] = {
   {5120, 8, L_RINGS, 8},
   {5300, 0, L_DECO, D_NEON},
   {5400, 8, L_RINGS, 4},
-  // springs up the tall cliff faces
-  {686, 0, L_SPRING, 0}, {1714, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {706, 0, L_SPRING, 0}, {1734, 0, L_SPRING, 0},
 };
 
 // CASINO NIGHT ACT 2 — two pinball bowls and a bumper chain, then the boss.
@@ -474,8 +474,8 @@ static const LvlObj CN2_O[] = {
   {1840, 8, L_RINGS, 6},
   {2100, 0, L_DECO, D_NEON},
   {2200, 8, L_RINGS, 5},
-  // springs up the tall cliff faces
-  {478, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {498, 0, L_SPRING, 0},
 };
 
 // =====================================================================
@@ -578,8 +578,8 @@ static const LvlObj SB1_O[] = {
   {5340, 8, L_RINGS, 6},
   {5500, 0, L_DECO, D_GEAR},
   {5560, 8, L_RINGS, 3},
-  // springs up the tall cliff faces
-  {608, 0, L_SPRING, 0}, {2868, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {628, 0, L_SPRING, 0}, {2888, 0, L_SPRING, 0},
 };
 
 // SCRAP BRAIN ACT 2 — saws, a girder bridge and flame jets, then the final boss.
@@ -616,8 +616,8 @@ static const LvlObj SB2_O[] = {
   {2060, 0, L_FLAME, 0},
   {2120, 0, L_DECO, D_GEAR},
   {2200, 8, L_RINGS, 5},
-  // springs up the tall cliff faces
-  {374, 0, L_SPRING, 0},
+  // springs flush against the tall cliff faces (miss the top → land back on the spring)
+  {394, 0, L_SPRING, 0},
 };
 
 // [zone][act]

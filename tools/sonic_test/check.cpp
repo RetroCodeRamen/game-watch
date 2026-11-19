@@ -17,13 +17,13 @@ int main(){
       else if(dx==1 && dy>6){ // cliff
         int x=A->ter[i].x; bool up=A->ter[i].y<A->ter[i-1].y; int springNear=0;
         for(int j=0;j<A->nObj;j++){ const LvlObj&o=A->obj[j]; int ox=o.x, ex=o.x;
-          if(o.kind==L_SPRING && ox<x && ox>x-40) springNear=1;
+          if(o.kind==L_SPRING && ox<x && ox>=x-8) springNear=1;   // flush against the face
           if(o.kind==L_SPIKES||o.kind==L_RINGS||o.kind==L_ARC) ex=o.x+12*(o.arg-1);
           if(o.kind==L_PLAT) ex=o.x+o.arg;
-          int near = (o.kind==L_CRAB)?30 : (o.kind==L_SPIKES||o.kind==L_SPIKE||o.kind==L_WALL||o.kind==L_FLAME)?14 : (o.kind==L_SPRING)?8 : 0;
+          int near = (o.kind==L_CRAB)?30 : (o.kind==L_SPIKES||o.kind==L_SPIKE||o.kind==L_WALL||o.kind==L_FLAME)?14 : (o.kind==L_SPRING)?0 : 0;   // springs belong right at the face
           if(near && ex>x-near && ox<x+near){printf("  %s kind %d at %d too close to cliff at %d\n",NAMES[z][a],o.kind,o.x,x);bad++;}
           if(o.kind==L_BRIDGE && x>=o.x-8 && x<=o.x+o.arg*4+8){printf("  %s cliff %d inside bridge\n",NAMES[z][a],x);bad++;} }
-        if(up && dy>30 && !springNear){printf("  %s up-cliff %d px at %d needs a spring\n",NAMES[z][a],dy,x);bad++;}
+        if(up && dy>30 && !springNear){printf("  %s up-cliff %d px at %d needs a spring flush against it (x-6)\n",NAMES[z][a],dy,x);bad++;}
         if(dy>maxCliff) maxCliff=dy; nCliff++;
       }
       else { int s=dy*32/dx; if(s>maxSlope)maxSlope=s; if(dy*32>12*dx){printf("  %s steep slope %d->%d (%d px over %d)\n",NAMES[z][a],A->ter[i-1].x,A->ter[i].x,dy,dx);bad++;} }

@@ -2,7 +2,7 @@
 #include "Arduino.h"
 #include <stdio.h>
 typedef uint16_t u8g2_uint_t;
-static const uint8_t u8g2_font_6x10_tr[1]={0}, u8g2_font_logisoso24_tn[1]={0}, u8g2_font_5x7_tr[1]={0}, u8g2_font_4x6_tr[1]={0}, u8g2_font_ncenB18_tr[1]={0}, u8g2_font_ncenB08_tr[1]={0};
+static const uint8_t u8g2_font_6x10_tr[1]={0}, u8g2_font_logisoso24_tn[1]={0}, u8g2_font_5x7_tr[1]={0}, u8g2_font_4x6_tr[1]={0}, u8g2_font_ncenB18_tr[1]={0}, u8g2_font_ncenB08_tr[1]={0}, u8g2_font_ncenB10_tr[1]={0};
 struct U8G2_SH1106_128X64_NONAME_F_HW_I2C {
   uint8_t buf[1024]; uint8_t col = 1; int cx = 0, cy = 0;
   void setDrawColor(uint8_t c) { col = c; }
