@@ -1,5 +1,5 @@
 // Sonic-style platformer + watch for RP2040-Zero
-// 4 zones × 2 acts, Egg Wrecker bosses, special-stage emeralds
+// 4 zones × 2 acts, Egg Wrecker bosses, half-pipe special stage (4 emeralds, 3 is the goal)
 // Board: Waveshare RP2040-Zero | Core: Earle Philhower | Libs: U8g2, WatchCore
 //
 // Clock, alarm, set screens and buttons live in libraries/WatchCore.
@@ -302,9 +302,6 @@ uint8_t eggT, eggPause, eggLaugh;
 int16_t arenaOrigin;             // world X where boss arena starts
 
 // Special stage
-uint8_t spRings, spGot;
-uint16_t spTimer;
-int16_t spEX, spEY;
 
 // Ground height from the act's terrain profile (linear between points)
 // Ground height at world x. The profile is in design units: find the segment in data space
@@ -794,6 +791,7 @@ void startGame() {
 }
 
 const uint8_t SPECIAL_RINGS = 20;
+const uint8_t EMERALD_MAX = 4, EMERALD_GOAL = 3;   // one per zone; 3 is the goal, the 4th the spare
 
 void nextStage() {
   if (act == 0) startAct(zone, 1);
@@ -804,24 +802,366 @@ void nextStage() {
 void startSpecial();
 void advanceAfterClear() {
   // Finish an act holding 20+ rings → Special Stage (flashes white on the way in)
-  if (emeralds < 7 && rings >= SPECIAL_RINGS) transitionTo(startSpecial, true);
+  if (emeralds < EMERALD_MAX && rings >= SPECIAL_RINGS) transitionTo(startSpecial, true);
   else transitionTo(nextStage);
 }
 
+// ===================== Special Stage: the half-pipe =====================
+// Sonic runs INTO the screen down a twisting half-pipe; rings and bombs come at him.
+// Left/Right slide him around the pipe wall, Mid jumps. Three legs, each ending in a
+// checkpoint with a ring quota ("GET 15 RINGS"); miss one and the stage ends. Clear all
+// three and the Chaos Emerald comes down the pipe. 4 emeralds exist (one per zone); 3 is
+// the goal, the 4th is the spare. Difficulty climbs with each emerald already held.
+const int16_t SP_ZMAX = 120;        // farthest drawn depth
+const int16_t SP_LEG = 640;         // course length of one leg (~10 s)
+const float SP_FOCAL = 24.0f;       // perspective: scale = F / (F + z)
+const int16_t SP_R0 = 46;           // pipe radius on screen at the near end
+const int16_t SP_ZS = 6;            // Sonic runs this far into the pipe (things pass beside him)
+const float SP_NEAR_CY = 22, SP_VANISH_Y = 0;   // pipe centre: near end → vanishing point
+enum { SPO_RING, SPO_BOMB };
+enum { SP_RUN, SP_EMERALD, SP_RESULT };
+struct SpObj { int16_t pos; int8_t ang; uint8_t kind; bool live; };
+SpObj spObj[48];
+uint8_t spPhase, spLeg, spRings, spQuota, spBanner, spBannerKind, spHurt, spResultT;
+bool spWon;
+uint16_t spDist, spGen;             // course position travelled / generated up to
+float spSpeed, spSub, spAng, spAngV, spH, spHV;
+uint16_t spEmPos;
+
+uint8_t spQuotaFor(uint8_t leg) { return 12 + leg * 3 + emeralds; }
+
+void spAdd(int16_t pos, int8_t ang, uint8_t kind) {
+  for (auto &o : spObj) if (!o.live) { o.pos = pos; o.ang = ang; o.kind = kind; o.live = true; return; }
+}
+
+// Lay one pattern starting at course position p; returns its length
+int16_t spPattern(int16_t p) {
+  uint8_t level = emeralds + spLeg;            // 0 … 5
+  int8_t a = (int8_t)(random(-5, 6) * 10);     // centre angle, −50 … 50
+  switch (random(level >= 2 ? 6 : level >= 1 ? 5 : 4)) {
+    case 0:                                     // straight line of rings
+      for (uint8_t k = 0; k < 6; k++) spAdd(p + k * 10, a, SPO_RING);
+      return 60;
+    case 1:                                     // slalom
+      for (uint8_t k = 0; k < 8; k++) spAdd(p + k * 9, (int8_t)(45 * sinf(k * 0.75f)), SPO_RING);
+      return 72;
+    case 2: {                                   // sweep across the pipe
+      int8_t d = random(2) ? 1 : -1;
+      for (uint8_t k = 0; k < 7; k++) spAdd(p + k * 9, (int8_t)(d * (-60 + k * 20)), SPO_RING);
+      return 63;
+    }
+    case 3: {                                   // bomb in the lane, rings beside it
+      int8_t side = a > 0 ? -1 : 1;
+      spAdd(p + 20, a, SPO_BOMB);
+      for (uint8_t k = 0; k < 5; k++) spAdd(p + k * 10, (int8_t)(a + side * 40), SPO_RING);
+      return 50;
+    }
+    case 4:                                     // bomb pair across the line: jump it
+      for (uint8_t k = 0; k < 3; k++) spAdd(p + k * 10, a, SPO_RING);
+      spAdd(p + 34, (int8_t)(a - 10), SPO_BOMB); spAdd(p + 34, (int8_t)(a + 10), SPO_BOMB);
+      for (uint8_t k = 0; k < 3; k++) spAdd(p + 50 + k * 10, a, SPO_RING);
+      return 80;
+    default:                                    // bomb gate: thread the gaps
+      spAdd(p, -50, SPO_BOMB); spAdd(p, 0, SPO_BOMB); spAdd(p, 50, SPO_BOMB);
+      spAdd(p, -25, SPO_RING); spAdd(p, 25, SPO_RING);
+      spAdd(p + 12, -25, SPO_RING); spAdd(p + 12, 25, SPO_RING);
+      return 24;
+  }
+}
+
+void spGenerate() {
+  // Fill the course ahead, leaving a clear run-in after each checkpoint and before the next
+  while (spGen < spDist + SP_ZMAX + 20) {
+    uint16_t legStart = (spGen / SP_LEG) * SP_LEG, legEnd = legStart + SP_LEG;
+    if (spGen < legStart + 50) { spGen = legStart + 50; continue; }
+    if (spGen > legEnd - 90 || spGen / SP_LEG >= 3) { spGen = legEnd + 50; if (spGen / SP_LEG >= 3) return; continue; }
+    spGen += spPattern((int16_t)spGen) + 24;
+  }
+}
+
+void spBannerShow(uint8_t kind) { spBannerKind = kind; spBanner = 46; }   // slides like a title card
+
 void startSpecial() {
   mode = SPECIAL;
-  spRings = 0;
-  spTimer = 450; // ~15s at 30 FPS
-  spGot = 0;
-  // Must set the fixed-point state too, or syncPlayerInts() restores the act position
-  setPlayerPos(64, 40);
-  setPlayerVel(0, 0);
-  spEX = 64; spEY = 28;
+  for (auto &o : spObj) o.live = false;
   clearWorld();
-  for (uint8_t i = 0; i < 8; i++)
-    addObj(20 + i * 12, 18 + (i & 1) * 14, 1);
-  intro = 35;
-  beep(1200, 80);
+  spPhase = SP_RUN; spLeg = 0; spRings = 0; spQuota = spQuotaFor(0);
+  spDist = 0; spGen = 0; spSub = 0; spSpeed = 2.0f + emeralds * 0.15f;   // a bit quicker per emerald held
+  spAng = 0; spAngV = 0; spH = 0; spHV = 0; spHurt = 0; spWon = false; spResultT = 0;
+  spBannerShow(0);                             // "GET n RINGS"
+  animFrame = 0;
+  spGenerate();
+}
+
+static const watch::Note EMERALD_TUNE[] = {
+  {1047, 120}, {1319, 120}, {1568, 120}, {2093, 360}, {0, 60}, {1760, 120}, {2093, 480},
+};
+
+void spFinish(bool won) {
+  spWon = won;
+  if (won) {
+    emeralds++;
+    score += 1000;
+    watch::playTune(EMERALD_TUNE, sizeof(EMERALD_TUNE) / sizeof(EMERALD_TUNE[0]));
+  } else beep(200, 300);
+  spPhase = SP_RESULT; spResultT = 0;
+}
+
+void specialStep(uint8_t e) {
+  if (e & B_MODE) { watch::exitToClock(); return; }
+  animFrame++;
+  if (spBanner) spBanner--;
+  if (spPhase == SP_RESULT) {
+    spResultT++;
+    if ((spResultT > 45 && (e & B_MID)) || (spResultT > 150 && !watch::tunePlaying()))
+      transitionTo(nextStage, true);
+    return;
+  }
+
+  // Steering: L/R push him around the wall; a gentle pull back to the bottom of the pipe
+  uint8_t h = watch::held();
+  if (h & B_LEFT)  spAngV -= 0.9f;
+  if (h & B_RIGHT) spAngV += 0.9f;
+  spAngV -= sinf(spAng * (float)PI / 180) * 0.35f;
+  spAngV *= 0.86f;
+  spAng += spAngV;
+  if (spAng > 80) { spAng = 80; spAngV = 0; }
+  if (spAng < -80) { spAng = -80; spAngV = 0; }
+  // Jump (off the pipe wall, toward the middle)
+  if ((e & B_MID) && spH <= 0) { spHV = 4.6f; beep(900, 30); }
+  if (spH > 0 || spHV > 0) { spH += spHV; spHV -= 0.42f; if (spH <= 0) { spH = 0; spHV = 0; } }
+  if (spHurt) spHurt--;
+
+  uint16_t prev = spDist;
+  spSub += spSpeed;                            // fractional speed: smooth difficulty steps
+  spDist += (uint16_t)spSub; spSub -= (uint16_t)spSub;
+  if (spPhase == SP_RUN) spGenerate();
+
+  // Things reaching Sonic (crossing depth 0 this frame)
+  for (auto &o : spObj) {
+    if (!o.live) continue;
+    if (o.pos < (int16_t)prev - 8) { o.live = false; continue; }
+    if (o.pos > (int16_t)prev && o.pos <= (int16_t)spDist) {
+      bool lane = fabsf(o.ang - spAng) < 14;
+      if (o.kind == SPO_RING && lane && spH < 10) {
+        o.live = false; spRings++; score += 10; beep(1800, 18);
+      } else if (o.kind == SPO_BOMB && lane && spH < 8 && !spHurt) {
+        o.live = false;
+        uint8_t lose = spRings < 5 ? spRings : 5;
+        spRings -= lose;
+        spHurt = 24; spHV = 3.0f; spH = 0.1f;
+        beep(200, 140);
+      }
+    }
+  }
+
+  // Checkpoints at the end of each leg
+  if (spPhase == SP_RUN && spDist / SP_LEG > prev / SP_LEG) {
+    if (spRings >= spQuota) {
+      spLeg++;
+      beep(1500, 90);
+      if (spLeg >= 3) { spPhase = SP_EMERALD; spEmPos = spDist + SP_ZMAX; spBannerShow(1); }
+      else { spRings = 0; spQuota = spQuotaFor(spLeg); spBannerShow(1); spBanner = 46; spBannerKind = 1; }
+    } else {
+      spBannerShow(2);
+      spFinish(false);
+      return;
+    }
+  }
+  // After a COOL! banner, announce the next quota
+  if (spPhase == SP_RUN && spBannerKind == 1 && spBanner == 10 && spLeg < 3) spBannerShow(0);
+
+  if (spPhase == SP_EMERALD && spDist >= spEmPos) spFinish(true);
+}
+
+// ---- drawing ----
+float spScale(float z) { return SP_FOCAL / (SP_FOCAL + (z < 0 ? 0 : z)); }
+// The pipe bends: its far end swings left/right as the course goes on
+float spBend() { return sinf(spDist * 0.0045f) * 1.0f + sinf(spDist * 0.011f) * 0.4f; }
+// Screen point on the pipe wall at depth z, angle a (degrees; 0 = bottom), lifted 'in' px
+void spProject(float z, float a, float in, int16_t &x, int16_t &y) {
+  float s = spScale(z);
+  float cx = 64 + spBend() * (1 - s) * (1 - s) * 46;
+  float cy = SP_VANISH_Y + (SP_NEAR_CY - SP_VANISH_Y) * s;   // recedes up the screen
+  float r = SP_R0 * s - in * s;
+  float rad = a * (float)PI / 180;
+  x = (int16_t)lroundf(cx + sinf(rad) * r);
+  y = (int16_t)lroundf(cy + cosf(rad) * r);
+}
+
+void spDrawPipe() {
+  // Ribs scroll toward you; rims and a centre groove give the tube its shape
+  int16_t phase = spDist % 24;
+  for (int16_t k = 0; k < 7; k++) {
+    float z = k * 24 - phase;
+    if (z < 0 || z > SP_ZMAX) continue;
+    float s = spScale(z);
+    int16_t step = s > 0.5f ? 6 : s > 0.25f ? 10 : 18;
+    for (int16_t a = -90; a <= 90; a += step) { int16_t x, y; spProject(z, a, 0, x, y); plot(x, y); }
+  }
+  for (int8_t side = -1; side <= 1; side++) {
+    int16_t px0, py0; spProject(0, side * 90, 0, px0, py0);
+    for (int16_t z = 6; z <= SP_ZMAX; z += 6) {
+      int16_t x, y; spProject(z, side * 90, 0, x, y);
+      if (side == 0) { if ((z / 6) & 1) lineSafe(px0, py0, x, y); }
+      else lineSafe(px0, py0, x, y);
+      px0 = x; py0 = y;
+    }
+  }
+  // Checkpoint gate: a solid hoop with flags on the rims
+  if (spPhase == SP_RUN) {
+    int16_t gz = (int16_t)((spDist / SP_LEG + 1) * SP_LEG) - (int16_t)spDist + SP_ZS;
+    if (gz >= 0 && gz <= SP_ZMAX) {
+      int16_t x0, y0; spProject(gz, -90, 0, x0, y0);
+      for (int16_t a = -80; a <= 90; a += 10) { int16_t x, y; spProject(gz, a, 0, x, y); lineSafe(x0, y0, x, y); x0 = x; y0 = y; }
+      float s = spScale(gz);
+      for (int8_t side = -1; side <= 1; side += 2) {
+        int16_t x, y; spProject(gz, side * 90, 0, x, y);
+        int16_t fh = 4 + (int16_t)(10 * s);
+        vLineSafe(x, y - fh, fh);
+        fillBoxClipped(side > 0 ? x : x - 1 - (int16_t)(5 * s) - 1, y - fh, 2 + (int16_t)(5 * s), 1 + (int16_t)(3 * s));
+      }
+    }
+  }
+}
+
+void spDrawBomb(int16_t x, int16_t y, int16_t r) {
+  if (r < 1) { plot(x, y); return; }
+  discSafe(x, y, r);
+  // spikes so a bomb never reads as a ring
+  lineSafe(x - r - 1, y, x + r + 1, y);
+  lineSafe(x, y - r - 1, x, y + r + 1);
+  if (r >= 3) { u8g2.setDrawColor(0); plot(x - r / 2, y - r / 2); u8g2.setDrawColor(1); }
+}
+
+// Sonic from behind, standing on the pipe wall (turned with it); a spin ball when jumping
+void spDrawSonic() {
+  float rad = spAng * (float)PI / 180;
+  float ux = -sinf(rad), uy = -cosf(rad);       // "up" = toward the pipe's centre
+  float rx = cosf(rad), ry = -sinf(rad);        // "right" along the wall
+  int16_t bx, by; spProject(SP_ZS, spAng, 0, bx, by);
+  const float K = 1.35f;                        // sprite scale
+  auto P = [&](float a, float b, int16_t &x, int16_t &y) {
+    x = (int16_t)lroundf(bx + rx * a * K + ux * (b * K + spH));
+    y = (int16_t)lroundf(by + ry * a * K + uy * (b * K + spH));
+  };
+  if (spH > 0) hLineSafe(bx - 4, by - 1, 9);    // shadow on the wall
+  {                                             // dark backing so pipe dots don't run through him
+    int16_t cx0, cy0; P(0, spH > 0 ? 7 : 10, cx0, cy0);
+    u8g2.setDrawColor(0); discSafe(cx0, cy0, spH > 0 ? 10 : 14); u8g2.setDrawColor(1);
+  }
+  if (spHurt && (spHurt & 2)) return;           // flicker after a bomb
+  int16_t x, y, x2, y2, x3, y3;
+  if (spH > 0) {                                // spin ball
+    P(0, 7, x, y); discSafe(x, y, 8);
+    u8g2.setDrawColor(0);
+    int16_t w = (animFrame & 2) ? 3 : -3;
+    P(-4, 7 - w, x2, y2); P(4, 7 + w, x3, y3); lineSafe(x2, y2, x3, y3);
+    u8g2.setDrawColor(1);
+    return;
+  }
+  bool st = (animFrame >> 1) & 1;               // running stride
+  // shoes kick up alternately, legs
+  P(-2, 5, x, y); P(-2, st ? 0 : 3, x2, y2); lineSafe(x, y, x2, y2); P(-3, st ? 0 : 3, x3, y3); hLineSafe(x3 - 1, y3, 3);
+  P(2, 5, x, y);  P(2, st ? 3 : 0, x2, y2);  lineSafe(x, y, x2, y2); P(3, st ? 3 : 0, x3, y3); hLineSafe(x3 - 1, y3, 3);
+  // body, swinging arms
+  P(0, 7, x, y); discSafe(x, y, 4);
+  P(-3, 8, x, y); P(-6, st ? 6 : 9, x2, y2); lineSafe(x, y, x2, y2);
+  P(3, 8, x, y);  P(6, st ? 9 : 6, x2, y2);  lineSafe(x, y, x2, y2);
+  // head with two back quills sweeping out and down, and the ears
+  P(0, 13, x, y); discSafe(x, y, 6);
+  P(-2, 13, x, y); P(-3, 10, x2, y2); P(-8, 9, x3, y3); fillTriSafe(x, y, x2, y2, x3, y3);
+  P(2, 13, x, y);  P(3, 10, x2, y2);  P(8, 9, x3, y3);  fillTriSafe(x, y, x2, y2, x3, y3);
+  P(-3, 16, x, y); P(-1, 16, x2, y2); P(-3, 19, x3, y3); fillTriSafe(x, y, x2, y2, x3, y3);
+  P(3, 16, x, y);  P(1, 16, x2, y2);  P(3, 19, x3, y3);  fillTriSafe(x, y, x2, y2, x3, y3);
+}
+
+void spDrawEmeraldGlyph(int16_t x, int16_t y, int16_t r, bool filled) {
+  if (filled) {
+    fillTriSafe(x, y - r, x - r, y, x + r, y);
+    fillTriSafe(x, y + r, x - r, y, x + r, y);
+    u8g2.setDrawColor(0); lineSafe(x - r / 2, y - r / 2, x, y); u8g2.setDrawColor(1);   // facet glint
+  } else {
+    lineSafe(x, y - r, x - r, y); lineSafe(x - r, y, x, y + r);
+    lineSafe(x, y + r, x + r, y); lineSafe(x + r, y, x, y - r);
+  }
+}
+
+void spDrawResult() {
+  u8g2.setFont(u8g2_font_ncenB10_tr);
+  const char *t = spWon ? "EMERALD GET!" : "TOO BAD...";
+  u8g2.setCursor((128 - u8g2.getStrWidth(t)) / 2, 14); u8g2.print(t);
+  // the four emerald slots fill in; the new one drops into place and flashes
+  for (uint8_t i = 0; i < EMERALD_MAX; i++) {
+    int16_t x = 22 + i * 28, y = 34;
+    bool have = i < emeralds;
+    bool fresh = spWon && i == emeralds - 1;
+    if (fresh) {
+      int16_t drop = 30 - (int16_t)spResultT; if (drop > 0) y -= drop;
+      if (spResultT > 30 && ((spResultT >> 2) & 1)) { spDrawEmeraldGlyph(x, y, 8, false); continue; }
+    }
+    spDrawEmeraldGlyph(x, y, 8, have);
+  }
+  u8g2.setFont(u8g2_font_5x7_tr);
+  char buf[24];
+  if (emeralds >= EMERALD_MAX) snprintf(buf, sizeof buf, "ALL %u EMERALDS!", EMERALD_MAX);
+  else if (emeralds >= EMERALD_GOAL) snprintf(buf, sizeof buf, "%u FOUND - GOAL MET!", emeralds);
+  else snprintf(buf, sizeof buf, "%u OF %u - FIND %u MORE", emeralds, EMERALD_GOAL, EMERALD_GOAL - emeralds);
+  u8g2.setCursor((128 - u8g2.getStrWidth(buf)) / 2, 58); u8g2.print(buf);
+  u8g2.setFont(u8g2_font_6x10_tr);
+}
+
+void drawSpecial() {
+  u8g2.setDrawColor(1);
+  if (spPhase == SP_RESULT) { spDrawResult(); return; }
+  spDrawPipe();
+  // objects far → near
+  for (int16_t z = SP_ZMAX; z >= 0; z -= 4) {
+    for (auto &o : spObj) {
+      if (!o.live) continue;
+      int16_t oz = o.pos - (int16_t)spDist + SP_ZS;
+      if (oz < z - 3 || oz > z) continue;
+      float s = spScale(oz);
+      int16_t r = (int16_t)(5 * s + 0.5f);
+      int16_t x, y; spProject(oz, o.ang, r + 1, x, y);
+      if (o.kind == SPO_RING) { if (r <= 1) plot(x, y); else circleSafe(x, y, r); }
+      else spDrawBomb(x, y, (int16_t)(4 * s + 0.5f));
+    }
+  }
+  if (spPhase == SP_EMERALD) {                  // the emerald comes down the middle of the pipe
+    int16_t ez = (int16_t)spEmPos - (int16_t)spDist + SP_ZS;
+    float s = spScale(ez);
+    int16_t x, y; spProject(ez, 0, SP_R0 * 0.55f, x, y);
+    spDrawEmeraldGlyph(x, y, 2 + (int16_t)(12 * s), true);
+  }
+  spDrawSonic();
+
+  // HUD: ring count vs quota, and which leg
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.setDrawColor(0); u8g2.drawBox(0, 0, 44, 7); u8g2.drawBox(108, 0, 20, 7); u8g2.setDrawColor(1);
+  u8g2.setCursor(0, 6); u8g2.print(spRings); u8g2.print('/'); u8g2.print(spQuota);
+  bool short_ = spRings < spQuota && spPhase == SP_RUN;
+  if (!short_ || ((animFrame >> 3) & 1)) { drawRingGlyph(37, 3); }
+  u8g2.setCursor(110, 6); u8g2.print(spLeg < 3 ? spLeg + 1 : 3); u8g2.print(F("/3"));
+
+  // Banner: slides in from the right, holds, slides off left (same feel as the title cards)
+  if (spBanner) {
+    char buf[20];
+    if (spBannerKind == 0) snprintf(buf, sizeof buf, "GET %u RINGS!", spQuota);
+    else if (spBannerKind == 1) snprintf(buf, sizeof buf, "COOL!");
+    else snprintf(buf, sizeof buf, "NOT ENOUGH RINGS");
+    u8g2.setFont(u8g2_font_6x10_tr);
+    int16_t w = u8g2.getStrWidth(buf) + 10;
+    uint8_t age = 46 - spBanner;
+    int16_t off = 0;
+    if (age < 6) { int16_t k = 6 - age; off = k * k * 128 / 36; }
+    else if (spBanner < 10) { int16_t k = 10 - spBanner; off = -(k * k * (64 + w / 2 + 4)) / 100; }
+    int16_t bx = (128 - w) / 2 + off;
+    u8g2.setDrawColor(0); u8g2.drawBox(bx, 22, w, 13);
+    u8g2.setDrawColor(1); u8g2.drawFrame(bx, 22, w, 13);
+    u8g2.setCursor(bx + 5, 32); u8g2.print(buf);
+  }
+  u8g2.setFont(u8g2_font_6x10_tr);
 }
 
 void beginClear() {
@@ -1736,61 +2076,6 @@ void gameStepInner(uint8_t e) {
   }
 }
 
-void specialStep(uint8_t e) {
-  if (e & B_MODE) { watch::exitToClock(); return; }
-  if (intro) intro--;
-  animFrame++;
-  if (spTimer) spTimer--;
-  else {
-    // failed — continue game without emerald
-    beep(200, 200);
-    transitionTo(nextStage, true);
-    return;
-  }
-
-  if (heldIn() & B_LEFT) fpx -= I2F(2);
-  if (heldIn() & B_RIGHT) fpx += I2F(2);
-  if (e & B_MID) fvy = I2F(-5);
-  if (fvy < I2F(4)) fvy += GRAVITY * 2;
-  fpy += fvy;
-  syncPlayerInts();
-  if (px < 10) setPlayerPos(10, py);
-  if (px > 118) setPlayerPos(118, py);
-  if (py > 50) { setPlayerPos(px, 50); fvy = 0; }
-  if (py < 12) { setPlayerPos(px, 12); fvy = 0; }
-
-  // collect rings
-  for (auto &o : objs) {
-    if (!o.live || o.kind != 1) continue;
-    // drift
-    o.y += ((animFrame + o.x) & 8) ? 0 : (((animFrame >> 2) & 1) ? 1 : -1);
-    if (o.y < 14) o.y = 14;
-    if (o.y > 48) o.y = 48;
-    if (abs(px - o.x) < 6 && abs(py - o.y) < 6) {
-      o.live = false; spRings++; score += 20; beep(1800, 20);
-    }
-  }
-
-  // emerald appears after 6 rings
-  if (spRings >= 6 && !spGot) {
-    if (abs(px - spEX) < 8 && abs(py - spEY) < 8) {
-      spGot = 1;
-      emeralds++;
-      score += 500;
-      beep(1600, 200);
-      clearT = 40;
-      // brief then advance
-    }
-  }
-  // bob emerald
-  spEY = 26 + ((animFrame >> 2) & 3);
-
-  if (spGot) {
-    if (clearT) clearT--;
-    else transitionTo(nextStage, true);
-  }
-}
-
 void clearStep(uint8_t e) {
   clearT++;
   if (e & B_MID) {
@@ -2337,7 +2622,7 @@ void drawGame() {
   u8g2.setDrawColor(1);
   u8g2.setCursor(0, 6); u8g2.print(F("R")); u8g2.print(rings);
   u8g2.setCursor(26, 6); printTime(actSeconds());
-  for (uint8_t i = 0; i < emeralds && i < 7; i++) plot(70 + i * 4, 3);
+  for (uint8_t i = 0; i < emeralds && i < 4; i++) plot(70 + i * 4, 3);
   for (uint8_t i = 0; i < lives; i++) discSafe(124 - i * 6, 3, 2);
   u8g2.setFont(u8g2_font_6x10_tr);
   if (intro) drawBanner();
@@ -2354,29 +2639,6 @@ void drawGame() {
     u8g2.setCursor(x, 20); u8g2.print(txt);
     u8g2.setFont(u8g2_font_6x10_tr);
   }
-}
-
-void drawSpecial() {
-  u8g2.setFont(u8g2_font_6x10_tr);
-  // star field
-  for (uint8_t i = 0; i < 18; i++) {
-    uint8_t sx0 = (i * 37 + animFrame) & 127;
-    uint8_t sy0 = (i * 19) & 63;
-    u8g2.drawPixel(sx0, sy0);
-  }
-  u8g2.setCursor(28, 10); u8g2.print(F("SPECIAL STAGE"));
-  for (auto &o : objs) if (o.live && o.kind == 1) {
-    drawRingGlyph(o.x, o.y);
-  }
-  if (spRings >= 6 && !spGot) {
-    // emerald diamond
-    u8g2.drawTriangle(spEX, spEY - 5, spEX - 4, spEY, spEX + 4, spEY);
-    u8g2.drawTriangle(spEX, spEY + 5, spEX - 4, spEY, spEX + 4, spEY);
-  }
-  if (spGot) { u8g2.setCursor(34, 36); u8g2.print(F("EMERALD!")); }
-  drawHog(px, py, false, true, animFrame);
-  u8g2.setCursor(0, 63); u8g2.print(F("GET ")); u8g2.print(spRings); u8g2.print(F("/6  T"));
-  u8g2.print(spTimer / 30);
 }
 
 // Tally rows slide in from the right one after another (row r starts 2 frames after r−1)
@@ -2421,10 +2683,14 @@ void drawOver() {
 }
 void drawWin() {
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(22, 16); u8g2.print(F("ZONE COMPLETE"));
-  u8g2.setCursor(28, 30); u8g2.print(F("EMERALDS ")); u8g2.print(emeralds);
-  u8g2.setCursor(34, 44); u8g2.print(F("SCORE ")); u8g2.print(score);
-  u8g2.setCursor(30, 58); u8g2.print(F("PRESS ANY"));
+  u8g2.setCursor(22, 12); u8g2.print(F("ZONE COMPLETE"));
+  for (uint8_t i = 0; i < EMERALD_MAX; i++) spDrawEmeraldGlyph(37 + i * 18, 26, 6, i < emeralds);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  const char *m = emeralds >= EMERALD_GOAL ? "EMERALD GOAL MET!" : "FIND 3 EMERALDS NEXT TIME";
+  u8g2.setCursor((128 - u8g2.getStrWidth(m)) / 2, 42); u8g2.print(m);
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(34, 53); u8g2.print(F("SCORE ")); u8g2.print(score);
+  u8g2.setCursor(30, 63); u8g2.print(F("PRESS ANY"));
 }
 
 void menuLoop(uint8_t e) {

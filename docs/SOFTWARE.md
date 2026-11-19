@@ -136,7 +136,8 @@ RP2040 has headroom, but keep watch games tiny:
 - Cliffs in the air: a ledge catches Sonic if his feet are within 12 px of its top (Genesis wall sensors sit mid-body), so jumping up a step isn't pixel-precise. On the ground a rise > 7 px is a wall.
 - Speed rank vs each act's `parSec`: **A+** ≤ par + 5 s, **B** ≤ par + 12 s, else **D**. Par values are estimates — tune after playtesting.
 - Rings reset each act (and on a restart), as in Sonic.
-- Finish an act holding **20+ rings** → Special Stage (collect 6 rings, grab the emerald). Fewer → straight on.
+- Finish an act holding **20+ rings** → Special Stage. Fewer → straight on.
+- **Special Stage (half-pipe):** Sonic runs into the screen down a twisting pseudo-3D half-pipe; Left/Right slide him around the wall (a gentle pull back to the bottom), Mid jumps. Rings and bombs come down the pipe (patterns: lines, slaloms, sweeps, bomb-beside-rings, bomb pairs to jump, bomb gates). Three legs, each ending at a checkpoint hoop with a quota ("GET n RINGS!", 12/15/18 + 1 per emerald held); a bomb costs 5 rings; miss a quota and it's over. Clear all three and the Chaos Emerald comes down the pipe, then the emerald screen (4 slots). **4 emeralds exist, one per zone; 3 is the goal**, the 4th is the spare (later: Super Sonic). Course speed rises a little per emerald held.
 - Spike sides and walls are solid every 60 Hz physics step and push Sonic back out the side he came from, so he can't sink into them at speed. Bees only fire while fully on screen (both axes).
 - **Green Hill 1 is the teaching act:** no hazard within 80 px of a cliff top, a drop's landing or a spring route's landing (`out/check` enforces this for GH1 and counts it elsewhere); the first spikes have a ring arc showing the jump.
 - Zone deco (kind 5): sunflower/palm/pipe/neon/gear — decoration only.
