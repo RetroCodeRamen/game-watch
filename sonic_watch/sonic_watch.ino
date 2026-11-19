@@ -271,6 +271,7 @@ static const watch::Note ACT_CLEAR_TUNE[] = {
 uint8_t lives, invul, intro, animFrame, menuSel;
 uint8_t zone, act;          // zone 0..3, act 0=Act1 1=Act2
 uint8_t emeralds;
+bool spFromSelect;                 // Special Stage launched from the level select: go back there after
 uint16_t clearT;            // tally / special-stage frame counter
 uint16_t tallyDoneT;        // frame the bonus count finished (0 = still counting)
 uint8_t lastTapDir;         // 1=L 2=R
@@ -791,6 +792,7 @@ void startAct(uint8_t z, uint8_t a) {
 void startGame() {
   randomSeed(micros());
   rings = 0; score = 0; lives = 3; emeralds = 0;
+  spFromSelect = false;
   startAct(0, 0);
 }
 
@@ -831,6 +833,7 @@ struct SpObj { int16_t pos; int8_t ang; uint8_t kind; bool live; };
 SpObj spObj[48];
 uint8_t spPhase, spLeg, spRings, spQuota, spBanner, spBannerKind, spHurt, spResultT;
 bool spWon;
+void backToSelect() { spFromSelect = false; mode = SELECT; }
 uint16_t spDist, spGen;             // course position travelled / generated up to
 float spSpeed, spSub, spAng, spAngV, spH, spHV;
 // Airborne: free flight in the pipe's cross-section (px, y down, centre = pipe axis)
@@ -960,7 +963,7 @@ void specialStep(uint8_t e) {
   if (spPhase == SP_RESULT) {
     spResultT++;
     if ((spResultT > 45 && (e & B_MID)) || (spResultT > 150 && !watch::tunePlaying()))
-      transitionTo(nextStage, true);
+      transitionTo(spFromSelect ? backToSelect : nextStage, true);
     return;
   }
 
@@ -2780,8 +2783,8 @@ void drawMenu() {
 }
 
 // ===================== Level select (debug) =====================
-// Entries 0..7 = zone*2 + act, 8 = special stage.
-const uint8_t SELECT_COUNT = 9;
+// Entries 0..7 = zone*2 + act, 8..11 = Special Stage 1..4 (as if holding 0..3 emeralds).
+const uint8_t SELECT_COUNT = 12;
 
 void selectStep(uint8_t e) {
   if (e & B_LEFT)  { selIdx = (selIdx + SELECT_COUNT - 1) % SELECT_COUNT; beep(900, 10); }
@@ -2790,8 +2793,13 @@ void selectStep(uint8_t e) {
   if (e & B_MID) {
     randomSeed(micros());
     rings = 0; score = 0; lives = 3; emeralds = 0;
-    if (selIdx < 8) transitionTo([] { startAct(selIdx / 2, selIdx % 2); });
-    else transitionTo([] { zone = 0; act = 0; lvl = &ACTS[0][0]; startSpecial(); }, true);
+    if (selIdx < 8) transitionTo([] { spFromSelect = false; startAct(selIdx / 2, selIdx % 2); });
+    else transitionTo([] {
+      zone = 0; act = 0; lvl = &ACTS[0][0];
+      emeralds = selIdx - 8;                     // Special Stage n = holding n−1 emeralds
+      spFromSelect = true;
+      startSpecial();
+    }, true);
   }
 }
 
@@ -2810,7 +2818,7 @@ void drawSelect() {
     if (i == selIdx) { fillBoxClipped(0, y - 7, 128, 8); u8g2.setDrawColor(0); }
     u8g2.setCursor(4, y);
     if (i < 8) { u8g2.print(ZN[i / 2]); u8g2.print(F("  ACT ")); u8g2.print(i % 2 + 1); }
-    else u8g2.print(F("SPECIAL STAGE"));
+    else { u8g2.print(F("SPECIAL STAGE ")); u8g2.print(i - 7); }
     u8g2.setDrawColor(1);
   }
   u8g2.setCursor(2, 64); u8g2.print(F("L/R  JUMP=go  MODE=back"));
