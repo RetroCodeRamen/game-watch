@@ -28,7 +28,7 @@ uint8_t mode = SPLASH;
 // Like the Genesis palette fades: nothing changes screens with a hard cut. The game freezes
 // while fading out; the new screen runs while it fades in (title cards slide in under it).
 enum : uint8_t { TR_NONE, TR_OUT, TR_IN };
-const uint8_t TR_STEPS = 8;           // frames each way (~0.27 s)
+const uint8_t TR_STEPS = 14;          // frames each way (~0.47 s)
 uint8_t trState, trLevel;             // trLevel 0 = clear … TR_STEPS = fully faded
 bool trWhite;                         // fade to white (special stage) instead of black
 void (*trAction)();
@@ -679,7 +679,7 @@ void deathStep(uint8_t e) {
 void placeGoal(int16_t x) { addObj(x, groundAt(x) - 25, 6); }
 
 // Title card: slides in from the right, holds ~0.8 s, then slides off to the left
-const uint8_t INTRO_LEN = 40, INTRO_IN = 6, INTRO_OUT = 10;
+const uint8_t INTRO_LEN = 46, INTRO_IN = 6, INTRO_OUT = 10;
 void announce() {
   intro = INTRO_LEN;
   beep(600 + zone * 80 + act * 40, 70);
