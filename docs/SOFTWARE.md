@@ -136,7 +136,9 @@ RP2040 has headroom, but keep watch games tiny:
 - Cliffs in the air: a ledge catches Sonic if his feet are within 12 px of its top (Genesis wall sensors sit mid-body), so jumping up a step isn't pixel-precise. On the ground a rise > 7 px is a wall.
 - Speed rank vs each act's `parSec`: **A+** ≤ par + 5 s, **B** ≤ par + 12 s, else **D**. Par values are estimates — tune after playtesting.
 - Rings reset each act (and on a restart), as in Sonic.
-- After each act clear: chance of Special Stage (collect 6 rings, grab emerald).
+- Finish an act holding **20+ rings** → Special Stage (collect 6 rings, grab the emerald). Fewer → straight on.
+- Spike sides and walls are solid every 60 Hz physics step and push Sonic back out the side he came from, so he can't sink into them at speed. Bees only fire while fully on screen (both axes).
+- **Green Hill 1 is the teaching act:** no hazard within 80 px of a cliff top, a drop's landing or a spring route's landing (`out/check` enforces this for GH1 and counts it elsewhere); the first spikes have a ring arc showing the jump.
 - Zone deco (kind 5): sunflower/palm/pipe/neon/gear — decoration only.
 - Chemical flame jets (8), Casino bumpers (9), Scrap saws (10).
 - Bees: fly → pause → shoot → continue (every zone). The shot is a slow ball (~1.6 px/frame) aimed at Sonic, only fired while the bee is on screen, and pops on the ground — about 1–2 s of flight.

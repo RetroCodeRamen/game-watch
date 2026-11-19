@@ -52,7 +52,9 @@ enum : uint8_t { D_SUN = 0, D_PALM = 1, D_PIPE = 2, D_NEON = 3, D_GEAR = 4, D_TO
 #define ACT(t, o, len, par) { t, (uint8_t)(sizeof(t) / sizeof(t[0])), o, (uint8_t)(sizeof(o) / sizeof(o[0])), len, par }
 
 // =====================================================================
-// GREEN HILL ACT 1 — rolling hills, an upper spring route early, the big
+// GREEN HILL ACT 1 — the teaching act: every hazard sits on open ground you can see coming, never
+// where a jump, spring or drop lands you, and rings show where to jump.
+//  rolling hills, an upper spring route early, the big
 // downhill into the loop, a spike-pit bridge, a sky route over the peak,
 // and a fast downhill finish.
 // =====================================================================
@@ -73,9 +75,9 @@ static const TerrainPt GH1_T[] = {
 static const LvlObj GH1_O[] = {
   {40, 0, L_DECO, D_SUN}, {96, 0, L_DECO, D_PALM},
   {120, 8, L_RINGS, 5},
-  {270, 0, L_CRAB, 0},
   {320, 24, L_ARC, 6},                                   // over the first hill
-  {430, 0, L_DECO, D_SUN},
+  {430, 0, L_CRAB, 0},                                   // first badnik: flat ground, seen coming
+  {360, 0, L_DECO, D_SUN},
   {520, 30, L_BEE, 0},
   {548, 8, L_RINGS, 3},
   // early upper route: spring → three ledges with rings
@@ -84,28 +86,26 @@ static const LvlObj GH1_O[] = {
   {706, 48, L_PLAT, 32}, {710, 56, L_RINGS, 2},
   {756, 44, L_PLAT, 40}, {762, 52, L_RINGS, 3},
   {740, 0, L_CRAB, 0},                                    // ground route below
-  {850, 0, L_SPIKES, 2},
+  {910, 0, L_SPIKES, 2}, {900, 34, L_ARC, 4},            // first spikes, with rings showing the jump
   {940, 0, L_DECO, D_PALM},
-  {952, 8, L_RINGS, 5},
+  {960, 8, L_RINGS, 4},
   {1010, 0, L_CRAB, 0},
-  {1090, 0, L_WALL, 14},
-  {1150, 28, L_BEE, 0},
+  {1100, 8, L_RINGS, 4},                                 // reward for the spring climb
   {1206, 20, L_ARC, 6},                                  // hilltop
   {1300, 0, L_DECO, D_SUN},
   {1320, 8, L_RINGS, 6},                                 // speed line down the hill
   {1420, 0, L_DECO, D_PALM},
+  {1440, 32, L_BEE, 0},                                  // high enough to run under
   {1520, 8, L_RINGS, 4},
   {1600, 0, L_LOOP, 0},                                  // ★ the loop
   {1790, 0, L_DECO, D_PALM}, {1830, 8, L_RINGS, 5},
   {1934, 0, L_SPRING, 0}, {1970, 52, L_PLAT, 40}, {1976, 60, L_RINGS, 3},
-  {2030, 0, L_CRAB, 0},
-  {2080, 0, L_SPIKES, 1},
-  {2120, 26, L_BEE, 0},
+  {2095, 0, L_CRAB, 0},                                  // clear of the ledge drop
   {2210, 0, L_DECO, D_SUN},
   // spike valley: hop the ledges or take the high spring
-  {2250, 18, L_PLAT, 30}, {2256, 26, L_RINGS, 2}, {2290, 0, L_SPIKES, 3}, {2296, 30, L_RINGS, 3},
+  {2236, 8, L_RINGS, 4},                                 // landing pad: rings, nothing else
   {2340, 0, L_DECO, D_TOTEM},
-  {2366, 0, L_CRAB, 0},
+  {2340, 0, L_CRAB, 0},
   {2390, 18, L_PLAT, 30}, {2396, 26, L_RINGS, 2}, {2430, 0, L_SPIKES, 3}, {2436, 30, L_RINGS, 3},
   // ★ spring tower: three springs up to a sky route, then a long drop
   {2500, 0, L_SPRING, 0}, {2530, 50, L_PLAT, 40}, {2534, 58, L_RINGS, 2},
@@ -119,40 +119,36 @@ static const LvlObj GH1_O[] = {
   {2600, 30, L_BEE, 0},
   {2690, 8, L_RINGS, 5},
   {2800, 0, L_DECO, D_PALM},
-  {2846, 0, L_CRAB, 0},
+  {2760, 0, L_CRAB, 0},                                  // ground route, clear of the sky-route drop
   {2900, 22, L_ARC, 5},
   // ★ log bridge over a pool — fish leap up through it
   {3060, 0, L_BRIDGE, 60},
   {3076, 8, L_RINGS, 5}, {3190, 24, L_ARC, 7},
   {3124, 0, L_FISH, 0}, {3176, 0, L_FISH, 0}, {3232, 0, L_FISH, 0},
-  {3310, 30, L_BEE, 0},
   {3400, 0, L_SPRING, 0}, {3446, 0, L_DECO, D_SUN},
-  {3520, 0, L_CRAB, 0}, {3560, 8, L_RINGS, 4},
-  {3640, 0, L_WALL, 16},
-  {3700, 28, L_BEE, 0},
+  {3530, 8, L_RINGS, 4}, {3590, 0, L_CRAB, 0},
+  {3700, 0, L_WALL, 16},
   {3760, 0, L_DECO, D_PALM},
   {3780, 0, L_BRIDGE, 40},                                // ★ second bridge
   {3796, 8, L_RINGS, 5},
   {3836, 0, L_FISH, 0}, {3884, 0, L_FISH, 0},
-  {3966, 0, L_CRAB, 0},
+  {4040, 0, L_CRAB, 0},
   {4000, 24, L_ARC, 6},                                  // up the climb
   {4180, 0, L_DECO, D_SUN},
-  {4204, 28, L_BEE, 0},
   // sky route over the peak
   {4222, 0, L_SPRING, 0},
   {4250, 56, L_PLAT, 40}, {4256, 64, L_RINGS, 3},
   {4310, 52, L_PLAT, 36}, {4316, 60, L_RINGS, 3},
   {4370, 8, L_RINGS, 6},
-  {4460, 0, L_CRAB, 0},
-  {4560, 0, L_DECO, D_TOTEM},
-  {4600, 0, L_SPIKES, 2},
-  {4680, 0, L_DECO, D_PALM},
-  {4720, 0, L_CRAB, 0},
+  {4485, 0, L_CRAB, 0},
+  {4600, 0, L_DECO, D_TOTEM},
+  {4680, 0, L_SPIKES, 2}, {4670, 34, L_ARC, 4},
+  {4560, 0, L_DECO, D_PALM},
+  {4740, 0, L_CRAB, 0},
   {4760, 8, L_RINGS, 4},
   {4830, 0, L_WALL, 14},
-  {4866, 26, L_BEE, 0},
   {4960, 0, L_DECO, D_SUN},
-  {5004, 0, L_CRAB, 0},
+  {5070, 0, L_CRAB, 0},
   {5110, 24, L_ARC, 5},
   {5200, 0, L_DECO, D_TOTEM},
   {5240, 8, L_RINGS, 8},                                 // downhill finish

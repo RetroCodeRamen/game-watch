@@ -53,6 +53,16 @@ int main(){
       for(int j=0;j<A->nObj;j++){ const LvlObj&c=A->obj[j];
         if(c.kind==L_CRAB && c.x+18>x0 && c.x-18<x1){ printf("  %s crab %d patrols into the pool\n",NAMES[z][a],c.x); bad++; }
         if(c.kind==L_FISH && (c.x<x0+8||c.x>x1-8) && c.x>x0-40 && c.x<x1+40){ printf("  %s fish %d not under the deck\n",NAMES[z][a],c.x); bad++; } } }
+    // Landing zones: the top of every up-cliff, the foot of every drop, and every spring.
+    // Hazards there are hidden traps (you're mid-air or just landed). Green Hill 1 teaches the
+    // game, so it must be clean; other acts are only counted.
+    { int traps=0; const int LZ=80;
+      for(int i=1;i<A->nTer;i++){ int dx=A->ter[i].x-A->ter[i-1].x, dy=abs(A->ter[i].y-A->ter[i-1].y); if(dx!=1||dy<=6) continue;
+        int x=A->ter[i].x;
+        for(int j=0;j<A->nObj;j++){ const LvlObj&o=A->obj[j]; int x0=o.x, x1=o.x;
+          if(o.kind==L_CRAB){x0-=18;x1+=18;} else if(o.kind==L_BEE){x0-=30;x1+=30;} else if(o.kind==L_SPIKES) x1=o.x+12*o.arg; else if(!(o.kind==L_SPIKE||o.kind==L_WALL||o.kind==L_SAW||o.kind==L_FLAME)) continue;
+          if(x1>x && x0<x+LZ){ traps++; if(z==0&&a==0){printf("  %s kind %d at %d sits in the landing zone of the cliff at %d\n",NAMES[z][a],o.kind,o.x,x);bad++;} } } }
+      if(traps) printf("  %s: %d hazard(s) in cliff landing zones%s\n",NAMES[z][a],traps,(z==0&&a==0)?"":" (allowed outside Green Hill 1)"); }
     int lo=999,hi=-999; for(int i=0;i<A->nTer;i++){ if(A->ter[i].y<lo)lo=A->ter[i].y; if(A->ter[i].y>hi)hi=A->ter[i].y; }
     int topPlat=lo; for(int i=0;i<A->nObj;i++) if(A->obj[i].kind==L_PLAT){ int t=terr(A->obj[i].x)-A->obj[i].h; if(t<topPlat)topPlat=t; }
     printf("  %s ground y %d..%d (%d px), highest ledge y %d -> total vertical %d px (%.1f screens)\n",NAMES[z][a],lo,hi,hi-lo,topPlat,hi-topPlat,(hi-topPlat)/64.0);

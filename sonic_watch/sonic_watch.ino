@@ -793,6 +793,8 @@ void startGame() {
   startAct(0, 0);
 }
 
+const uint8_t SPECIAL_RINGS = 20;
+
 void nextStage() {
   if (act == 0) startAct(zone, 1);
   else if (zone < 3) startAct(zone + 1, 0);
@@ -801,9 +803,8 @@ void nextStage() {
 
 void startSpecial();
 void advanceAfterClear() {
-  // Chance for special stage (~28%, better with many rings) — flashes white on the way in
-  uint8_t chance = 22 + (rings > 20 ? 10 : 0) + (rings > 40 ? 10 : 0);
-  if (emeralds < 7 && random(100) < chance) transitionTo(startSpecial, true);
+  // Finish an act holding 20+ rings → Special Stage (flashes white on the way in)
+  if (emeralds < 7 && rings >= SPECIAL_RINGS) transitionTo(startSpecial, true);
   else transitionTo(nextStage);
 }
 
@@ -919,10 +920,15 @@ void stopRoll() {
 }
 
 // Push Sonic out of a solid AABB and stop his inward speed (side bump)
+int16_t stepPrevX;   // Sonic's x before the current physics step (which side he came from)
+
 void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_t rad) {
   if (py + rad <= top || py - rad >= bot) return;
   if (px + rad <= left || px - rad >= right) return;
+  // Push back out the side he came in from — at speed he can be past the middle already
   int16_t mid = (left + right) / 2;
+  if (stepPrevX + rad <= left) mid = 32767;
+  else if (stepPrevX - rad >= right) mid = -32768;
   // Genesis: touching a solid's side just stops you (no knock-back), so you can jump
   // straight up beside a wall or spikes and steer over the top.
   STOP_HOOK("solid", left, right);
@@ -937,12 +943,20 @@ void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_
   syncPlayerInts();
 }
 
+const int16_t SPIKE_H = 18, SPIKE_W = 12;
+
+// Walls and spike sides are solid every 60 Hz step, so even top speed can't sink into them
 void applyWalls(int16_t rad) {
   syncPlayerInts();
   for (auto &o : objs) {
-    if (!o.live || o.kind != 7) continue;
-    int16_t h = o.state ? o.state : 18;
-    bumpFromSolid(o.x, o.x + 8, o.y - h, o.y, rad);
+    if (!o.live || abs(o.x - px) > 40) continue;
+    if (o.kind == 7) {
+      int16_t h = o.state ? o.state : 18;
+      bumpFromSolid(o.x, o.x + 8, o.y - h, o.y, rad);
+    } else if (o.kind == 0) {
+      int16_t gy = groundAt(o.x);
+      bumpFromSolid(o.x, o.x + SPIKE_W, gy - SPIKE_H + 2, gy, rad);
+    }
   }
   syncPlayerInts();
 }
@@ -1406,6 +1420,7 @@ void physicsStep(uint8_t e) {
   if (inHollow) { stepHollow(rad); return; }
 
   int16_t prevX = px;
+  stepPrevX = px;
   bool wasGrounded = onGround && !onLedge && fvy >= 0;
   applyGroundControl();
 
@@ -1579,7 +1594,8 @@ void gameStepInner(uint8_t e) {
         else {
           // Buzz-bomber shot: a slow ball aimed at Sonic (~1.6 px/frame, 1-2 s to cross the
           // screen). Only fires while on screen so it never comes out of nowhere.
-          if (onScreen(o.x, 0) && abs(px - o.x) < 120) {
+          int16_t bsy = sy(o.y);
+          if (onScreen(o.x, -6) && bsy >= 8 && bsy <= 56 && abs(px - o.x) < 120) {
             int16_t dx = px - o.x, dy = py - (o.y + 4);
             if (dy < 8) dy = 8;                         // always at least a little downward
             float len = sqrtf((float)dx * dx + (float)dy * dy);
@@ -1642,18 +1658,13 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 0) {
       // Spikes: solid from the sides; only the tips hurt when landing on them
+      // (the sides are solid in applyWalls, every physics step)
       int16_t gy = groundAt(o.x);
-      const int16_t spikeH = 18;
-      const int16_t spikeW = 12;
-      int16_t tipY = gy - spikeH;
+      int16_t tipY = gy - SPIKE_H;
       int16_t feet = py + rad;
-      bool hitX = (px + rad - 1 > o.x) && (px - rad + 1 < o.x + spikeW);
+      bool hitX = (px + rad - 1 > o.x) && (px - rad + 1 < o.x + SPIKE_W);
       bool onTips = hitX && (feet >= tipY - 1) && (feet <= tipY + 4) && (py <= tipY + rad);
-      if (onTips && fvy >= 0) {
-        hurt();
-      } else {
-        bumpFromSolid(o.x, o.x + spikeW, tipY + 2, gy, rad);
-      }
+      if (onTips && fvy >= 0) hurt();
     } else if (o.kind == 2) {
       // Crab: spin/stomp destroys; otherwise solid bump
       if (abs(px - o.x) < 10 && abs(py - o.y) < 9) {
