@@ -10,7 +10,7 @@
 #include <Arduino.h>
 #include <WatchCore.h>
 #include <EEPROM.h>
-#include "metroid_sprites.h"
+#include "metroid_gb_sprites.h"   // Samus, from the Metroid II sheet (scripts/gen_metroid_sprites.py)
 #include "metroid_world.h"
 
 typedef int32_t fx;
@@ -507,7 +507,7 @@ void samusStep(int8_t dir, bool firstStep) {
   if (spin) spinPhase++;
 
   // animation
-  if (ground && !ball && (sVX > 64 || sVX < -64)) { if (++animT >= 8) { animT = 0; runPhase++; } }
+  if (ground && !ball && (sVX > 64 || sVX < -64)) { if (++animT >= 7) { animT = 0; runPhase++; } }
   else if (ball && (sVX > 32 || sVX < -32)) { if (++animT >= 4) { animT = 0; runPhase++; } }
   else animT = 0;
 }
@@ -807,19 +807,6 @@ void playStep(uint8_t e) {
 inline int16_t scrX(int16_t wx) { return wx - camX; }
 inline int16_t scrY(int16_t wy) { return wy - camY + HUD_H; }
 
-void blitBits(int16_t left, int16_t top, const uint8_t *bits, uint8_t rows, uint8_t rowBytes, bool flip) {
-  for (uint8_t row = 0; row < rows; row++)
-    for (uint8_t bi = 0; bi < rowBytes; bi++) {
-      uint8_t b = bits[row * rowBytes + bi];
-      for (uint8_t col = 0; col < 8; col++) {
-        if (!(b & (0x80 >> col))) continue;
-        int16_t dx = bi * 8 + col;
-        if (flip) dx = (rowBytes * 8 - 1) - dx;
-        plot(left + dx, top + row);
-      }
-    }
-}
-
 inline uint32_t thash(int16_t x, int16_t y) {
   uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u;
   h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
@@ -993,26 +980,31 @@ void drawShots() {
   for (const auto &s : sparks) if (s.life) plot(scrX(s.x), scrY(s.y));
 }
 
+// Draw a sprite frame with its body centre at x and its last row on the line above feet
+void drawFrame(const SprFrame &f, int16_t x, int16_t feet, bool flip) {
+  uint8_t rb = (f.w + 7) / 8;
+  int16_t left = x - (flip ? f.w - 1 - f.ax : f.ax), top = feet - f.h;
+  for (uint8_t r = 0; r < f.h; r++)
+    for (uint8_t c = 0; c < f.w; c++)
+      if (f.bits[r * rb + (c >> 3)] & (0x80 >> (c & 7))) plot(left + (flip ? f.w - 1 - c : c), top + r);
+}
+
 void drawBall(int16_t cx, int16_t feet) {
-  uint8_t f = runPhase & 3;
-  for (uint8_t r = 0; r < 7; r++)
-    for (uint8_t c = 0; c < 7; c++) {
-      uint8_t rr = r, cc = c;
-      if (f == 1) cc = 6 - c; else if (f == 2) { rr = 6 - r; cc = 6 - c; } else if (f == 3) rr = 6 - r;
-      if (SAMUS_BALL[rr] & (0x80 >> cc)) plot(cx - 3 + c, feet - 7 + r);
-    }
+  uint8_t ph = runPhase & 3;
+  drawFrame(*SPR_BALL[faceR ? ph : 3 - ph], cx, feet, false);
 }
 
 void drawSpin(int16_t cx, int16_t cy) {
-  // somersault: the tucked pose turned a quarter every 4 steps — a forward flip
-  uint8_t q = (spinPhase >> 2) & 3;
-  for (uint8_t r = 0; r < 16; r++)
-    for (uint8_t c = 0; c < 16; c++) {
-      if (SAMUS_TUCK[r][c] != '#') continue;
-      int8_t x = c, y = r, t;
-      for (uint8_t i = 0; i < q; i++) { t = x; x = 15 - y; y = t; }   // rotate 90° clockwise
-      if (!faceR) x = 15 - x;                                         // mirror: flips the other way
-      plot(cx - 8 + x, cy - 8 + y);
+  // somersault: the knees-up jump pose turned a quarter every 4 steps — a forward flip
+  const SprFrame &f = SPR_JUMP;
+  uint8_t rb = (f.w + 7) / 8, q = (spinPhase >> 2) & 3;
+  for (uint8_t r = 0; r < f.h; r++)
+    for (uint8_t c = 0; c < f.w; c++) {
+      if (!(f.bits[r * rb + (c >> 3)] & (0x80 >> (c & 7)))) continue;
+      int16_t x = c - f.w / 2, y = r - f.h / 2, t;
+      for (uint8_t i = 0; i < q; i++) { t = x; x = -y; y = t; }   // rotate 90° clockwise
+      if (!faceR) x = -x;                                          // mirrored: flips the other way
+      plot(cx + x, cy + y);
     }
 }
 
@@ -1021,10 +1013,10 @@ void drawSamus() {
   int16_t x = scrX(toPx(sX)), feet = scrY(toPx(sY));
   if (ball) { drawBall(x, feet); return; }
   if (spin) { drawSpin(x, feet - 11); return; }
-  const uint8_t *spr = SAMUS_IDLE;
-  if (!ground) spr = SAMUS_JUMP;
-  else if (sVX > 64 || sVX < -64) spr = (runPhase & 1) ? SAMUS_RUN1 : SAMUS_RUN0;
-  blitBits(x - 8, feet - SAMUS_H, spr, SAMUS_H, 2, !faceR);
+  const SprFrame *f = &SPR_STAND;
+  if (!ground) f = &SPR_JUMP;
+  else if (sVX > 64 || sVX < -64) f = SPR_RUN[runPhase % 3];
+  drawFrame(*f, x, feet, !faceR);
 }
 
 void print3(uint16_t v) { if (v < 100) u8g2.print('0'); if (v < 10) u8g2.print('0'); u8g2.print(v); }
@@ -1310,7 +1302,7 @@ void drawView() {
     plot((i * 41 + wfAnim) & 127, 8 + (i * 7) % 18);
   u8g2.setFont(u8g2_font_logisoso24_tn);
   u8g2.setCursor(28, 36); print2(hours()); u8g2.print(':'); print2(minutes());
-  blitBits(wfX - 3, 49, SAMUS_BALL, 7, 1, false);
+  drawFrame(*SPR_BALL[(wfX >> 2) & 3], wfX, 56, false);
   hLineSafe(0, 56, 128);
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setCursor(2, 63); printMonth(month()); u8g2.print(' '); print2(day());

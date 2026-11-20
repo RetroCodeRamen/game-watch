@@ -159,6 +159,7 @@ RP2040 has headroom, but keep watch games tiny:
   missile and then stays open. Tile/object legend is at the top of the file.
 - **Current build:** Brinstar B01–B06 (ship → Morph Ball → low duct → Missile Launcher → junction). The
   junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Sprites:** Samus comes from the Metroid II (Game Boy) sheet in `metroid_watch/`, converted by `python3 scripts/gen_metroid_sprites.py` (writes `metroid_gb_sprites.h`; `--preview` writes `assets/metroid_gb_preview.png`): stand, 3-frame run, knees-up jump (turned in quarter steps for the running somersault); the 7 px morph ball is hand-drawn in the script. `assets/metroid_sprite_compare.png` is the GB vs SNES comparison.
 - **Physics (60 Hz):** run 1.5 px/step, jump peak ≈ 36 px (clears a 4-tile ledge), release to cut the jump,
   jump buffer and ledge grace; running jumps somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
