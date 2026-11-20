@@ -23,7 +23,7 @@ char tileAt(int tx, int ty) {
   int w = ROOMS[r].sw * 16;
   return ROOMS[r].tiles[(ty - ROOMS[r].my * 7) * w + tx - ROOMS[r].mx * 16];
 }
-bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'X' || c == 'G' || c == 'h' || c == 'S' || c == 'P' || c == '^'; }
+bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'X' || c == 'G' || c == 'h' || c == 'S' || c == 'P' || c == '^' || c == '~'; }
 bool door(char c) { return c == 'D' || c == 'R'; }
 
 int main() {
@@ -101,7 +101,7 @@ int main() {
       if (c == 'R') return !gr.missiles;
       if (c == 'B') return !gr.bombs;
       if (c == 'X') return !gr.space;
-      return solid(c) || c == 'P' || c == '^';
+      return solid(c);
     };
     auto body = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S(x, y - i)) return false; return true; };
     auto idx = [&](int x, int y, int b) { return (b * GW + x) * GH + y; };
@@ -109,7 +109,7 @@ int main() {
     static int q[2 * GW * GH];
     // all moves from a node; f(x, y, b) for each landing node
     auto moves = [&](int x, int y, int b, auto &&f) {
-      auto land = [&](int nx, int ny, int nb) { if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && G[nx][ny] != '^') f(nx, ny, nb); };
+      auto land = [&](int nx, int ny, int nb) { if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && G[nx][ny] != '^' && G[nx][ny] != '~') f(nx, ny, nb); };
       auto fall = [&](int nx, int yy, int nb) { while (yy < GH - 1 && !S(nx, yy)) yy++; land(nx, yy, nb); };
       if (b) {
         if (body(x, y, 3)) land(x, y, 0);
@@ -181,6 +181,9 @@ int main() {
       else printf("  %s reachable with %s\n", n.name, stages[n.stage].name);
     }
     int kx, ky;
+    if (find("Y", kx, ky)) { gr = stages[2]; flood(padX, padY, 0); bool ok = false;
+      for (int x = kx - 8; x <= kx + 8; x++) if (x >= 0 && seen[idx(x, ky + 1, 0)]) ok = true;
+      if (!ok) { printf("Ridley is NOT reachable with Missiles\n"); bad++; } else printf("  Ridley reachable with Missiles\n"); }
     if (find("K", kx, ky)) { gr = stages[3]; flood(padX, padY, 0); bool ok = false;
       for (int x = kx - 8; x <= kx; x++) if (seen[idx(x, ky + 1, 0)]) ok = true;
       if (!ok) { printf("Kraid is NOT reachable with Bombs\n"); bad++; } else printf("  Kraid reachable with Bombs\n"); }

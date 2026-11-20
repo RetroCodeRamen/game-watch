@@ -10,8 +10,8 @@
 //   ' ' empty       '#' rock          '=' rock ledge       'B' bomb block (cracked seam)
 //   'D' blue door (any shot)   'R' red door (missile, then stays open)   'G' locked hatch
 //   'h' ship hull (solid, drawn as the ship)   'S' save pad on the ship (solid)
-//   '@' test-room start (empty)   'P' save station (solid)   '^' spikes (solid; 1 energy and back
-//   to safe footing)
+//   '@' test-room start (empty)   'P' save station (solid)   '^' spikes, '~' lava (solid; 1 energy
+//   and back to safe footing)
 // Objects (the tile itself is empty):
 //   'm' Morph Ball  'l' Missile Launcher (+5)  'o' Bombs  'j' Space Jump  — major items: 3 tiles above the floor, in an orb on a
 //       Chozo statue's palm. Lower case: statue sits left of the orb, facing right; upper case
@@ -332,6 +332,103 @@ static const char T_K10[] =
   "##        t   ##"
   "######  ########";
 
+// ---------------------------------------------------------------- N01 Norfair Entrance 1×1
+// Through the junction's east red door. A Skree hangs over the way in.
+static const char T_N01[] =
+  "################"
+  "######     #####"
+  "###         k ##"
+  "R              D"
+  "R              D"
+  "R              D"
+  "################";
+
+// ---------------------------------------------------------------- N02 Lava Crossing 2×2
+// In high on the west; a ledge and a step down to a lava lane with stepping stones (gaps of 3, an
+// easy running jump, lots of air above); the wide middle shelf is safe; missile tank #6 floats above it.
+static const char T_N02[] =
+  "################################"
+  "#####     #########      #######"
+  "###                         ####"
+  "D                              #"
+  "D                              #"
+  "D                              #"
+  "###                            #"
+  "#                              #"
+  "#                t             #"
+  "#                              #"
+  "#  ###                         D"
+  "#  ###                         D"
+  "#  ###                         D"
+  "########~~~##~~~####~~~##~~~####";
+
+// ---------------------------------------------------------------- N03 Lower Shaft 1×3
+// In from the crossing low on the west; a ledge down to the floor (and back); Energy Tank #2 on it;
+// lava in the floor; the way on is west at the bottom.
+static const char T_N03[] =
+  "################"
+  "#####     ######"
+  "###          ###"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "D              #"
+  "D              #"
+  "D              #"
+  "#####          #"
+  "#              #"
+  "#       e      #"
+  "#     ####     #"
+  "               #"
+  "               #"
+  "               #"
+  "###########~~~##";
+
+// ---------------------------------------------------------------- N04 Hot Corridor 2×1
+// Westbound. A Bolt Pirate guards it (crouch under the bolts or jump them); missile tank #5 at the
+// far end, by the door to the save.
+static const char T_N04[] =
+  "################################"
+  "#####     ##########     #######"
+  "###                         ####"
+  "D                               "
+  "D                               "
+  "D    t                q         "
+  "################################";
+
+// ---------------------------------------------------------------- N06 Ridley Save 1×1
+// Save station; the hole in the floor drops into Ridley's arena.
+static const char T_N06[] =
+  "################"
+  "#####     ######"
+  "###          ###"
+  "#              D"
+  "#              D"
+  "#              D"
+  "####P###  ######";
+
+// ---------------------------------------------------------------- N08 Ridley 1×2
+// Ridley's arena under the save. Ledges up the west side lead back to the hole.
+static const char T_N08[] =
+  "########  ######"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#    ####      #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "####           #"
+  "#              #"
+  "#              #"
+  "#       Y      #"
+  "################"
+  "################";
+
 // ---------------------------------------------------------------- SB Test Room 4×3 (hidden)
 // Not part of the world: reached from the title (hold Left + Right). Samus starts at '@' with
 // everything. Left to right: the Bombs orb and a cracked-rock plug at ball height; a pit under a
@@ -456,6 +553,12 @@ static const RoomDef ROOMS[] = {
   {"K08", "KRAID",          2, 6, 1, 2, 1, T_K08},
   {"K09", "SERVICE CHUTE",  3, 7, 1, 1, 1, T_K09},
   {"K10", "CHUTE CACHE",    3, 6, 1, 1, 1, T_K10},
+  {"N01", "NORFAIR GATE",   6, 5, 1, 1, 2, T_N01},
+  {"N02", "LAVA CROSSING",  7, 5, 2, 2, 2, T_N02},
+  {"N03", "LOWER SHAFT",    9, 5, 1, 3, 2, T_N03},
+  {"N04", "HOT CORRIDOR",   7, 7, 2, 1, 2, T_N04},
+  {"N06", "RIDLEY SAVE",    6, 7, 1, 1, 2, T_N06},
+  {"N08", "RIDLEY",         6, 8, 1, 2, 2, T_N08},
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},

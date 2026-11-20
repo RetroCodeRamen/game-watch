@@ -140,7 +140,8 @@ int8_t curRoom = 0;
 int16_t padTX = 0, padTY = 0;     // the ship's save pad
 int16_t saveTX = -1, saveTY = -1;  // where Samus last saved (-1: the ship)
 uint8_t bossesBeaten;
-fx safeX, safeY;                   // last safe footing (sub-pixel): where spikes send her back to
+fx safeX, safeY;                   // last safe footing in this room (sub-pixel): where hazards send her back to
+bool safeOK;                       // false until she has stood on safe ground in this room
 int8_t lastZone = -1;
 int16_t sbTX = 0, sbTY = 0;       // test-room start
 uint8_t titleHoldT;               // Left + Right held on the title -> test room
@@ -193,6 +194,7 @@ const char *zoneName(uint8_t z) {
 // =====================================================================
 // World lookup
 // =====================================================================
+inline bool hazard(char c) { return c == '^' || c == '~'; }   // spikes and lava
 inline int16_t rTX(uint8_t r) { return ROOMS[r].mx * SCR_TW; }
 inline int16_t rTY(uint8_t r) { return ROOMS[r].my * SCR_TH; }
 inline int16_t rTW(uint8_t r) { return ROOMS[r].sw * SCR_TW; }
@@ -232,7 +234,7 @@ bool solidTile(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   switch (c) {
     case 'B': case 'X': return !isBroken(tx, ty);
-    case '#': case '=': case 'G': case 'h': case 'S': case 'P': case '^': return true;
+    case '#': case '=': case 'G': case 'h': case 'S': case 'P': case '^': case '~': return true;
     case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
     default: return false;
   }
@@ -429,6 +431,7 @@ void enterRoomNow() {
   if (pendingRoom < 0) return;
   curRoom = pendingRoom; pendingRoom = -1;
   visited |= 1ULL << curRoom;
+  safeOK = false;
   if (ROOMS[curRoom].zone != lastZone) { if (lastZone >= 0 && ROOMS[curRoom].zone != ZONE_TEST) cardT = 70; lastZone = ROOMS[curRoom].zone; }
   for (auto &s : shots) s.live = false;
   for (auto &b : bul) b.live = false;
@@ -444,9 +447,9 @@ void placeAtPad() {
   int16_t tx = saveTX >= 0 ? saveTX : padTX, ty = saveTX >= 0 ? saveTY : padTY;
   sX = toFx(tx * TILE + 4) + 128; sY = toFx(ty * TILE);
   sVX = sVY = 0; ground = true; ball = false; crouch = false; spin = false; faceR = true;
-  safeX = sX; safeY = sY;
   curRoom = roomAtTile(tx, ty);
   pendingRoom = curRoom; enterRoomNow();
+  safeX = sX; safeY = sY; safeOK = true;
 }
 
 void loadFrom(const SaveData &s) {
@@ -481,8 +484,8 @@ void startSandbox() {
   invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
   sX = toFx(sbTX * TILE + 4) + 128; sY = toFx((sbTY + 1) * TILE);
   sVX = sVY = 0; ground = true; ball = false; crouch = false; spin = false; faceR = true;
-  safeX = sX; safeY = sY;
   curRoom = roomAtTile(sbTX, sbTY); pendingRoom = curRoom; enterRoomNow();
+  safeX = sX; safeY = sY; safeOK = true;
   mode = M_PLAY; cardT = 70; inputLock = 6;
 }
 void respawn() {
@@ -680,18 +683,19 @@ void samusStep(int8_t dir, bool firstStep) {
   {                                                // spikes: 1 energy, and back to the last safe footing
     int16_t x = toPx(sX), y = toPx(sY), hw = bodyHW(), h = bodyH();
     // touching: spikes in her body box, or under the middle of her feet (an edge foot doesn't count)
-    bool spike = rawTile(x >> 3, y >> 3) == '^' && ground;
+    bool spike = hazard(rawTile(x >> 3, y >> 3)) && ground;
     for (int16_t ty = (y - h) >> 3; ty <= (y - 1) >> 3 && !spike; ty++)
       for (int16_t tx = (x - hw) >> 3; tx <= (x + hw - 1) >> 3; tx++)
-        if (rawTile(tx, ty) == '^') { spike = true; break; }
+        if (hazard(rawTile(tx, ty))) { spike = true; break; }
     if (spike) {
       if (!invul) { energy = energy > 1 ? energy - 1 : 0; beep(180, 60); invul = 60; if (!energy) { mode = M_DEAD; deadT = 0; watch::playTune(TUNE_DEAD, 4); } }
-      sX = safeX; sY = safeY; sVX = sVY = 0; ball = false; crouch = false; spin = false;
-      burst(toPx(sX), toPx(sY) - 10, 8, 4);
+      burst(x, y - 10, 8, 4);
+      if (safeOK) { sX = safeX; sY = safeY; sVX = sVY = 0; ball = false; crouch = false; spin = false; }
+      else { sVY = -JUMP_V; ground = false; }        // nowhere safe yet in this room: bounce up out of it
     } else if (ground && !ball) {
-      bool nearSpike = false;
-      for (int16_t tx = (x - 12) >> 3; tx <= (x + 12) >> 3; tx++) if (rawTile(tx, (y + 1) >> 3) == '^') nearSpike = true;
-      if (!nearSpike) { safeX = sX; safeY = sY; }
+      // safe: both feet on solid ground that isn't a hazard
+      char l = rawTile((x - hw) >> 3, y >> 3), r = rawTile((x + hw - 1) >> 3, y >> 3);
+      if (solidTile((x - hw) >> 3, y >> 3) && solidTile((x + hw - 1) >> 3, y >> 3) && !hazard(l) && !hazard(r)) { safeX = sX; safeY = sY; safeOK = true; }
     }
   }
   if (spin) spinPhase++;
@@ -782,7 +786,7 @@ bool pirateCanStep(const Enemy &e, int8_t d) {   // walls, ledges and spikes tur
   int16_t nx = e.x + d;
   if (enemySolidAt(e, nx, e.y)) return false;
   int16_t fx = d > 0 ? nx + e.w - 1 : nx;
-  return solidTile(fx >> 3, (e.y + e.h) >> 3) && rawTile(fx >> 3, (e.y + e.h) >> 3) != '^';
+  return solidTile(fx >> 3, (e.y + e.h) >> 3) && !hazard(rawTile(fx >> 3, (e.y + e.h) >> 3));
 }
 bool samusNear(const Enemy &e, int16_t samX, int16_t samY, int16_t rx, int16_t ry) {
   int16_t cx = e.x + e.w / 2, feet = e.y + e.h;
@@ -1396,6 +1400,9 @@ void playStep(uint8_t e) {
   checkPickups();
   if (mode != M_PLAY) return;
 
+  // the Tourian hatch: what it needs
+  if (ground && rawTile(toPx(sX) >> 3, toPx(sY) >> 3) == 'G' && !msgT)
+    showMsg((bossesBeaten & 3) == 3 ? "TOURIAN: NEXT BUILD" : "SEALED: BEAT KRAID AND RIDLEY", 60);
   // an open door with nothing built behind it yet
   for (uint8_t i = 0; i < doorN; i++) {
     if (!doorIsOpen(i)) continue;
@@ -1403,7 +1410,7 @@ void playStep(uint8_t e) {
     int16_t out = roomAtTile(tx - 1, ty) < 0 ? tx - 1 : roomAtTile(tx + 1, ty) < 0 ? tx + 1 : 0;
     if (!out) continue;
     if (overlap(x0 - 2, y0, x1 + 2, y1, tx * 8, ty * 8, tx * 8 + 8, (ty + doors[i].h) * 8) && !msgT)
-      showMsg(sandbox ? "TEST DOOR" : tx - 1 == out ? "KRAID'S LAIR: NEXT BUILD" : "NORFAIR: NEXT BUILD", 50);
+      showMsg(sandbox ? "TEST DOOR" : "NEXT BUILD", 50);
   }
 
   // crossed into the next room?
@@ -1500,6 +1507,13 @@ void drawWorld() {
       char c = rawTile(tx, ty);
       int16_t x = scrX(tx * 8), y = scrY(ty * 8);
       if (c == '#' || c == '=' || c == 'G' || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
+      else if (c == '~') {                      // lava: a rolling surface over a dithered glow
+        for (int8_t i = 0; i < 8; i++) {
+          int16_t wv = ((tx * 8 + i + (frameN >> 1)) >> 2) & 1;
+          plot(x + i, y + wv);
+          for (int8_t j = 3 + wv; j < 8; j += 2) if (((x + i + j + (frameN >> 3)) & 1)) plot(x + i, y + j);
+        }
+      }
       else if (c == '^') {                      // spikes: a row of teeth on a base
         for (int8_t i = 0; i < 8; i += 2) { plot(x + i, y + 7); plot(x + i + 1, y + 5); plot(x + i + 1, y + 6); plot(x + i + 1, y + 7); }
         hLineSafe(x, y + 7, 8);
