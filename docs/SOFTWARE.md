@@ -145,3 +145,27 @@ RP2040 has headroom, but keep watch games tiny:
 - Bees: fly → pause → shoot → continue (every zone). The shot is a slow ball (~1.6 px/frame) aimed at Sonic, only fired while the bee is on screen, and pops on the ground — about 1–2 s of flight.
 - Spin-roll (double-tap): holding forward adds no speed; once the roll slows below 0.5 px/frame Sonic stands back up and runs (Genesis rule), so an accidental double-tap never parks him in a ball.
 - Object kinds: spike, ring, crab, spring, bee, deco, goal, wall, flame, bumper, saw.
+
+## Metroid firmware specifics
+
+- **Buttons (prototype, 5):** Left/Right move · Action = Up (jump; stand up from the ball) · Mode = Down
+  (Morph Ball; save on the ship pad) · Select/OK = fire (bombs in the ball) · **Down + Select/OK** = "mode":
+  tap switches beam/missiles, hold ~0.4 s opens the pause screen (map, status, Resume / Clock).
+  When the 6th button is fitted it becomes Down and Mode goes back to cancel/exit — the aliases at the top
+  of `metroid_watch.ino` are the only place to change.
+- **World:** `metroid_world.h` holds ASCII tile rooms (8 px tiles, 16×7 per screen) placed on one map grid.
+  Rooms touch edge to edge, so leaving a room's edge puts Samus in whichever room is there (fade, camera
+  snaps to the new room's bounds). Doors are 3-tile columns on room edges: blue opens to any shot, red needs a
+  missile and then stays open. Tile/object legend is at the top of the file.
+- **Current build:** Brinstar B01–B06 (ship → Morph Ball → low duct → Missile Launcher → junction). The
+  junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Physics (60 Hz):** run 1.5 px/step, jump peak ≈ 36 px (clears a 4-tile ledge), release to cut the jump,
+  jump buffer and ledge grace; running jumps somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
+- **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
+  Skrees dive and burst into shards, Rippers are beam-proof. Energy starts at 6 (contact = 1), knock-back
+  plus ~1.5 s recovery; zero energy → explosion → back at the last save.
+- **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
+  Continue when a save exists. New game shows the three-panel opening (Down skips).
+- Host tests: `tools/metroid_test/build.sh`, then `out/check` (room sizes, overlaps, openings line up,
+  door shape) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  see the header of `run.cpp`).

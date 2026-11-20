@@ -1,233 +1,814 @@
-// Metroid Watch — ENGINE SANDBOX (step back from full game)
-// One large room. Horizontal + vertical camera scroll.
-// Solid floors + jump-through platforms. Stable Samus movement.
-// Full campaign comes later once this feels right.
+// Metroid Watch — Brinstar slice (rooms B01–B06 of the Rev 4 design document)
+//
+// Ship → Surface Path → Morph Ball → Low Duct → Missile Launcher → Junction Shaft.
+// One continuous world of tile rooms (metroid_world.h); doors, a scrolling camera, beam and
+// missiles, Morph Ball, Zoomers / Skrees / Rippers, energy, pickups, a save on the ship.
 //
 // Clock, alarm, set screens and buttons live in libraries/WatchCore.
-// This sketch supplies the Metroid-themed clock face and the game (see WatchApp at the bottom).
-//
-// Logical buttons: Left Right Up Down Menu
-// Current 5-button board: Mid→Up, Mode→Down, Game→Menu
-// New hardware: pass a watch::Pins to watch::begin() and adjust the aliases below.
+// Physics runs at 60 Hz (two steps per ~30 FPS frame); positions are 1/256 px.
 
 #include <Arduino.h>
 #include <WatchCore.h>
+#include <EEPROM.h>
 #include "metroid_sprites.h"
+#include "metroid_world.h"
 
-// Before Arduino auto-prototypes
 typedef int32_t fx;
-struct Plat {
-  int16_t x, y, w;
-  bool solid;  // true = solid slab; false = jump-through from below
+
+// ---- all structs up here, before Arduino's generated prototypes ----
+struct Door { int16_t tx, ty; uint8_t h; char kind; uint8_t timer; };
+struct Item { int16_t tx, ty; char kind; };
+struct Enemy {
+  bool live; uint8_t kind, st, hp, t, flash, lost;
+  int16_t x, y;            // top-left, px
+  int8_t nx, ny, dx, dy;   // Zoomer: surface normal and crawl direction
+  uint8_t w, h;
+  fx acc, vy;
+};
+struct Shot { bool live; bool missile; fx x, y, vx; uint8_t life; };
+struct Bullet { bool live; fx x, y, vx, vy; uint8_t life; };
+struct Drop { bool live; uint8_t kind; int16_t x, y; uint16_t life; };
+struct Spark { int16_t x, y; int8_t vx, vy; uint8_t life; };
+struct SaveData {
+  uint32_t magic; uint8_t ver, gear, maxEn, maxMs;
+  uint64_t items, visited; uint32_t redDoors, frames;
+  uint16_t sum;
 };
 
-// -------------------- logical buttons → physical WatchCore bits --------------------
-const uint8_t B_UP = B_MID, B_DOWN = B_MODE, B_MENU = B_GAME;
-
-// Game-side modes only; clock face / set / alarm are owned by WatchCore
-enum : uint8_t { GAME, PAUSE };
-uint8_t mode = GAME;
-
 // =====================================================================
-// ENGINE SANDBOX — one room, 384×224 playfield (3×4 viewports of 128×56)
+// Buttons. The prototype has five: Mode, Left, Action, Right, Select/OK.
+//   Left/Right move · Action = UP (jump; stand up from the ball) · Mode = DOWN (morph / save)
+//   Select/OK = FIRE (bomb in the ball) · DOWN + FIRE together = "mode": tap switches
+//   beam/missiles, hold opens the pause menu.
+// When the 6th button is fitted it becomes DOWN and Mode goes back to cancel/exit:
+// change B_DOWN here (and add the pin to WatchCore) — nothing else needs to move.
 // =====================================================================
-const int16_t WORLD_W = 384;
-const int16_t WORLD_H = 224;
+const uint8_t B_UP = B_MID;     // Action
+const uint8_t B_DOWN = B_MODE;  // Mode (for now)
+const uint8_t B_FIRE = B_GAME;  // Select/OK
+const uint8_t CHORD_HOLD = 12;  // frames of DOWN+FIRE that open the pause menu (~0.4 s)
+
+// ---- modes ----
+enum : uint8_t { M_TITLE, M_STORY, M_PLAY, M_ITEM, M_PAUSE, M_DEAD };
+uint8_t mode = M_TITLE;
+
+// ---- screen ----
 const uint8_t HUD_H = 8;
 const uint8_t VIEW_H = 56;
 
-// Layout: ground + ledges to climb + a few one-way shelves
-static const Plat PLATS[] = {
-  // Main floor stretches (solid)
-  {0,   200, 384, true},
-  // Left climb tower
-  {16,  168, 48,  true},
-  {40,  136, 48,  true},
-  {16,  104, 48,  true},
-  {40,   72, 48,  true},
-  {16,   40, 64,  true},
-  // Mid floating jump-through shelves (land on top, jump up through)
-  {120, 160, 64,  false},
-  {160, 120, 56,  false},
-  {200,  80, 64,  false},
-  {240,  48, 48,  false},
-  // Right solid staircase down from high ledge
-  {300, 168, 60,  true},
-  {320, 136, 48,  true},
-  {340, 104, 44,  true},
-  {300,  72, 56,  true},
-  // Ceiling chunks / overhangs (solid)
-  {180,  24, 80,  true},
-  {280,  24, 70,  true},
-  // Small mid solid block to hop onto
-  {200, 176, 32,  true},
-};
-static const uint8_t PLAT_N = sizeof(PLATS) / sizeof(PLATS[0]);
+// ---- physics (per 60 Hz step, 1/256 px) ----
+const fx RUN_MAX = 384;     // 1.5 px/step  (~90 px/s)
+const fx ACC_G = 40, DEC_G = 56, TURN_G = 80;
+const fx ACC_A = 30, DRAG_A = 8;
+const fx GRAV = 28;          // jump peak ≈ 36 px (1.6 × Samus) — clears a 4-tile ledge
+const fx JUMP_V = 720;
+const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
+const fx FALL_MAX = 900;
+const fx SPIN_MIN = 160;     // running this fast when jumping → somersault
+const uint8_t COYOTE = 6, JUMP_BUF = 8;
+const int8_t BODY_HW = 4, BODY_H = 21;   // standing hitbox 8 × 21 (fits a 3-tile corridor)
+const int8_t BALL_HW = 3, BALL_H = 7;    // ball 6 × 7 (fits a 1-tile duct)
 
-// -------------------- Super Metroid–scaled physics --------------------
-// Reference: standing sprite height H, 60 FPS SNES constants → our H & FPS.
-// H = 22 (Samus sprite). Loop ≈ 30 FPS. Fixed-point 1/256 px.
-//
-// Per-frame from V(H/s), A(H/s²):
-//   v_fx = V * H / FPS * 256
-//   a_fx = A * H / FPS² * 256
+// ---- weapons ----
+const fx BEAM_V = 1024;      // 4 px/step
+const uint8_t BEAM_LIFE = 16;   // ~64 px: Samus' short Power Beam
+const fx MISSILE_V0 = 512, MISSILE_ACC = 48, MISSILE_VMAX = 1280;
+const uint8_t MISSILE_LIFE = 70;
+const uint8_t MAX_SHOTS = 3;
 
-static const fx FX_ONE = 256;
+// ---- gear bits ----
+enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SCREW = 8, G_ICE = 16 };
 
-static const uint8_t SM_H   = 22;   // standing sprite / hitbox height
-static const uint8_t SM_FPS = 30;
+// ---- enemies ----
+enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER };
+const uint8_t MAX_EN = 12, MAX_BUL = 8, MAX_DROP = 6, MAX_SPARK = 32, MAX_DOOR = 24, MAX_ITEM = 16;
 
-// Hitbox (SM proportions)
-static const int16_t BODY_H   = 22;                          // 1.000 H
-static const int16_t BODY_HALF = 4;                          // ~0.381 H / 2 → 8px wide
-static const int16_t SLAB_H   = 4;                           // solid platform thickness
+inline int16_t toPx(fx v) { return (int16_t)(v >> 8); }
+inline fx toFx(int16_t p) { return (fx)p << 8; }
+inline int8_t sgn(fx v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 
-// Vertical (screen Y+ down → jump velocity is negative)
-// g=9.429 H/s², v_y0=6.500 H/s, v_fall=7.143 H/s
-static const fx GRAV_FX      = (fx)(9.429f * SM_H / (SM_FPS * SM_FPS) * FX_ONE);  // ~59
-static const fx JUMP_FX      = (fx)(6.500f * SM_H / SM_FPS * FX_ONE);             // ~1220
-static const fx FALL_MAX_FX  = (fx)(7.143f * SM_H / SM_FPS * FX_ONE);             // ~1341
-// Horizontal boost on launch: +0.083*|vx| in H/s → ≈ |vx_fx|*21/256 in fx
-static const fx JUMP_XV_NUM  = 21;
-static const fx JUMP_XV_DEN  = 256;
+// =====================================================================
+// State
+// =====================================================================
+// Samus — x is body centre, y is the feet (bottom edge, exclusive)
+fx sX, sY, sVX, sVY;
+bool ground, ball, spin, faceR = true, jumpHeld;
+uint8_t coyote, jumpBuf, fireCD, invul, hurtLock, runPhase, animT, spinPhase;
+uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
+uint32_t playFrames;
 
-// Horizontal
-// walk=2.143, run=4.286 H/s; a_g=14.286, d_g=17.143, a_air=6.429 H/s²
-static const fx WALK_FX      = (fx)(2.143f * SM_H / SM_FPS * FX_ONE);             // ~402
-static const fx RUN_FX       = (fx)(4.286f * SM_H / SM_FPS * FX_ONE);             // ~805
-static const fx ACCEL_G_FX   = (fx)(14.286f * SM_H / (SM_FPS * SM_FPS) * FX_ONE); // ~89
-static const fx DECEL_G_FX   = (fx)(17.143f * SM_H / (SM_FPS * SM_FPS) * FX_ONE); // ~107
-static const fx ACCEL_A_FX   = (fx)(6.429f * SM_H / (SM_FPS * SM_FPS) * FX_ONE);  // ~40
+// world
+Door doors[MAX_DOOR]; uint8_t doorN;
+Item items[MAX_ITEM]; uint8_t itemN;
+uint64_t itemsGot, visited;
+uint32_t redOpen;
+int8_t curRoom = 0;
+int16_t padTX = 0, padTY = 0;     // the ship's save pad
+int16_t camX, camY;
 
-// Hold L/R this many frames before run cap (no dash button on watch yet)
-static const uint8_t RUN_HOLD_FRAMES = 12;  // 0.4 s ≈ ease into run
+Enemy en[MAX_EN];
+Shot shots[MAX_SHOTS];
+Bullet bul[MAX_BUL];
+Drop drops[MAX_DROP];
+Spark sparks[MAX_SPARK];
 
-static inline int16_t F2I(fx v) {
-  return (int16_t)((v >= 0) ? ((v + 128) >> 8) : -(((-v) + 128) >> 8));
-}
-static inline fx I2F(int16_t v) { return (fx)v * FX_ONE; }
-static inline fx fxAbs(fx v) { return v >= 0 ? v : -v; }
+// input
+uint8_t prevHeld, inputLock;
+bool chord, downArmed, downUsed;
+uint8_t chordT;
 
-// Player (fixed-point position / velocity; px/py are derived ints for collision/draw)
-fx fpx, fpy, fvx, fvy;
-int16_t px = 40, py = 180;
-int16_t camX = 0, camY = 0;
-bool faceRight = true;
-bool onGround = false;
-bool jumpHeld = false;       // Up currently watch::held()
-bool jumpCutDone = false;    // already applied release cut this jump
-uint8_t coyote = 0;
-uint8_t jumpBuf = 0;
-uint8_t dirHold = 0;         // frames holding move → unlock run
-uint8_t invul = 0;
-uint8_t runPhase = 0;
-uint8_t animTimer = 0;
-uint8_t pauseSel = 0;
-uint8_t inputLock = 0;
-unsigned long menuDownMs = 0;
-bool menuHeld = false;
+// UI
+uint8_t titleSel, storyPage, storyT, pauseSel, itemT, deadT, cardT;
+char itemKind;
+uint8_t modeLabelT, msgT;
+const char *msgText;
+uint16_t frameN;
 
-void syncPlayerInts() {
-  px = F2I(fpx);
-  py = F2I(fpy);
+// saves
+SaveData lastSave;
+bool haveSave;
+const uint32_t SAVE_MAGIC = 0x4D575331;  // "MWS1"
+
+// transitions (ordered-dither fade; the game is frozen while it fades out)
+enum : uint8_t { TR_NONE, TR_OUT, TR_IN };
+uint8_t trState, trLevel, trSteps = 10;
+void (*trAction)();
+int8_t pendingRoom = -1;
+
+void transitionTo(void (*action)(), uint8_t steps = 10) {
+  if (trState == TR_OUT) return;
+  trState = TR_OUT; trAction = action; trSteps = steps;
+  if (trLevel > trSteps) trLevel = trSteps;
 }
 
-int16_t sx(int16_t wx) { return wx - camX; }
-int16_t sy(int16_t wy) { return wy - camY + HUD_H; }
+// =====================================================================
+// World lookup
+// =====================================================================
+inline int16_t rTX(uint8_t r) { return ROOMS[r].mx * SCR_TW; }
+inline int16_t rTY(uint8_t r) { return ROOMS[r].my * SCR_TH; }
+inline int16_t rTW(uint8_t r) { return ROOMS[r].sw * SCR_TW; }
+inline int16_t rTH(uint8_t r) { return ROOMS[r].sh * SCR_TH; }
 
-bool platOverlapsX(const Plat &p, int16_t x) {
-  return x >= p.x && x < p.x + p.w;
-}
-
-// Land on highest platform top crossed this frame
-int16_t findFloor(int16_t x, int16_t feetY, int16_t prevFeetY, fx vy, bool *outSolid) {
-  int16_t best = 32767;
-  bool bestSolid = true;
-  int16_t hw = BODY_HALF;
-  for (uint8_t i = 0; i < PLAT_N; i++) {
-    const Plat &p = PLATS[i];
-    if (!platOverlapsX(p, x) && !platOverlapsX(p, x - hw) && !platOverlapsX(p, x + hw))
-      continue;
-    int16_t top = p.y;
-    if (p.solid) {
-      // allow a couple px of forgiveness for subpixel landing
-      if (feetY >= top && prevFeetY <= top + 3) {
-        if (top < best) { best = top; bestSolid = true; }
-      }
-    } else {
-      // jump-through: only when falling/resting and crossing from above
-      if (vy >= 0 && prevFeetY <= top && feetY >= top) {
-        if (top < best) { best = top; bestSolid = false; }
-      }
-    }
+int8_t roomAtTile(int16_t tx, int16_t ty) {
+  if (curRoom >= 0) {
+    uint8_t r = curRoom;
+    if (tx >= rTX(r) && tx < rTX(r) + rTW(r) && ty >= rTY(r) && ty < rTY(r) + rTH(r)) return r;
   }
-  if (outSolid) *outSolid = bestSolid;
-  return best;
+  for (uint8_t r = 0; r < ROOM_N; r++)
+    if (tx >= rTX(r) && tx < rTX(r) + rTW(r) && ty >= rTY(r) && ty < rTY(r) + rTH(r)) return r;
+  return -1;
+}
+int8_t roomAtPx(int16_t x, int16_t y) { return roomAtTile(x >> 3, y >> 3); }
+
+char rawTile(int16_t tx, int16_t ty) {
+  int8_t r = roomAtTile(tx, ty);
+  if (r < 0) return '#';   // outside every room: solid rock
+  return ROOMS[r].tiles[(ty - rTY(r)) * rTW(r) + (tx - rTX(r))];
 }
 
-bool solidBlockAt(int16_t x, int16_t y) {
-  for (uint8_t i = 0; i < PLAT_N; i++) {
-    const Plat &p = PLATS[i];
-    if (!p.solid) continue;
-    if (x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + SLAB_H)
-      return true;
+int8_t doorAt(int16_t tx, int16_t ty) {
+  for (uint8_t i = 0; i < doorN; i++)
+    if (doors[i].tx == tx && ty >= doors[i].ty && ty < doors[i].ty + doors[i].h) return i;
+  return -1;
+}
+bool doorIsOpen(uint8_t i) {
+  return doors[i].timer > 0 || (doors[i].kind == 'R' && (redOpen >> i) & 1);
+}
+
+bool solidTile(int16_t tx, int16_t ty) {
+  char c = rawTile(tx, ty);
+  switch (c) {
+    case '#': case '=': case 'B': case 'G': case 'h': case 'S': return true;
+    case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
+    default: return false;
   }
+}
+// Solid, for drawing rock outlines (doors count as wall so rock doesn't outline against them)
+bool rockish(int16_t tx, int16_t ty) {
+  char c = rawTile(tx, ty);
+  return c == '#' || c == '=' || c == 'B' || c == 'G' || c == 'D' || c == 'R';
+}
+
+// [x0,x1) × [y0,y1) in px
+bool boxSolid(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+  for (int16_t ty = y0 >> 3; ty <= (y1 - 1) >> 3; ty++)
+    for (int16_t tx = x0 >> 3; tx <= (x1 - 1) >> 3; tx++)
+      if (solidTile(tx, ty)) return true;
   return false;
 }
 
+inline int8_t bodyHW() { return ball ? BALL_HW : BODY_HW; }
+inline int8_t bodyH() { return ball ? BALL_H : BODY_H; }
+bool samusFitsAt(int16_t x, int16_t y, bool asBall) {
+  int8_t hw = asBall ? BALL_HW : BODY_HW, h = asBall ? BALL_H : BODY_H;
+  return !boxSolid(x - hw, y - h, x + hw, y);
+}
+
+void buildWorld() {
+  doorN = 0; itemN = 0;
+  for (uint8_t r = 0; r < ROOM_N; r++) {
+    int16_t w = rTW(r), h = rTH(r);
+    for (int16_t ty = 0; ty < h; ty++)
+      for (int16_t tx = 0; tx < w; tx++) {
+        char c = ROOMS[r].tiles[ty * w + tx];
+        int16_t gx = rTX(r) + tx, gy = rTY(r) + ty;
+        if ((c == 'D' || c == 'R') && (ty == 0 || ROOMS[r].tiles[(ty - 1) * w + tx] != c) && doorN < MAX_DOOR) {
+          uint8_t n = 0;
+          while (ty + n < h && ROOMS[r].tiles[(ty + n) * w + tx] == c) n++;
+          doors[doorN++] = {gx, gy, n, c, 0};
+        }
+        if ((c == 'm' || c == 'l' || c == 't' || c == 'e') && itemN < MAX_ITEM) items[itemN++] = {gx, gy, c};
+        if (c == 'S') { padTX = gx; padTY = gy; }
+      }
+  }
+}
+
+// Open a door (and the one facing it across the room boundary)
+void openDoor(uint8_t i, bool permanent) {
+  if (permanent) redOpen |= 1UL << i;
+  doors[i].timer = 200;
+  for (uint8_t j = 0; j < doorN; j++)
+    if (j != i && (doors[j].tx == doors[i].tx + 1 || doors[j].tx == doors[i].tx - 1) &&
+        doors[j].ty < doors[i].ty + doors[i].h && doors[i].ty < doors[j].ty + doors[j].h) {
+      if (permanent && doors[j].kind == 'R') redOpen |= 1UL << j;
+      doors[j].timer = 200;
+    }
+}
+
+// =====================================================================
+// Effects
+// =====================================================================
+void spark(int16_t x, int16_t y, int8_t vx, int8_t vy, uint8_t life) {
+  for (uint8_t i = 0; i < MAX_SPARK; i++)
+    if (!sparks[i].life) { sparks[i] = {x, y, vx, vy, life}; return; }
+}
+void burst(int16_t x, int16_t y, uint8_t n, uint8_t spd) {
+  for (uint8_t i = 0; i < n; i++) {
+    float a = i * 6.2832f / n;
+    spark(x, y, (int8_t)(cosf(a) * spd), (int8_t)(sinf(a) * spd), 8 + (i & 3));
+  }
+}
+void showMsg(const char *t, uint8_t frames) { msgText = t; msgT = frames; }
+
+static const watch::Note TUNE_ITEM[] = {
+  {523, 120}, {659, 120}, {784, 120}, {1047, 260}, {0, 60}, {988, 120}, {1047, 360}};
+static const watch::Note TUNE_SAVE[] = {{784, 90}, {988, 90}, {1175, 90}, {1568, 240}};
+static const watch::Note TUNE_TITLE[] = {
+  {330, 300}, {0, 60}, {294, 300}, {0, 60}, {262, 300}, {0, 60}, {247, 600}};
+static const watch::Note TUNE_DEAD[] = {{392, 120}, {330, 120}, {262, 120}, {196, 400}};
+
+// =====================================================================
+// Saving
+// =====================================================================
+uint16_t saveSum(const SaveData &s) {
+  const uint8_t *p = (const uint8_t *)&s; uint16_t a = 0x5A5A;
+  for (size_t i = 0; i < offsetof(SaveData, sum); i++) a = (uint16_t)(a * 31 + p[i]);
+  return a;
+}
+void captureSave(SaveData &s) {
+  memset(&s, 0, sizeof s);
+  s.magic = SAVE_MAGIC; s.ver = 1; s.gear = gear; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
+  s.sum = saveSum(s);
+}
+void writeSave() {
+  captureSave(lastSave); haveSave = true;
+  EEPROM.put(0, lastSave);
+  EEPROM.commit();
+}
+bool readSave() {
+  SaveData s; EEPROM.get(0, s);
+  if (s.magic != SAVE_MAGIC || s.ver != 1 || s.sum != saveSum(s)) return false;
+  lastSave = s; return true;
+}
+
+// =====================================================================
+// Rooms and spawning
+// =====================================================================
+void spawnEnemies(uint8_t r) {
+  for (uint8_t i = 0; i < MAX_EN; i++) en[i].live = false;
+  uint8_t n = 0; int16_t w = rTW(r), h = rTH(r);
+  for (int16_t ty = 0; ty < h; ty++)
+    for (int16_t tx = 0; tx < w; tx++) {
+      char c = ROOMS[r].tiles[ty * w + tx];
+      if (n >= MAX_EN || (c != 'z' && c != 'k' && c != 'r')) continue;
+      Enemy &e = en[n++];
+      memset(&e, 0, sizeof e);
+      e.live = true;
+      int16_t x = (rTX(r) + tx) * TILE, y = (rTY(r) + ty) * TILE;
+      if (c == 'z') { e.kind = EN_ZOOMER; e.w = 8; e.h = 8; e.hp = 2; e.x = x; e.y = y;
+                      e.nx = 0; e.ny = -1; e.dx = (tx & 1) ? -1 : 1; e.dy = 0; }
+      if (c == 'k') { e.kind = EN_SKREE; e.w = 8; e.h = 10; e.hp = 2; e.x = x; e.y = y; }
+      if (c == 'r') { e.kind = EN_RIPPER; e.w = 12; e.h = 6; e.hp = 1; e.x = x - 2; e.y = y + 1; e.dx = 1; }
+    }
+}
+
+int16_t roomPx0(uint8_t r) { return rTX(r) * TILE; }
+int16_t roomPy0(uint8_t r) { return rTY(r) * TILE; }
+int16_t roomPx1(uint8_t r) { return (rTX(r) + rTW(r)) * TILE; }
+int16_t roomPy1(uint8_t r) { return (rTY(r) + rTH(r)) * TILE; }
+
+void cameraTarget(int16_t &tx, int16_t &ty) {
+  int16_t x = toPx(sX), feet = toPx(sY);
+  tx = x - 64 + (faceR ? 14 : -14);
+  ty = feet - 42;
+}
+void clampCam() {
+  int16_t x0 = roomPx0(curRoom), x1 = roomPx1(curRoom) - 128;
+  int16_t y0 = roomPy0(curRoom), y1 = roomPy1(curRoom) - VIEW_H;
+  if (camX < x0) camX = x0; if (camX > x1) camX = x1;
+  if (camY < y0) camY = y0; if (camY > y1) camY = y1;
+}
+void snapCamera() { cameraTarget(camX, camY); clampCam(); }
+
 void updateCamera() {
-  // Look ahead in facing direction; follow height without jump snap
-  int16_t wantX = px - (faceRight ? 48 : 72);
-  int16_t wantY = py - 36;
-  int16_t maxX = WORLD_W - 128;
-  int16_t maxY = WORLD_H - VIEW_H;
-  if (maxX < 0) maxX = 0;
-  if (maxY < 0) maxY = 0;
-  if (wantX < 0) wantX = 0;
-  if (wantY < 0) wantY = 0;
-  if (wantX > maxX) wantX = maxX;
-  if (wantY > maxY) wantY = maxY;
-
-  // Soft follow (2px/frame) — stable, no jitter
-  if (camX < wantX - 1) camX += 2;
-  else if (camX > wantX + 1) camX -= 2;
-  else camX = wantX;
-  if (camY < wantY - 1) camY += 2;
-  else if (camY > wantY + 1) camY -= 2;
-  else camY = wantY;
-
-  if (camX < 0) camX = 0;
-  if (camY < 0) camY = 0;
-  if (camX > maxX) camX = maxX;
-  if (camY > maxY) camY = maxY;
+  int16_t tx, ty; cameraTarget(tx, ty);
+  int16_t dx = tx - camX;
+  camX += dx / 5 + sgn(dx);
+  // vertical: follow with a dead zone so ordinary jumps don't drag the view
+  int16_t feet = toPx(sY), head = feet - bodyH();
+  int16_t fy = feet - camY;
+  if (fy > 50) camY += min<int16_t>(fy - 50, 6);
+  else if (head - camY < 6) camY -= min<int16_t>(6 - (head - camY), 6);
+  else if (ground) { int16_t dy = ty - camY; if (dy) camY += dy / 6 + sgn(dy); }
+  clampCam();
 }
 
-void startSandbox() {
-  fpx = I2F(48);
-  fpy = I2F(180);
-  fvx = fvy = 0;
-  syncPlayerInts();
-  camX = 0;
-  camY = WORLD_H - VIEW_H;
-  faceRight = true;
-  onGround = true;
-  jumpHeld = false;
-  jumpCutDone = false;
-  coyote = 0;
-  jumpBuf = 0;
-  dirHold = 0;
-  runPhase = 0;
-  animTimer = 0;
-  inputLock = 8;
-  menuHeld = false;
-  menuDownMs = 0;
-  mode = GAME;
-  beep(700, 30);
+void enterRoomNow() {
+  if (pendingRoom < 0) return;
+  curRoom = pendingRoom; pendingRoom = -1;
+  visited |= 1ULL << curRoom;
+  for (auto &s : shots) s.live = false;
+  for (auto &b : bul) b.live = false;
+  for (auto &d : drops) d.live = false;
+  for (auto &s : sparks) s.life = 0;
+  spawnEnemies(curRoom);
+  snapCamera();
 }
+
+void placeAtPad() {
+  sX = toFx(padTX * TILE + 4) + 128; sY = toFx(padTY * TILE);
+  sVX = sVY = 0; ground = true; ball = false; spin = false; faceR = true;
+  curRoom = roomAtTile(padTX, padTY);
+  pendingRoom = curRoom; enterRoomNow();
+}
+
+void loadFrom(const SaveData &s) {
+  gear = s.gear; maxEnergy = s.maxEn; maxMissiles = s.maxMs;
+  itemsGot = s.items; visited = s.visited; redOpen = s.redDoors; playFrames = s.frames;
+  energy = maxEnergy; missiles = maxMissiles; weapon = 0;
+  for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
+  invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
+  placeAtPad();
+}
+
+void newGame() {
+  gear = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
+  captureSave(lastSave);
+  loadFrom(lastSave);
+  writeSave();          // automatic ship checkpoint
+  mode = M_PLAY; cardT = 70; inputLock = 6;
+}
+void continueGame() { loadFrom(lastSave); mode = M_PLAY; cardT = 70; inputLock = 6; }
+void respawn() { loadFrom(lastSave); mode = M_PLAY; inputLock = 6; }
+
+// =====================================================================
+// Samus
+// =====================================================================
+bool onPad() {
+  if (!ground || ball) return false;
+  return rawTile(toPx(sX) >> 3, toPx(sY) >> 3) == 'S';
+}
+
+void hurt(int8_t fromDir, uint8_t dmg) {
+  if (invul || mode != M_PLAY) return;
+  energy = energy > dmg ? energy - dmg : 0;
+  beep(180, 60);
+  if (energy == 0) { mode = M_DEAD; deadT = 0; cardT = 0; msgT = 0; watch::playTune(TUNE_DEAD, 4); return; }
+  invul = 90; hurtLock = 14; spin = false;
+  sVX = fromDir * 256; sVY = -360; ground = false;
+}
+
+void tryStand() {
+  int16_t x = toPx(sX), y = toPx(sY);
+  static const int8_t OFFS[5] = {0, -2, 2, -4, 4};
+  for (int8_t off : OFFS) {
+    if (samusFitsAt(x + off, y, false)) { sX += toFx(off); ball = false; beep(900, 10); return; }
+  }
+  beep(120, 25);   // no headroom: stay rolled up
+  showMsg("NEED ROOM", 30);
+}
+
+void doDown() {
+  if (onPad()) {
+    energy = maxEnergy; missiles = maxMissiles;
+    writeSave();
+    watch::playTune(TUNE_SAVE, 4);
+    showMsg("ENERGY RESTORED  SAVED", 70);
+    return;
+  }
+  if (!(gear & G_MORPH)) { beep(140, 20); return; }
+  if (ball) tryStand();
+  else { ball = true; spin = false; beep(500, 12); }
+}
+
+void switchWeapon() {
+  if (!(gear & G_MISSILE)) { beep(140, 20); return; }
+  weapon ^= 1; modeLabelT = 30; beep(weapon ? 1200 : 800, 15);
+}
+
+void fire() {
+  if (ball) { if (!(gear & G_BOMB)) beep(140, 15); return; }   // bombs: next zone
+  if (fireCD) return;
+  uint8_t slot = 255;
+  for (uint8_t i = 0; i < MAX_SHOTS; i++) if (!shots[i].live) { slot = i; break; }
+  if (slot == 255) return;
+  bool mis = weapon == 1;
+  if (mis && missiles == 0) { beep(160, 20); showMsg("NO MISSILES", 30); return; }
+  if (mis) missiles--;
+  spin = false;   // firing ends the somersault
+  int8_t d = faceR ? 1 : -1;
+  Shot &s = shots[slot];
+  s.live = true; s.missile = mis;
+  s.x = sX + toFx(d * 8); s.y = sY - toFx(15);
+  s.vx = d * (mis ? MISSILE_V0 : BEAM_V);
+  s.life = mis ? MISSILE_LIFE : BEAM_LIFE;
+  fireCD = mis ? 14 : 8;
+  beep(mis ? 520 : 1400, mis ? 30 : 12);
+}
+
+// Move along one axis a pixel at a time; returns true if blocked
+bool moveAxis(bool horiz, fx dv) {
+  fx &p = horiz ? sX : sY;
+  int16_t a = toPx(p), b = toPx(p + dv);
+  int8_t st = b > a ? 1 : -1;
+  int8_t hw = bodyHW(), h = bodyH();
+  for (int16_t v = a; v != b; v += st) {
+    int16_t n = v + st;
+    int16_t x = horiz ? n : toPx(sX), y = horiz ? toPx(sY) : n;
+    if (boxSolid(x - hw, y - h, x + hw, y)) {
+      p = toFx(v) + (st > 0 ? 255 : 0);
+      return true;
+    }
+  }
+  p += dv;
+  return false;
+}
+
+void samusStep(int8_t dir, bool firstStep) {
+  (void)firstStep;
+  if (hurtLock) { hurtLock--; dir = 0; }
+  if (invul) invul--;
+  if (fireCD) fireCD--;
+
+  // horizontal
+  if (ground) {
+    if (dir) {
+      if (sgn(sVX) == -dir) sVX += dir * TURN_G;
+      else sVX += dir * ACC_G;
+      if (sVX > RUN_MAX) sVX = RUN_MAX; if (sVX < -RUN_MAX) sVX = -RUN_MAX;
+    } else if (!hurtLock) {
+      if (sVX > 0) { sVX -= DEC_G; if (sVX < 0) sVX = 0; }
+      else if (sVX < 0) { sVX += DEC_G; if (sVX > 0) sVX = 0; }
+    }
+  } else {
+    if (dir) {
+      sVX += dir * ACC_A;
+      if (sVX > RUN_MAX) sVX = RUN_MAX; if (sVX < -RUN_MAX) sVX = -RUN_MAX;
+    } else if (!hurtLock) {
+      if (sVX > 0) { sVX -= DRAG_A; if (sVX < 0) sVX = 0; }
+      else if (sVX < 0) { sVX += DRAG_A; if (sVX > 0) sVX = 0; }
+    }
+  }
+  if (dir) faceR = dir > 0;
+
+  // jump (not in the ball — no Spring Ball yet)
+  if (jumpBuf) jumpBuf--;
+  if (ground) coyote = COYOTE; else if (coyote) coyote--;
+  if (jumpBuf && coyote && !ball) {
+    sVY = -JUMP_V; ground = false; coyote = 0; jumpBuf = 0;
+    spin = (sVX > SPIN_MIN || sVX < -SPIN_MIN);
+    beep(spin ? 660 : 760, 14);
+  }
+  if (!jumpHeld && sVY < -JUMP_CUT) sVY = -JUMP_CUT;
+  sVY += GRAV; if (sVY > FALL_MAX) sVY = FALL_MAX;
+
+  if (moveAxis(true, sVX)) sVX = 0;
+  bool wasGround = ground;
+  if (moveAxis(false, sVY)) {
+    if (sVY > 0) { ground = true; if (!wasGround && !ball) beep(220, 8); spin = false; }
+    sVY = 0;
+  } else {
+    int16_t x = toPx(sX), y = toPx(sY);
+    ground = boxSolid(x - bodyHW(), y, x + bodyHW(), y + 1);
+    if (ground && sVY > 0) sVY = 0;
+  }
+  if (ground) spin = false;
+  if (spin) spinPhase++;
+
+  // animation
+  if (ground && !ball && (sVX > 64 || sVX < -64)) { if (++animT >= 8) { animT = 0; runPhase++; } }
+  else if (ball && (sVX > 32 || sVX < -32)) { if (++animT >= 4) { animT = 0; runPhase++; } }
+  else animT = 0;
+}
+
+// =====================================================================
+// Enemies
+// =====================================================================
+bool enemySolidAt(const Enemy &e, int16_t x, int16_t y) { return boxSolid(x, y, x + e.w, y + e.h); }
+
+void zoomerCrawl(Enemy &e) {
+  if (enemySolidAt(e, e.x + e.dx, e.y + e.dy)) {            // inner corner: climb the wall ahead
+    int8_t ndx = e.nx, ndy = e.ny;
+    e.nx = -e.dx; e.ny = -e.dy; e.dx = ndx; e.dy = ndy;
+    return;
+  }
+  e.x += e.dx; e.y += e.dy;
+  if (!enemySolidAt(e, e.x - e.nx, e.y - e.ny)) {           // outer corner: wrap round the edge
+    int8_t ndx = -e.nx, ndy = -e.ny;
+    e.nx = e.dx; e.ny = e.dy; e.dx = ndx; e.dy = ndy;
+    e.x += e.dx; e.y += e.dy;
+    if (!enemySolidAt(e, e.x - e.nx, e.y - e.ny)) { if (++e.lost > 2) { e.st = 1; e.vy = 0; } }
+    else e.lost = 0;
+  } else e.lost = 0;
+}
+
+void enemyBullet(int16_t x, int16_t y, fx vx, fx vy) {
+  for (auto &b : bul) if (!b.live) { b = {true, toFx(x), toFx(y), vx, vy, 26}; return; }
+}
+
+void killEnemy(Enemy &e) {
+  e.live = false;
+  int16_t cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+  burst(cx, cy, 8, 6);
+  beep(300, 30);
+  // drops: energy when hurt, missiles once Samus has the launcher
+  uint8_t roll = random(100);
+  uint8_t kind = 0;
+  if (energy < maxEnergy && roll < 45) kind = 1;
+  else if ((gear & G_MISSILE) && missiles < maxMissiles && roll < 75) kind = 2;
+  if (kind) for (auto &d : drops) if (!d.live) { d = {true, kind, cx, cy, 300}; break; }
+}
+
+void enemyStep(Enemy &e) {
+  if (e.flash) e.flash--;
+  int16_t samX = toPx(sX), samY = toPx(sY);
+  switch (e.kind) {
+    case EN_ZOOMER:
+      if (e.st == 1) {          // knocked loose: fall until it lands
+        e.vy += GRAV; if (e.vy > FALL_MAX) e.vy = FALL_MAX;
+        e.acc += e.vy;
+        while (e.acc >= 256) {
+          e.acc -= 256;
+          if (enemySolidAt(e, e.x, e.y + 1)) { e.st = 0; e.nx = 0; e.ny = -1; e.dy = 0; if (!e.dx) e.dx = 1; e.lost = 0; e.acc = 0; break; }
+          e.y++;
+        }
+      } else {
+        e.acc += 96;            // 0.375 px/step
+        while (e.acc >= 256) { e.acc -= 256; zoomerCrawl(e); if (e.st) break; }
+      }
+      break;
+    case EN_SKREE:
+      if (e.st == 0) {          // hanging
+        int16_t dx = samX - (e.x + 4);
+        if (samY > e.y && samY - e.y < 70 && dx > -30 && dx < 30) { e.st = 1; e.vy = 0; beep(900, 20); }
+      } else if (e.st == 1) {   // diving, drifting toward Samus
+        e.vy += 22; if (e.vy > 640) e.vy = 640;
+        e.acc += e.vy;
+        while (e.acc >= 256) {
+          e.acc -= 256;
+          if (enemySolidAt(e, e.x, e.y + 1)) { e.st = 2; e.t = 36; break; }
+          e.y++;
+        }
+        if ((frameN & 1) == 0) {
+          int8_t d = samX > e.x + 4 ? 1 : samX < e.x + 4 ? -1 : 0;
+          if (d && !enemySolidAt(e, e.x + d, e.y)) e.x += d;
+        }
+      } else if (e.st == 2) {   // dug in, shaking — then bursts into shards
+        if (e.t) e.t--;
+        if (!e.t) {
+          int16_t cx = e.x + 4, cy = e.y + 4;
+          enemyBullet(cx, cy, -400, -400); enemyBullet(cx, cy, 400, -400);
+          enemyBullet(cx, cy, -560, 0);    enemyBullet(cx, cy, 560, 0);
+          burst(cx, cy, 6, 5); beep(250, 25);
+          e.live = false;
+        }
+      }
+      break;
+    case EN_RIPPER:
+      e.acc += 128;   // 0.5 px/step
+      while (e.acc >= 256) {
+        e.acc -= 256;
+        if (enemySolidAt(e, e.x + e.dx, e.y)) e.dx = -e.dx;
+        else e.x += e.dx;
+      }
+      break;
+  }
+  // left the room (fell out / crawled through a door): gone
+  if (e.x + e.w < roomPx0(curRoom) || e.x > roomPx1(curRoom) || e.y > roomPy1(curRoom)) e.live = false;
+}
+
+bool overlap(int16_t ax0, int16_t ay0, int16_t ax1, int16_t ay1, int16_t bx0, int16_t by0, int16_t bx1, int16_t by1) {
+  return ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1;
+}
+
+void samusBox(int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) {
+  int16_t x = toPx(sX), y = toPx(sY);
+  x0 = x - bodyHW(); x1 = x + bodyHW(); y0 = y - bodyH(); y1 = y;
+}
+
+// =====================================================================
+// Shots
+// =====================================================================
+void shotStep(Shot &s) {
+  if (s.missile) { s.vx += sgn(s.vx) * MISSILE_ACC; if (s.vx > MISSILE_VMAX) s.vx = MISSILE_VMAX; if (s.vx < -MISSILE_VMAX) s.vx = -MISSILE_VMAX; }
+  s.x += s.vx;
+  int16_t x = toPx(s.x), y = toPx(s.y);
+  if (!s.life--) { s.live = false; return; }
+  int16_t tx = x >> 3, ty = y >> 3;
+  if (solidTile(tx, ty)) {
+    int8_t d = doorAt(tx, ty);
+    if (d >= 0) {
+      if (doors[d].kind == 'D') { openDoor(d, false); beep(700, 25); }
+      else if (doors[d].kind == 'R' && s.missile) { openDoor(d, true); beep(500, 60); burst(x, y, 6, 4); }
+      else { beep(1800, 6); }
+    }
+    spark(x - sgn(s.vx) * 2, y, -sgn(s.vx) * 3, -2, 5); spark(x - sgn(s.vx) * 2, y, -sgn(s.vx) * 3, 2, 5);
+    s.live = false; return;
+  }
+  for (auto &e : en) {
+    if (!e.live) continue;
+    if (!overlap(x - 2, y - 2, x + 2, y + 2, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
+    s.live = false;
+    if (e.kind == EN_RIPPER && !s.missile) {       // armoured: the beam just tinks off
+      beep(2000, 8); spark(x, y, -sgn(s.vx) * 4, -3, 5); return;
+    }
+    uint8_t dmg = s.missile ? 4 : 1;
+    e.flash = 6;
+    if (e.hp <= dmg) killEnemy(e);
+    else { e.hp -= dmg; beep(600, 10); }
+    return;
+  }
+}
+
+// =====================================================================
+// Pickups
+// =====================================================================
+const char *itemName(char k) {
+  switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
+}
+const char *itemHint(char k) {
+  switch (k) {
+    case 'm': return "MODE: ROLL UP";
+    case 'l': return "MODE+OK: SWITCH";
+    case 't': return "MISSILES +5";
+    default: return "ENERGY +2";
+  }
+}
+
+void collectItem(uint8_t i) {
+  itemsGot |= 1ULL << i;
+  char k = items[i].kind;
+  if (k == 'm') gear |= G_MORPH;
+  if (k == 'l') { gear |= G_MISSILE; maxMissiles += 5; missiles = maxMissiles; }
+  if (k == 't') { maxMissiles += 5; missiles += 5; }
+  if (k == 'e') { maxEnergy += 2; energy = maxEnergy; }
+  itemKind = k; itemT = 0; mode = M_ITEM;
+  watch::playTune(TUNE_ITEM, 7);
+}
+
+void checkPickups() {
+  int16_t x0, y0, x1, y1; samusBox(x0, y0, x1, y1);
+  for (uint8_t i = 0; i < itemN; i++) {
+    if ((itemsGot >> i) & 1) continue;
+    int16_t ix = items[i].tx * TILE, iy = items[i].ty * TILE;
+    if (overlap(x0, y0, x1, y1, ix + 1, iy + 1, ix + 7, iy + 7)) { collectItem(i); return; }
+  }
+  for (auto &d : drops) {
+    if (!d.live) continue;
+    if (overlap(x0, y0, x1, y1, d.x - 3, d.y - 3, d.x + 3, d.y + 3)) {
+      d.live = false;
+      if (d.kind == 1 && energy < maxEnergy) energy++;
+      if (d.kind == 2) { missiles += 2; if (missiles > maxMissiles) missiles = maxMissiles; }
+      beep(1300, 15);
+    }
+  }
+}
+
+// =====================================================================
+// Play step
+// =====================================================================
+void handleInput(uint8_t e) {
+  uint8_t h = watch::held();
+  if (inputLock) {
+    if (h == 0 || --inputLock == 0) { if (h == 0) inputLock = 0; }
+    prevHeld = h; chord = false; downArmed = false;
+    if (inputLock) return;
+  }
+  // DOWN + FIRE together: tap = beam/missile, hold = pause
+  if ((h & B_DOWN) && (h & B_FIRE) && (e & (B_DOWN | B_FIRE)) && !chord) {
+    chord = true; chordT = 0; downUsed = true;
+  }
+  if (chord) {
+    if ((h & B_DOWN) && (h & B_FIRE)) {
+      if (++chordT == CHORD_HOLD) {
+        chord = false; pauseSel = 0; mode = M_PAUSE; beep(400, 30);
+        inputLock = 255; prevHeld = h; return;
+      }
+    } else {
+      if (chordT < CHORD_HOLD) switchWeapon();
+      chord = false;
+    }
+    e &= ~(B_DOWN | B_FIRE);
+  }
+  // DOWN acts on release so it can still become the chord
+  if (e & B_DOWN) { downArmed = true; downUsed = false; }
+  if ((prevHeld & B_DOWN) && !(h & B_DOWN)) {
+    if (downArmed && !downUsed) doDown();
+    downArmed = false;
+  }
+  if ((e & B_FIRE) && !(h & B_DOWN)) fire();
+  if (e & B_UP) {
+    if (ball) tryStand();
+    else jumpBuf = JUMP_BUF;
+  }
+  jumpHeld = (h & B_UP) != 0;
+  prevHeld = h;
+}
+
+void playStep(uint8_t e) {
+  frameN++; playFrames++;
+  handleInput(e);
+  if (mode != M_PLAY) return;
+  if (cardT) cardT--;
+  if (modeLabelT) modeLabelT--;
+  if (msgT) msgT--;
+
+  uint8_t h = inputLock ? 0 : watch::held();
+  int8_t dir = 0;
+  if ((h & B_LEFT) && !(h & B_RIGHT)) dir = -1;
+  if ((h & B_RIGHT) && !(h & B_LEFT)) dir = 1;
+
+  for (uint8_t step = 0; step < 2; step++) {
+    samusStep(dir, step == 0);
+    for (auto &s : shots) if (s.live) shotStep(s);
+    for (auto &en1 : en) if (en1.live) enemyStep(en1);
+    for (auto &b : bul) if (b.live) {
+      b.x += b.vx; b.y += b.vy;
+      if (!--b.life || solidTile(toPx(b.x) >> 3, toPx(b.y) >> 3)) b.live = false;
+    }
+  }
+  for (uint8_t i = 0; i < doorN; i++) {
+    if (!doors[i].timer) continue;
+    int16_t x0, y0, x1, y1; samusBox(x0, y0, x1, y1);
+    bool inside = overlap(x0, y0, x1, y1, doors[i].tx * 8, doors[i].ty * 8, doors[i].tx * 8 + 8, (doors[i].ty + doors[i].h) * 8);
+    if (!inside || doors[i].timer > 1) doors[i].timer--;
+  }
+  for (auto &d : drops) if (d.live && !--d.life) d.live = false;
+  for (auto &s : sparks) if (s.life) { s.life--; s.x += s.vx / 2; s.y += s.vy / 2; }
+
+  // contact damage
+  int16_t x0, y0, x1, y1; samusBox(x0, y0, x1, y1);
+  int16_t cx = (x0 + x1) / 2;
+  for (auto &en1 : en) {
+    if (!en1.live || invul) continue;
+    if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
+      hurt(cx < en1.x + en1.w / 2 ? -1 : 1, 1);
+  }
+  for (auto &b : bul) {
+    if (!b.live || invul) continue;
+    int16_t bx = toPx(b.x), by = toPx(b.y);
+    if (overlap(x0, y0, x1, y1, bx - 1, by - 1, bx + 2, by + 2)) { b.live = false; hurt(b.vx > 0 ? 1 : -1, 1); }
+  }
+  if (mode != M_PLAY) return;
+  checkPickups();
+  if (mode != M_PLAY) return;
+
+  // an open door with nothing built behind it yet
+  for (uint8_t i = 0; i < doorN; i++) {
+    if (!doorIsOpen(i)) continue;
+    int16_t tx = doors[i].tx, ty = doors[i].ty;
+    int16_t out = roomAtTile(tx - 1, ty) < 0 ? tx - 1 : roomAtTile(tx + 1, ty) < 0 ? tx + 1 : 0;
+    if (!out) continue;
+    if (overlap(x0 - 2, y0, x1 + 2, y1, tx * 8, ty * 8, tx * 8 + 8, (ty + doors[i].h) * 8) && !msgT)
+      showMsg(tx - 1 == out ? "KRAID'S LAIR: NEXT BUILD" : "NORFAIR: NEXT BUILD", 50);
+  }
+
+  // crossed into the next room?
+  int8_t r = roomAtPx(toPx(sX), toPx(sY) - bodyH() / 2);
+  if (r >= 0 && r != curRoom) { pendingRoom = r; transitionTo(enterRoomNow, 6); }
+
+  updateCamera();
+}
+
+// =====================================================================
+// Drawing
+// =====================================================================
+inline int16_t scrX(int16_t wx) { return wx - camX; }
+inline int16_t scrY(int16_t wy) { return wy - camY + HUD_H; }
 
 void blitBits(int16_t left, int16_t top, const uint8_t *bits, uint8_t rows, uint8_t rowBytes, bool flip) {
-  u8g2.setDrawColor(1);
-  for (uint8_t row = 0; row < rows; row++) {
+  for (uint8_t row = 0; row < rows; row++)
     for (uint8_t bi = 0; bi < rowBytes; bi++) {
       uint8_t b = bits[row * rowBytes + bi];
       for (uint8_t col = 0; col < 8; col++) {
@@ -237,280 +818,476 @@ void blitBits(int16_t left, int16_t top, const uint8_t *bits, uint8_t rows, uint
         plot(left + dx, top + row);
       }
     }
-  }
 }
 
-void drawSamus() {
-  int16_t x = sx(px);
-  int16_t y = sy(py);
-  if (invul && ((invul >> 2) & 1)) return;
+inline uint32_t thash(int16_t x, int16_t y) {
+  uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u;
+  h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+  return h;
+}
 
-  const uint8_t *spr = SAMUS_IDLE;
-  if (!onGround) {
-    spr = SAMUS_JUMP;
-  } else if (fxAbs(fvx) > FX_ONE / 4) {
-    // Pose rate scales with speed: walk slower anim, run faster
-    spr = (runPhase & 1) ? SAMUS_RUN1 : SAMUS_RUN0;
-  }
-  blitBits(x - 8, y - (SAMUS_H - 1), spr, SAMUS_H, 2, !faceRight);
+void drawRock(int16_t tx, int16_t ty, int16_t x, int16_t y, char c) {
+  bool T = !rockish(tx, ty - 1), Bt = !rockish(tx, ty + 1), L = !rockish(tx - 1, ty), R = !rockish(tx + 1, ty);
+  uint32_t h = thash(tx, ty);
+  int8_t l = L ? 1 : 0, r = R ? 1 : 0, t = T ? 1 : 0, b = Bt ? 1 : 0;
+  if (T) { hLineSafe(x + l, y, 8 - l - r); if (h & 1) hLineSafe(x + 2 + ((h >> 1) & 3), y + 1, 2); }
+  if (Bt) { hLineSafe(x + l, y + 7, 8 - l - r); if (h & 8) plot(x + 3 + ((h >> 4) & 1), y + 6); }
+  if (L) { vLineSafe(x, y + t, 8 - t - b); if (h & 32) plot(x + 1, y + 2 + ((h >> 6) & 3)); }
+  if (R) { vLineSafe(x + 7, y + t, 8 - t - b); if (h & 256) plot(x + 6, y + 2 + ((h >> 9) & 3)); }
+  if (c == '=') {                        // ledge: a banded slab
+    for (int8_t i = 1; i < 7; i += 2) plot(x + i, y + 3);
+  } else if (c == 'B') {                 // bomb block: jagged seam
+    for (int8_t i = 0; i < 8; i++) plot(x + i, y + 3 + ((i & 2) ? 1 : 0) - ((i & 1) ? 1 : 0));
+  } else if (c == 'G') {                 // locked hatch
+    frameSafe(x, y, 8, 8); lineSafe(x + 1, y + 1, x + 6, y + 6); lineSafe(x + 6, y + 1, x + 1, y + 6);
+  } else if (((h >> 12) & 7) == 0) {     // sparse rock grain
+    plot(x + 2 + ((h >> 16) & 3), y + 2 + ((h >> 18) & 3));
+    plot(x + 3 + ((h >> 16) & 3), y + 2 + ((h >> 18) & 3));
+  } else if (((h >> 12) & 7) == 1) plot(x + 1 + ((h >> 20) & 5), y + 4 + ((h >> 23) & 1));
+}
+
+void drawDoor(uint8_t i) {
+  const Door &d = doors[i];
+  int16_t x = scrX(d.tx * 8), y = scrY(d.ty * 8), hpx = d.h * 8;
+  if (x > 128 || x < -8 || y > 64 || y + hpx < HUD_H) return;
+  // frame caps above and below
+  fillBoxClipped(x, y, 8, 2); fillBoxClipped(x, y + hpx - 2, 8, 2);
+  if (doorIsOpen(i)) return;
+  // closed capsule
+  frameSafe(x + 1, y + 2, 6, hpx - 4);
+  if (d.kind == 'R') { vLineSafe(x + 3, y + 3, hpx - 6); vLineSafe(x + 4, y + 3, hpx - 6); }   // double bar
+  else for (int16_t yy = y + 4; yy < y + hpx - 4; yy += 3) plot(x + 3 + ((yy >> 1) & 1), yy);
+}
+
+void drawShip() {
+  int16_t cx = scrX(padTX * 8 + 4), ty = scrY(padTY * 8);
+  if (cx < -40 || cx > 168 || ty > 72 || ty < -20) return;
+  // upper hull
+  hLineSafe(cx - 17, ty, 35);
+  lineSafe(cx - 17, ty, cx - 21, ty + 7); lineSafe(cx + 17, ty, cx + 21, ty + 7);
+  // canopy band
+  for (int16_t i = -12; i <= 12; i += 2) plot(cx + i, ty + 3);
+  hLineSafe(cx - 14, ty + 5, 29);
+  // lower hull and wings
+  hLineSafe(cx - 21, ty + 8, 43);
+  lineSafe(cx - 21, ty + 8, cx - 28, ty + 13); lineSafe(cx + 21, ty + 8, cx + 28, ty + 13);
+  hLineSafe(cx - 28, ty + 14, 57);
+  lineSafe(cx - 10, ty + 8, cx - 6, ty + 14); lineSafe(cx + 10, ty + 8, cx + 6, ty + 14);
+  // engines
+  discSafe(cx - 22, ty + 11, 2); discSafe(cx + 22, ty + 11, 2);
+  // landing struts
+  vLineSafe(cx - 18, ty + 15, 1); vLineSafe(cx + 18, ty + 15, 1);
+  // save pad lights
+  bool near = onPad();
+  u8g2.setDrawColor(0); hLineSafe(cx - 4, ty, 9); u8g2.setDrawColor(1);
+  if (!near || (frameN & 4)) { plot(cx - 4, ty - 1); plot(cx + 4, ty - 1); }
+  if (near) for (int8_t i = -3; i <= 3; i += 2) plot(cx + i, ty - 1);
 }
 
 void drawWorld() {
-  u8g2.setDrawColor(1);
-
-  // Sparse stars / dust (stable, based on camera)
-  for (uint8_t i = 0; i < 20; i++) {
-    int16_t wx = (int16_t)((i * 97 + 13) % WORLD_W);
-    int16_t wy = (int16_t)((i * 53 + 7) % WORLD_H);
-    int16_t x = sx(wx), y = sy(wy);
-    if (y >= HUD_H && y < 64) plot(x, y);
-  }
-
-  // Platforms
-  for (uint8_t i = 0; i < PLAT_N; i++) {
-    const Plat &p = PLATS[i];
-    int16_t x = sx(p.x);
-    int16_t y = sy(p.y);
-    if (y < HUD_H - 4 || y > 66) continue;
-    if (x > 128 || x + p.w < 0) continue;
-
-    if (p.solid) {
-      fillBoxClipped(x, y, p.w, 4);
-      // rock edge ticks
-      for (int16_t t = 0; t < p.w; t += 8)
-        plot(x + t, y - 1);
-    } else {
-      // jump-through: dashed top edge
-      for (int16_t t = 0; t < p.w; t += 4)
-        hLineSafe(x + t, y, 2);
-      hLineSafe(x, y + 1, p.w);
+  int16_t tx0 = camX >> 3, ty0 = camY >> 3;
+  // the surface has a starfield (parallax)
+  if (ROOMS[curRoom].my == 0 && curRoom == 0) {
+    for (uint8_t i = 0; i < 26; i++) {
+      int16_t x = (int16_t)((i * 53 + 11 - camX / 4) & 127);
+      int16_t y = (int16_t)((i * 29 + 5) % 112) - camY / 3 + HUD_H;
+      if (y >= HUD_H && y < 64 && !solidTile((camX + x) >> 3, (camY + y - HUD_H) >> 3)) plot(x, y);
     }
   }
-
-  // Room bounds hint
-  if (camX <= 0) vLineSafe(sx(0), HUD_H, VIEW_H);
-  if (camX >= WORLD_W - 128) vLineSafe(sx(WORLD_W - 1), HUD_H, VIEW_H);
-
-  drawSamus();
+  for (int16_t ty = ty0; ty <= ty0 + 7; ty++)
+    for (int16_t tx = tx0; tx <= tx0 + 16; tx++) {
+      char c = rawTile(tx, ty);
+      int16_t x = scrX(tx * 8), y = scrY(ty * 8);
+      if (c == '#' || c == '=' || c == 'B' || c == 'G') drawRock(tx, ty, x, y, c);
+    }
+  for (uint8_t i = 0; i < doorN; i++) drawDoor(i);
+  drawShip();
 }
+
+void drawItems() {
+  for (uint8_t i = 0; i < itemN; i++) {
+    if ((itemsGot >> i) & 1) continue;
+    int16_t x = scrX(items[i].tx * 8 + 4), y = scrY(items[i].ty * 8 + 4);
+    if (x < -8 || x > 136 || y < 0 || y > 72) continue;
+    circleSafe(x, y, 4);
+    if (frameN & 4) circleSafe(x, y, 2);
+    else plot(x, y);
+    plot(x, y - 6 - ((frameN >> 2) & 1));   // glint
+  }
+  for (auto &d : drops) {
+    if (!d.live || (d.life < 60 && (frameN & 2))) continue;
+    int16_t x = scrX(d.x), y = scrY(d.y);
+    if (d.kind == 1) { circleSafe(x, y, 2); plot(x, y); }
+    else { hLineSafe(x - 2, y, 4); plot(x + 2, y - 1); plot(x + 2, y + 1); plot(x - 3, y - 1); plot(x - 3, y + 1); }
+  }
+}
+
+void drawZoomer(const Enemy &e, int16_t x, int16_t y) {
+  // 8×8 spiked dome sitting on its surface; the normal (nx, ny) says which way is "up"
+  static const uint8_t Z[8] = {0x24, 0x5A, 0x3C, 0x7E, 0xFF, 0xDB, 0xFF, 0x66};
+  uint8_t f = (frameN >> 2) & 1;
+  for (uint8_t r = 0; r < 8; r++)
+    for (uint8_t c = 0; c < 8; c++) {
+      uint8_t row = Z[r];
+      if (r == 0 && f) row = 0x42;
+      if (!(row & (0x80 >> c))) continue;
+      int8_t px = 0, py = 0;
+      if (e.ny < 0) { px = c; py = r; }               // on a floor
+      else if (e.ny > 0) { px = 7 - c; py = 7 - r; }  // on a ceiling
+      else if (e.nx > 0) { px = 7 - r; py = c; }      // on a wall to its left
+      else { px = r; py = 7 - c; }                    // on a wall to its right
+      plot(x + px, y + py);
+    }
+}
+
+void drawEnemies() {
+  for (const auto &e : en) {
+    if (!e.live) continue;
+    int16_t x = scrX(e.x), y = scrY(e.y);
+    if (x < -16 || x > 140 || y < 0 || y > 72) continue;
+    if (e.flash & 2) { frameSafe(x - 1, y - 1, e.w + 2, e.h + 2); continue; }
+    if (e.kind == EN_ZOOMER) drawZoomer(e, x, y);
+    else if (e.kind == EN_SKREE) {
+      int8_t sh = (e.st == 2) ? ((frameN & 1) ? 1 : -1) : 0;
+      x += sh;
+      // body hanging point-down; wings flare while diving
+      hLineSafe(x + 1, y, 6);
+      fillBoxClipped(x + 2, y + 1, 4, 5);
+      plot(x + 3, y + 6); plot(x + 4, y + 6); plot(x + 3, y + 7); plot(x + 4, y + 7);
+      plot(x + 3, y + 9); plot(x + 4, y + 8);
+      u8g2.setDrawColor(0); plot(x + 3, y + 3); u8g2.setDrawColor(1);
+      if (e.st == 1) { bool f = frameN & 2; lineSafe(x + 2, y + 1, x - 1, y + (f ? 0 : 4)); lineSafe(x + 5, y + 1, x + 8, y + (f ? 0 : 4)); }
+      else { vLineSafe(x + 1, y + 1, 4); vLineSafe(x + 6, y + 1, 4); }
+    } else if (e.kind == EN_RIPPER) {
+      // armoured shell with a beak in the travel direction
+      hLineSafe(x + 2, y, 8); hLineSafe(x + 1, y + 1, 10);
+      fillBoxClipped(x, y + 2, 12, 2);
+      hLineSafe(x + 1, y + 4, 10); hLineSafe(x + 3, y + 5, 6);
+      u8g2.setDrawColor(0); hLineSafe(x + 2, y + 2, 8); u8g2.setDrawColor(1);
+      int16_t bx = e.dx > 0 ? x + 12 : x - 2;
+      hLineSafe(bx, y + 2, 2);
+      plot(e.dx > 0 ? x + 9 : x + 2, y + 1);
+    }
+  }
+  for (const auto &b : bul) {
+    if (!b.live) continue;
+    int16_t x = scrX(toPx(b.x)), y = scrY(toPx(b.y));
+    plot(x, y); plot(x + 1, y); plot(x, y + 1); plot(x + 1, y + 1);
+  }
+}
+
+void drawShots() {
+  for (const auto &s : shots) {
+    if (!s.live) continue;
+    int16_t x = scrX(toPx(s.x)), y = scrY(toPx(s.y));
+    int8_t d = sgn(s.vx);
+    if (s.missile) {
+      if (d > 0) { hLineSafe(x - 5, y, 6); plot(x + 1, y); plot(x - 5, y - 1); plot(x - 5, y + 1); if (frameN & 1) plot(x - 7, y); }
+      else { hLineSafe(x, y, 6); plot(x - 1, y); plot(x + 5, y - 1); plot(x + 5, y + 1); if (frameN & 1) plot(x + 7, y); }
+      plot(x, y - 1); plot(x, y + 1);
+    } else {
+      hLineSafe(d > 0 ? x - 3 : x, y, 4);
+      plot(x, y - 1); plot(x, y + 1);
+    }
+  }
+  for (const auto &s : sparks) if (s.life) plot(scrX(s.x), scrY(s.y));
+}
+
+void drawBall(int16_t cx, int16_t feet) {
+  uint8_t f = runPhase & 3;
+  for (uint8_t r = 0; r < 7; r++)
+    for (uint8_t c = 0; c < 7; c++) {
+      uint8_t rr = r, cc = c;
+      if (f == 1) cc = 6 - c; else if (f == 2) { rr = 6 - r; cc = 6 - c; } else if (f == 3) rr = 6 - r;
+      if (SAMUS_BALL[rr] & (0x80 >> cc)) plot(cx - 3 + c, feet - 7 + r);
+    }
+}
+
+void drawSpin(int16_t cx, int16_t cy) {
+  // somersault: a curled Samus tumbling (helmet and boots swap round the circle)
+  float a = (spinPhase >> 1) * 0.785f * (faceR ? 1 : -1);
+  float ca = cosf(a), sa = sinf(a);
+  circleSafe(cx, cy, 6);
+  discSafe(cx + (int16_t)(ca * 3.5f), cy + (int16_t)(sa * 3.5f), 2);           // helmet
+  lineSafe(cx, cy, cx - (int16_t)(ca * 6), cy - (int16_t)(sa * 6));            // legs
+  lineSafe(cx, cy, cx + (int16_t)(-sa * 6), cy + (int16_t)(ca * 6));           // arm cannon
+}
+
+void drawSamus() {
+  if (invul && ((invul >> 2) & 1)) return;
+  int16_t x = scrX(toPx(sX)), feet = scrY(toPx(sY));
+  if (ball) { drawBall(x, feet); return; }
+  if (spin) { drawSpin(x, feet - 11); return; }
+  const uint8_t *spr = SAMUS_IDLE;
+  if (!ground) spr = SAMUS_JUMP;
+  else if (sVX > 64 || sVX < -64) spr = (runPhase & 1) ? SAMUS_RUN1 : SAMUS_RUN0;
+  blitBits(x - 8, feet - SAMUS_H, spr, SAMUS_H, 2, !faceR);
+}
+
+void print3(uint16_t v) { if (v < 100) u8g2.print('0'); if (v < 10) u8g2.print('0'); u8g2.print(v); }
 
 void drawHud() {
-  fillBoxClipped(0, 0, 128, HUD_H);
-  u8g2.setDrawColor(0);
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.setCursor(2, 7);
-  u8g2.print(F("ENGINE"));
-  u8g2.setCursor(48, 7);
-  u8g2.print(F("X"));
-  u8g2.print(px);
-  u8g2.print(F(" Y"));
-  u8g2.print(py);
-  u8g2.setDrawColor(1);
+  u8g2.setDrawColor(0); u8g2.drawBox(0, 0, 128, HUD_H); u8g2.setDrawColor(1);
+  u8g2.setFont(u8g2_font_4x6_tr);
+  u8g2.setCursor(0, 6); u8g2.print(F("EN"));
+  for (uint8_t i = 0; i < maxEnergy; i++) {
+    int16_t x = 10 + i * 5;
+    if (i < energy) fillBoxClipped(x, 1, 4, 5);
+    else frameSafe(x, 1, 4, 5);
+  }
+  if (gear & G_MISSILE) {
+    int16_t x = 96;
+    if (weapon == 1) { fillBoxClipped(x - 1, 0, 31, 7); u8g2.setDrawColor(0); }
+    // tiny missile icon
+    hLineSafe(x + 1, 3, 6); plot(x + 7, 3); plot(x, 2); plot(x, 4); plot(x + 2, 2); plot(x + 2, 4);
+    u8g2.setCursor(x + 11, 6); print3(missiles);
+    u8g2.setDrawColor(1);
+  }
+  if (modeLabelT) {
+    u8g2.setCursor(64, 6); u8g2.print(weapon ? F("MISSILE") : F("BEAM"));
+  }
 }
 
-void drawGame() {
+void drawCenteredText(const char *s, int16_t y) {
+  int16_t w = u8g2.getStrWidth(s);
+  u8g2.setCursor((128 - w) / 2, y); u8g2.print(s);
+}
+
+void drawPlay() {
   drawWorld();
+  drawItems();
+  drawEnemies();
+  drawShots();
+  if (mode != M_DEAD || deadT < 20 || (deadT < 30 && (deadT & 1))) drawSamus();
   drawHud();
+  u8g2.setFont(u8g2_font_4x6_tr);
+  if (msgT && msgText) {
+    int16_t w = u8g2.getStrWidth(msgText);
+    u8g2.setDrawColor(0); u8g2.drawBox((128 - w) / 2 - 2, 56, w + 4, 8); u8g2.setDrawColor(1);
+    drawCenteredText(msgText, 62);
+  } else if (onPad() && mode == M_PLAY) {
+    u8g2.setDrawColor(0); u8g2.drawBox(40, 56, 48, 8); u8g2.setDrawColor(1);
+    drawCenteredText("MODE: SAVE", 62);
+  }
+  if (cardT) {      // zone card slides in from the right and off to the left
+    int16_t off = cardT > 60 ? (cardT - 60) * 13 : cardT < 12 ? -(12 - cardT) * 11 : 0;
+    u8g2.setFont(u8g2_font_6x10_tr);
+    int16_t w = u8g2.getStrWidth("BRINSTAR");
+    int16_t x = (128 - w) / 2 + off;
+    u8g2.setDrawColor(0); u8g2.drawBox(x - 6, 22, w + 12, 14); u8g2.setDrawColor(1);
+    frameSafe(x - 6, 22, w + 12, 14);
+    u8g2.setCursor(x, 33); u8g2.print(F("BRINSTAR"));
+  }
+}
+
+// ---------------------------------------------------------------- item fanfare
+void itemStep(uint8_t e) {
+  itemT++;
+  if (itemT > 30 && (e & (B_UP | B_FIRE | B_DOWN)) && !watch::tunePlaying()) { mode = M_PLAY; inputLock = 4; }
+  if (itemT > 150) { mode = M_PLAY; inputLock = 4; }
+}
+void drawItemScreen() {
+  drawPlay();
+  u8g2.setDrawColor(0); u8g2.drawBox(8, 18, 112, 32); u8g2.setDrawColor(1);
+  frameSafe(8, 18, 112, 32); frameSafe(10, 20, 108, 28);
+  u8g2.setFont(u8g2_font_6x10_tr); drawCenteredText(itemName(itemKind), 32);
+  u8g2.setFont(u8g2_font_4x6_tr); drawCenteredText(itemHint(itemKind), 43);
+}
+
+// ---------------------------------------------------------------- death
+void deadStep(uint8_t) {
+  deadT++;
+  if (deadT == 30) {
+    int16_t x = toPx(sX), y = toPx(sY) - 10;
+    burst(x, y, 16, 7); burst(x, y, 10, 3);
+  }
+  for (auto &s : sparks) if (s.life) { s.life--; s.x += s.vx / 2; s.y += s.vy / 2; }
+  if (deadT == 70) transitionTo(respawn, 14);
+}
+
+// ---------------------------------------------------------------- pause: map + status
+void pauseStep(uint8_t e) {
+  if (inputLock) { if (watch::held() == 0) inputLock = 0; return; }
+  if (e & (B_LEFT | B_RIGHT)) { pauseSel ^= 1; beep(700, 8); }
+  if (e & (B_UP | B_FIRE)) {
+    if (pauseSel == 0) { mode = M_PLAY; inputLock = 255; beep(600, 15); }
+    else { captureSave(lastSave); watch::exitToClock(); }
+  }
+  if (e & B_DOWN) { mode = M_PLAY; inputLock = 255; }
 }
 
 void drawPause() {
-  // Big readable pause — not the full Start tabs yet
-  u8g2.setDrawColor(1);
-  fillBoxClipped(14, 12, 100, 44);
-  u8g2.setDrawColor(0);
-  frameSafe(14, 12, 100, 44);
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.setCursor(40, 24);
-  u8g2.print(F("PAUSED"));
-  u8g2.setCursor(28, 36);
-  u8g2.print(pauseSel == 0 ? F("> RESUME") : F("  RESUME"));
-  u8g2.setCursor(28, 48);
-  u8g2.print(pauseSel == 1 ? F("> EXIT") : F("  EXIT"));
+  u8g2.setFont(u8g2_font_4x6_tr);
+  u8g2.setCursor(2, 6); u8g2.print(F("BRINSTAR"));
+  // map: one cell per screen, 7×5 px
+  const int16_t ox = 4, oy = 10, cw = 7, chh = 5;
+  for (uint8_t r = 0; r < ROOM_N; r++) {
+    if (!((visited >> r) & 1)) continue;
+    int16_t x = ox + ROOMS[r].mx * cw, y = oy + ROOMS[r].my * chh;
+    int16_t w = ROOMS[r].sw * cw + 1, h = ROOMS[r].sh * chh + 1;
+    if (r == curRoom && (frameN & 8)) fillBoxClipped(x, y, w, h);
+    else frameSafe(x, y, w, h);
+    if (r == roomAtTile(padTX, padTY)) { u8g2.setCursor(x + 2, y + h - 1); if (r != curRoom || !(frameN & 8)) u8g2.print('S'); }
+  }
+  frameN++;
+  // status
+  u8g2.setCursor(56, 16); u8g2.print(ROOMS[curRoom].name);
+  u8g2.setCursor(56, 26); u8g2.print(F("ENERGY ")); u8g2.print(energy); u8g2.print('/'); u8g2.print(maxEnergy);
+  if (gear & G_MISSILE) { u8g2.setCursor(56, 34); u8g2.print(F("MISSILE ")); u8g2.print(missiles); u8g2.print('/'); u8g2.print(maxMissiles); }
+  uint32_t sec = playFrames / 30;
+  u8g2.setCursor(56, 42); u8g2.print(F("TIME "));
+  watch::print2(sec / 3600); u8g2.print(':'); watch::print2((sec / 60) % 60); u8g2.print(':'); watch::print2(sec % 60);
+  // options
   u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.setCursor(18, 58);
-  u8g2.print(F("L/R  MENU=ok"));
+  const char *opt[2] = {"RESUME", "CLOCK"};
+  for (uint8_t i = 0; i < 2; i++) {
+    int16_t x = 56 + i * 38;
+    if (pauseSel == i) { fillBoxClipped(x - 2, 52, 36, 10); u8g2.setDrawColor(0); }
+    u8g2.setCursor(x, 60); u8g2.print(opt[i]);
+    u8g2.setDrawColor(1);
+  }
 }
 
-void gamePhysics(uint8_t e) {
-  if (inputLock) { inputLock--; return; }
-
-  // Menu: tap or hold opens pause
-  if (e & B_MENU) {
-    menuHeld = true;
-    menuDownMs = millis();
+// ---------------------------------------------------------------- title + opening
+void titleStep(uint8_t e) {
+  frameN++;
+  if (haveSave && (e & (B_LEFT | B_RIGHT | B_DOWN))) { titleSel ^= 1; beep(700, 8); }
+  if (e & (B_UP | B_FIRE)) {
+    watch::stopTune();
+    if (haveSave && titleSel == 0) transitionTo(continueGame, 14);
+    else { storyPage = 0; storyT = 0; transitionTo([] { mode = M_STORY; }, 14); }
   }
-  if (menuHeld && (watch::held() & B_MENU) && millis() - menuDownMs >= 350UL) {
-    menuHeld = false;
-    pauseSel = 0;
-    mode = PAUSE;
-    beep(400, 30);
-    return;
-  }
-  if (menuHeld && !(watch::held() & B_MENU)) {
-    menuHeld = false;
-    pauseSel = 0;
-    mode = PAUSE;
-    beep(400, 20);
-    return;
-  }
-
-  // ---- Horizontal accel (semi-implicit Euler) ----
-  int8_t dir = 0;
-  if (watch::held() & B_LEFT)  { dir = -1; faceRight = false; }
-  if (watch::held() & B_RIGHT) { dir =  1; faceRight = true; }
-
-  if (dir != 0) {
-    if (dirHold < 255) dirHold++;
-  } else {
-    dirHold = 0;
-  }
-
-  // No dash button yet: walk cap first, then run after short hold
-  fx speedCap = (dirHold >= RUN_HOLD_FRAMES) ? RUN_FX : WALK_FX;
-  fx accel = onGround ? ACCEL_G_FX : ACCEL_A_FX;
-  fx decel = DECEL_G_FX;
-
-  if (dir != 0) {
-    fvx += (fx)dir * accel;
-    if (fvx > speedCap) fvx = speedCap;
-    if (fvx < -speedCap) fvx = -speedCap;
-    // Turning around on ground: stronger bite toward new direction
-    if (onGround && ((dir > 0 && fvx < 0) || (dir < 0 && fvx > 0))) {
-      fvx += (fx)dir * decel;
-    }
-  } else if (onGround) {
-    // Ground friction; air has zero drag when neutral (SM)
-    if (fvx > 0) {
-      fvx -= decel;
-      if (fvx < 0) fvx = 0;
-    } else if (fvx < 0) {
-      fvx += decel;
-      if (fvx > 0) fvx = 0;
-    }
-  }
-
-  // ---- Jump ----
-  if (jumpBuf) jumpBuf--;
-  if (e & B_UP) {
-    jumpBuf = 8;       // ~130ms buffer
-    jumpHeld = true;
-  }
-  if (!(watch::held() & B_UP)) jumpHeld = false;
-
-  if (onGround) coyote = 6;     // ~100ms
-  else if (coyote) coyote--;
-
-  if (jumpBuf && coyote) {
-    // v_y,launch = v_y0 + 0.083*|v_x|  (up = negative here)
-    fx boost = fxAbs(fvx) * JUMP_XV_NUM / JUMP_XV_DEN;
-    fvy = -(JUMP_FX + boost);
-    onGround = false;
-    coyote = 0;
-    jumpBuf = 0;
-    jumpHeld = true;
-    jumpCutDone = false;
-    beep(750, 12);
-  }
-
-  // Variable jump: on release while rising, cut vy once by half (SM)
-  if (!jumpHeld && !jumpCutDone && fvy < 0) {
-    fvy = fvy / 2;
-    jumpCutDone = true;
-  }
-
-  // Gravity + terminal velocity
-  fvy += GRAV_FX;
-  if (fvy > FALL_MAX_FX) fvy = FALL_MAX_FX;
-
-  // ---- Integrate X ----
-  int16_t prevX = px;
-  fpx += fvx;
-  syncPlayerInts();
-  if (px < BODY_HALF + 1) { px = BODY_HALF + 1; fpx = I2F(px); fvx = 0; }
-  if (px > WORLD_W - BODY_HALF - 1) {
-    px = WORLD_W - BODY_HALF - 1; fpx = I2F(px); fvx = 0;
-  }
-
-  if (fvx != 0) {
-    int16_t probeX = px + (fvx > 0 ? BODY_HALF : -BODY_HALF);
-    for (int16_t probeY = py - 2; probeY > py - BODY_H + 2; probeY -= 5) {
-      if (solidBlockAt(probeX, probeY)) {
-        px = prevX;
-        fpx = I2F(px);
-        fvx = 0;
-        break;
-      }
-    }
-  }
-
-  // ---- Integrate Y ----
-  int16_t prevFeet = py;
-  fpy += fvy;
-  syncPlayerInts();
-
-  // Ceiling vs solid slabs
-  if (fvy < 0) {
-    int16_t head = py - BODY_H + 1;
-    if (solidBlockAt(px, head) ||
-        solidBlockAt(px - BODY_HALF, head) ||
-        solidBlockAt(px + BODY_HALF, head)) {
-      for (uint8_t i = 0; i < PLAT_N; i++) {
-        const Plat &p = PLATS[i];
-        if (!p.solid) continue;
-        if (px >= p.x - BODY_HALF && px < p.x + p.w + BODY_HALF &&
-            head < p.y + SLAB_H && head >= p.y) {
-          py = p.y + SLAB_H + BODY_H - 1;
-          fpy = I2F(py);
-          fvy = 0;
-          break;
-        }
-      }
-    }
-  }
-
-  // Floor
-  bool landedSolid = true;
-  int16_t floorY = findFloor(px, py, prevFeet, fvy, &landedSolid);
-  onGround = false;
-  if (floorY != 32767 && fvy >= 0 && py >= floorY) {
-    py = floorY;
-    fpy = I2F(py);
-    fvy = 0;
-    onGround = true;
-  }
-
-  if (py > WORLD_H + 20) {
-    fpx = I2F(48); fpy = I2F(180); fvx = fvy = 0; syncPlayerInts();
-  }
-
-  // Run anim: period from speed (walk ~8f, run ~5f)
-  if (onGround && fxAbs(fvx) > FX_ONE / 4) {
-    uint8_t period = (fxAbs(fvx) >= (WALK_FX + RUN_FX) / 2) ? 5 : 8;
-    if (++animTimer >= period) { animTimer = 0; runPhase++; }
-  } else {
-    animTimer = 0;
-    if (onGround) runPhase = 0;
-  }
-
-  updateCamera();
 }
 
-void pauseStep(uint8_t e) {
-  // L/R or Up moves; Menu confirms (same button that opened pause)
-  if (e & (B_LEFT | B_RIGHT | B_UP))
-    pauseSel ^= 1;
-  if (e & B_MENU) {
-    if (pauseSel == 0) {
-      mode = GAME;
-      inputLock = 8;
-      menuHeld = false;
-      menuDownMs = 0;
-      beep(600, 15);
-    } else {
-      watch::exitToClock();
-      beep(300, 40);
-    }
+void drawTitle() {
+  for (uint8_t i = 0; i < 30; i++) {
+    int16_t x = (i * 37 + (frameN >> 3) * (i & 1 ? 1 : 0)) & 127, y = (i * 23) % 64;
+    plot(x, y);
   }
+  // Zebes on the horizon
+  for (int16_t x = 0; x < 128; x++) {
+    int16_t y = 64 - (int16_t)(sqrtf(max(0.0f, 9000.0f - (x - 64) * (x - 64))) - 82);
+    if (y < 64) plot(x, y);
+  }
+  u8g2.setFont(u8g2_font_ncenB18_tr);
+  const char *t = "METROID";
+  int16_t w = u8g2.getStrWidth(t);
+  u8g2.setCursor((128 - w) / 2, 26); u8g2.print(t);
+  hLineSafe((128 - w) / 2, 29, w);
+  u8g2.setFont(u8g2_font_4x6_tr);
+  drawCenteredText("WATCH MISSION", 37);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  if (haveSave) {
+    const char *o[2] = {"CONTINUE", "NEW GAME"};
+    for (uint8_t i = 0; i < 2; i++) {
+      int16_t x = 8 + i * 62, ww = u8g2.getStrWidth(o[i]);
+      if (titleSel == i) { fillBoxClipped(x - 2, 44, ww + 4, 9); u8g2.setDrawColor(0); }
+      u8g2.setCursor(x, 51); u8g2.print(o[i]); u8g2.setDrawColor(1);
+    }
+  } else if ((frameN >> 4) & 1) drawCenteredText("PUSH JUMP", 52);
+}
+
+static const char *const STORY[3][4] = {
+  {"ZEBES ORBIT", "ON YOUR LAST VISIT,", "YOU SHUT DOWN A PIRATE", "RELAY BELOW BRINSTAR."},
+  {"INCOMING SIGNAL", "THE RELAY IS LIVE AGAIN.", "IT IS BROADCASTING", "YOUR OLD DISTRESS CODE."},
+  {"MISSION", "LAND AT THE OLD SITE.", "TRACE THE SIGNAL.", "FIND OUT WHO SENT IT."},
+};
+
+void storyStep(uint8_t e) {
+  frameN++;
+  if (storyT < 200) storyT += 2;
+  if ((storyT & 7) == 0 && storyT < 70) beep(1500, 3);
+  if (e & B_DOWN) { transitionTo(newGame, 14); return; }        // skip to the landing
+  if (e & (B_UP | B_FIRE)) {
+    if (storyT < 70) storyT = 200;                                // finish the text
+    else if (storyPage < 2) { storyPage++; storyT = 0; beep(900, 10); }
+    else transitionTo(newGame, 14);
+  }
+}
+
+void drawStory() {
+  u8g2.setFont(u8g2_font_5x7_tr);
+  const char *const *p = STORY[storyPage];
+  drawCenteredText(p[0], 10);
+  hLineSafe(20, 13, 88);
+  uint8_t shown = storyT;
+  for (uint8_t l = 1; l < 4; l++) {
+    const char *s = p[l]; uint8_t n = strlen(s);
+    char buf[28]; uint8_t k = n < shown ? n : shown; if (k > 27) k = 27;
+    memcpy(buf, s, k); buf[k] = 0;
+    shown = shown > n ? shown - n : 0;
+    u8g2.setCursor((128 - (int16_t)u8g2.getStrWidth(s)) / 2, 18 + l * 10); u8g2.print(buf);
+  }
+  if (storyT >= 70 && ((frameN >> 3) & 1)) { u8g2.setFont(u8g2_font_4x6_tr); u8g2.setCursor(118, 63); u8g2.print('>'); }
+}
+
+// =====================================================================
+// Fade
+// =====================================================================
+void applyFade(uint8_t level, uint8_t steps) {
+  static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  uint8_t thr = (uint8_t)(level * 16 / steps);
+  uint8_t mask[4];
+  for (uint8_t xm = 0; xm < 4; xm++) {
+    uint8_t m = 0;
+    for (uint8_t b = 0; b < 8; b++) if (BAYER[b & 3][xm] < thr) m |= (uint8_t)(1 << b);
+    mask[xm] = m;
+  }
+  uint8_t *buf = u8g2.getBufferPtr();
+  for (uint16_t i = 0; i < 8 * 128; i++) buf[i] &= (uint8_t)~mask[i & 3];
+}
+
+// =====================================================================
+// WatchCore hooks
+// =====================================================================
+void gameStart() {
+  static bool eepromReady = false;
+  if (!eepromReady) { EEPROM.begin(256); eepromReady = true; }
+  buildWorld();
+  haveSave = readSave();
+  titleSel = 0; frameN = 0;
+  trState = TR_NONE; trLevel = 0; trAction = nullptr;
+  mode = M_TITLE;
+  watch::playTune(TUNE_TITLE, 7);
+}
+
+void gameUpdate(uint8_t e) {
+  if (trState == TR_OUT) {
+    if (++trLevel >= trSteps) {
+      trLevel = trSteps; trState = TR_IN;
+      if (trAction) { void (*a)() = trAction; trAction = nullptr; a(); }
+    }
+    return;
+  }
+  if (trState == TR_IN) {
+    if (trLevel) trLevel--;
+    if (!trLevel) trState = TR_NONE;
+    e = 0;
+  }
+  switch (mode) {
+    case M_TITLE: titleStep(e); break;
+    case M_STORY: storyStep(e); break;
+    case M_PLAY: playStep(e); break;
+    case M_ITEM: itemStep(e); break;
+    case M_PAUSE: pauseStep(e); break;
+    case M_DEAD: deadStep(e); break;
+  }
+}
+
+void gameDraw() {
+  switch (mode) {
+    case M_TITLE: drawTitle(); break;
+    case M_STORY: drawStory(); break;
+    case M_PLAY: case M_DEAD: drawPlay(); break;
+    case M_ITEM: drawItemScreen(); break;
+    case M_PAUSE: drawPause(); break;
+  }
+  if (trLevel) applyFade(trLevel, trSteps);
+}
+
+// Alarm interrupted play: come back to the pause screen
+void gameInterrupted() {
+  if (mode == M_PLAY) { pauseSel = 0; mode = M_PAUSE; inputLock = 255; }
 }
 
 // -------------------- Theme: Metroid clock face --------------------
@@ -530,7 +1307,6 @@ void drawView() {
     plot((i * 41 + wfAnim) & 127, 8 + (i * 7) % 18);
   u8g2.setFont(u8g2_font_logisoso24_tn);
   u8g2.setCursor(28, 36); print2(hours()); u8g2.print(':'); print2(minutes());
-  // tiny ball on ground line
   blitBits(wfX - 3, 49, SAMUS_BALL, 7, 1, false);
   hLineSafe(0, 56, 128);
   u8g2.setFont(u8g2_font_6x10_tr);
@@ -542,36 +1318,12 @@ void drawView() {
   }
 }
 
-// -------------------- WatchCore hooks --------------------
-void gameUpdate(uint8_t e) {
-  switch (mode) {
-    case GAME: gamePhysics(e); break;
-    case PAUSE: pauseStep(e); break;
-  }
-}
-
-void gameDraw() {
-  switch (mode) {
-    case GAME: drawGame(); break;
-    case PAUSE: drawPause(); break;
-  }
-}
-
-// Alarm interrupted play: resume into the pause menu
-void gameInterrupted() {
-  if (mode == GAME) { pauseSel = 0; menuHeld = false; mode = PAUSE; }
-}
-
 const watch::WatchApp APP = {
-  stepWatchFace,    // faceStep
-  drawView,         // faceDraw
-  startSandbox,     // appStart (Menu pressed on the face)
-  gameUpdate,       // appUpdate
-  gameDraw,         // appDraw
-  gameInterrupted,  // appInterrupted
-  nullptr,          // setDraw  (default set screens)
-  nullptr,          // ringDraw (default alarm screen)
-  "UP",             // nextLabel — Mid is "Up" on this firmware
+  stepWatchFace, drawView,
+  gameStart, gameUpdate, gameDraw,
+  gameInterrupted,
+  nullptr, nullptr,
+  "ACTION",
 };
 
 void setup() { watch::begin(APP); }
