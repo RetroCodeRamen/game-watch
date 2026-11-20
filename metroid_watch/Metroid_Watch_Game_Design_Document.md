@@ -63,7 +63,7 @@ The HUD briefly identifies the current mode after each tap. Enabling Ice Missile
 
 ## Start menu and opening
 
-The Start menu opens on Items. Left and Right switch tabs. Tap the side Menu button to close the menu and resume at the same point.
+The pause menu (hold Mode + Select/OK) has MAP and ITEMS tabs. Left and Right switch tabs, Action moves the cursor, Select/OK picks or toggles, and Mode resumes at the same point.
 
 **Start menu mockups.** Items shows ON and OFF for acquired gear. The Norfair map shows player, save, and known exit markers. Mission shows the active objective, boss progress, tank count, elapsed time, and Save & Clock.
 

@@ -24,14 +24,15 @@ struct Enemy {
   int8_t nx, ny, dx, dy;   // Zoomer: surface normal and crawl direction
   uint8_t w, h;
   fx acc, vy;
+  uint16_t frozen;          // Ice Missiles: physics steps left frozen (solid, harmless)
 };
-struct Shot { bool live; bool missile; fx x, y, vx; uint8_t life; };
+struct Shot { bool live; bool missile, ice; fx x, y, vx; uint8_t life; };
 struct Bullet { bool live; fx x, y, vx, vy; uint8_t life; };
 struct Drop { bool live; uint8_t kind; int16_t x, y; uint16_t life; };
 struct Spark { int16_t x, y; int8_t vx, vy; uint8_t life; };
 struct Bomb { bool live; int16_t x, y; uint8_t t; };   // t counts up: fuse, then the blast
 struct SaveData {
-  uint32_t magic; uint8_t ver, gear, maxEn, maxMs;
+  uint32_t magic; uint8_t ver, gear, maxEn, maxMs, gearOff;
   uint64_t items, visited; uint32_t redDoors, frames;
   uint16_t sum;
 };
@@ -67,6 +68,9 @@ const fx JUMP2_V = 700;      // double jump in mid-air: ≈ 28 px more (≈ 7 ti
 const uint8_t AIR_JUMPS = 1;
 const fx SPACE_READY = -200;  // Space Jump: the next jump comes once the last one has nearly topped out
 const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies
+const int8_t ORB_R = 7, ORB_LIFT = 4;   // Chozo orb radius; drawn this far above the item tile centre
+const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
+const uint16_t THAW_WARN = 90;  // ...and shivers for the last 1.5 s
 const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
 const fx FALL_MAX = 900;
 const fx SPIN_MIN = 160;     // running this fast when jumping → somersault
@@ -109,6 +113,8 @@ bool ground, ball, crouch, spin, faceR = true, jumpHeld;
 uint8_t coyote, jumpBuf, airJumps; bool jumpPress, bombPop;   // bombPop: rising from a bomb (no jump cut)
 uint8_t fireCD, invul, hurtLock, runPhase, animT, spinPhase;
 uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
+uint8_t gearOff;                  // gear switched OFF in the pause menu's Items tab
+inline uint8_t eg() { return gear & ~gearOff & ~((gearOff & G_MORPH) ? G_BOMB : 0) & ~((gearOff & G_MISSILE) ? G_ICE : 0); }
 uint32_t playFrames;
 
 // world
@@ -140,6 +146,7 @@ uint8_t chordT;
 
 // UI
 uint8_t titleSel, storyPage, storyT, pauseSel, itemT, deadT, cardT;
+uint8_t pauseTab, gearSel, pauseMsgT;   // pause: 0 MAP / 1 ITEMS, Items cursor, "NEED ROOM" timer
 char itemKind;
 uint8_t modeLabelT, msgT;
 const char *msgText;
@@ -227,7 +234,7 @@ bool boxSolid(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
 inline int8_t bodyHW() { return ball ? BALL_HW : BODY_HW; }
 inline int8_t bodyH() { return ball ? BALL_H : crouch ? CROUCH_H : BODY_H; }
 bool samusFitsAt(int16_t x, int16_t y, int8_t hw, int8_t h) {
-  return !boxSolid(x - hw, y - h, x + hw, y);
+  return !samusBlocked(x - hw, y - h, x + hw, y);
 }
 bool canStand() { return samusFitsAt(toPx(sX), toPx(sY), BODY_HW, BODY_H); }
 
@@ -244,7 +251,7 @@ void buildWorld() {
           while (ty + n < h && ROOMS[r].tiles[(ty + n) * w + tx] == c) n++;
           doors[doorN++] = {gx, gy, n, c, 0};
         }
-        if (strchr("mlteojMLOJ", c) && itemN < MAX_ITEM)
+        if (strchr("mlteojiMLOJI", c) && itemN < MAX_ITEM)
           items[itemN++] = {gx, gy, (char)tolower(c), (int8_t)(isupper(c) ? -1 : 1)};
         if (c == 'S') { padTX = gx; padTY = gy; }
         if (c == '@') { sbTX = gx; sbTY = gy; }
@@ -300,7 +307,7 @@ uint16_t saveSum(const SaveData &s) {
 }
 void captureSave(SaveData &s) {
   memset(&s, 0, sizeof s);
-  s.magic = SAVE_MAGIC; s.ver = 2; s.gear = gear; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.magic = SAVE_MAGIC; s.ver = 3; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
   s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
   s.sum = saveSum(s);
 }
@@ -311,7 +318,7 @@ void writeSave() {
 }
 bool readSave() {
   SaveData s; EEPROM.get(0, s);
-  if (s.magic != SAVE_MAGIC || s.ver != 2 || s.sum != saveSum(s)) return false;
+  if (s.magic != SAVE_MAGIC || s.ver != 3 || s.sum != saveSum(s)) return false;
   lastSave = s; return true;
 }
 
@@ -389,7 +396,7 @@ void placeAtPad() {
 }
 
 void loadFrom(const SaveData &s) {
-  gear = s.gear; maxEnergy = s.maxEn; maxMissiles = s.maxMs;
+  gear = s.gear; gearOff = s.gearOff; maxEnergy = s.maxEn; maxMissiles = s.maxMs;
   itemsGot = s.items; visited = s.visited; redOpen = s.redDoors; playFrames = s.frames;
   energy = maxEnergy; missiles = maxMissiles; weapon = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
@@ -400,7 +407,7 @@ void loadFrom(const SaveData &s) {
 
 void newGame() {
   sandbox = false;
-  gear = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
+  gear = 0; gearOff = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
   captureSave(lastSave);
   loadFrom(lastSave);
   writeSave();          // automatic ship checkpoint
@@ -411,7 +418,7 @@ void continueGame() { sandbox = false; loadFrom(lastSave); mode = M_PLAY; cardT 
 // The hidden test room: every item, nothing saved; dying puts Samus back at its start.
 void startSandbox() {
   sandbox = true;
-  gear = G_MORPH | G_MISSILE | G_BOMB | G_SPACE;
+  gear = G_MORPH | G_MISSILE | G_BOMB | G_SPACE | G_ICE; gearOff = 0;
   maxEnergy = energy = 10; maxMissiles = missiles = 30; weapon = 0;
   itemsGot = 0; orbOpen = 0; redOpen = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
@@ -470,7 +477,7 @@ void doDown() {
   }
   if (ball) return;
   if (ground && !crouch) { crouch = true; spin = false; beep(400, 6); return; }
-  if (!(gear & G_MORPH)) { beep(140, 20); return; }
+  if (!(eg() & G_MORPH)) { beep(140, 20); return; }
   ball = true; crouch = false; spin = false; beep(500, 12);
 }
 
@@ -480,7 +487,7 @@ void undoDown() {
 }
 
 void switchWeapon() {
-  if (!(gear & G_MISSILE)) { beep(140, 20); return; }
+  if (!(eg() & G_MISSILE)) { beep(140, 20); return; }
   weapon ^= 1; modeLabelT = 30; beep(weapon ? 1200 : 800, 15);
 }
 
@@ -496,13 +503,27 @@ void fire() {
   spin = false;   // firing ends the somersault
   int8_t d = faceR ? 1 : -1;
   Shot &s = shots[slot];
-  s.live = true; s.missile = mis;
+  s.live = true; s.missile = mis; s.ice = mis && (eg() & G_ICE);
   s.x = sX + toFx(d * 8); s.y = sY - toFx(crouch ? 8 : 15);
   s.vx = d * (mis ? MISSILE_V0 : BEAM_V);
   s.life = mis ? MISSILE_LIFE : BEAM_LIFE;
   fireCD = mis ? 14 : 8;
-  beep(mis ? 520 : 1400, mis ? 30 : 12);
+  beep(mis ? (s.ice ? 900 : 520) : 1400, mis ? 30 : 12);
 }
+
+// Frozen enemies are solid to Samus, except one she's already overlapping (so freezing an enemy
+// against her never traps her)
+bool frozenBlocks(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+  int16_t cx = toPx(sX), cy = toPx(sY), hw = bodyHW(), h = bodyH();
+  for (const auto &e : en) {
+    if (!e.live || !e.frozen) continue;
+    if (!overlap(x0, y0, x1, y1, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
+    if (overlap(cx - hw, cy - h, cx + hw, cy, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
+    return true;
+  }
+  return false;
+}
+bool samusBlocked(int16_t x0, int16_t y0, int16_t x1, int16_t y1) { return boxSolid(x0, y0, x1, y1) || frozenBlocks(x0, y0, x1, y1); }
 
 // Move along one axis a pixel at a time; returns true if blocked
 bool moveAxis(bool horiz, fx dv) {
@@ -513,7 +534,7 @@ bool moveAxis(bool horiz, fx dv) {
   for (int16_t v = a; v != b; v += st) {
     int16_t n = v + st;
     int16_t x = horiz ? n : toPx(sX), y = horiz ? toPx(sY) : n;
-    if (boxSolid(x - hw, y - h, x + hw, y)) {
+    if (samusBlocked(x - hw, y - h, x + hw, y)) {
       p = toFx(v) + (st > 0 ? 255 : 0);
       return true;
     }
@@ -566,7 +587,7 @@ void samusStep(int8_t dir, bool firstStep) {
     beep(spin ? 660 : 760, 14);
   }
   // double jump: a fresh press in mid-air (after the ledge grace) always somersaults
-  bool spaceOK = (gear & G_SPACE) && spin && sVY > SPACE_READY;
+  bool spaceOK = (eg() & G_SPACE) && spin && sVY > SPACE_READY;
   if (jumpPress && jumpBuf && !ground && !coyote && !ball && !crouch && (airJumps || spaceOK)) {
     if (!spaceOK) airJumps--;
     sVY = -JUMP2_V; jumpBuf = 0;
@@ -585,12 +606,12 @@ void samusStep(int8_t dir, bool firstStep) {
     sVY = 0;
   } else {
     int16_t x = toPx(sX), y = toPx(sY);
-    ground = boxSolid(x - bodyHW(), y, x + bodyHW(), y + 1);
+    ground = samusBlocked(x - bodyHW(), y, x + bodyHW(), y + 1);
     if (ground && sVY > 0) sVY = 0;
   }
   if (ground) { spin = false; airJumps = AIR_JUMPS; }
   if (spin) spinPhase++;
-  if (spin && (gear & G_SPACE)) {           // the Space Jump somersault cuts through slashed rock
+  if (spin && (eg() & G_SPACE)) {           // the Space Jump somersault cuts through slashed rock
     int16_t x = toPx(sX), y = toPx(sY);
     for (int16_t ty = (y - BODY_H - 2) >> 3; ty <= (y + 1) >> 3; ty++)
       for (int16_t tx = (x - BODY_HW - 2) >> 3; tx <= (x + BODY_HW + 1) >> 3; tx++) breakBlock(tx, ty, 'X');
@@ -642,6 +663,7 @@ void killEnemy(Enemy &e) {
 
 void enemyStep(Enemy &e) {
   if (e.flash) e.flash--;
+  if (e.frozen) { e.frozen--; return; }
   int16_t samX = toPx(sX), samY = toPx(sY);
   switch (e.kind) {
     case EN_ZOOMER:
@@ -729,11 +751,11 @@ void shotStep(Shot &s) {
   }
   for (uint8_t i = 0; i < itemN; i++) {       // a shot cracks a Chozo orb open
     if (((itemsGot >> i) & 1) || !orbClosed(i)) continue;
-    int16_t ox = items[i].tx * TILE + 4, oy = items[i].ty * TILE + 4;
+    int16_t ox = items[i].tx * TILE + 4, oy = items[i].ty * TILE + 4 - ORB_LIFT;
     // swept from where the shot was, so a point-blank shot from inside the orb still counts
     int16_t a = min(px0, x) - 2, b = max(px0, x) + 2;
     if (s.vx > 0) a -= 8; else b += 8;           // back to the muzzle
-    if (!overlap(a, y - 2, b, y + 2, ox - 5, oy - 5, ox + 5, oy + 5)) continue;
+    if (!overlap(a, y - 2, b, y + 2, ox - ORB_R - 1, oy - ORB_R - 1, ox + ORB_R + 1, oy + ORB_R + 1)) continue;
     orbOpen |= 1 << i; s.live = false;
     burst(ox, oy, 14, 6); burst(ox, oy, 8, 3);
     watch::playTune(TUNE_ORB, 3);
@@ -743,6 +765,16 @@ void shotStep(Shot &s) {
     if (!e.live) continue;
     if (!overlap(x - 2, y - 2, x + 2, y + 2, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
     s.live = false;
+    if (e.frozen) {                                // frozen: a missile shatters it, the beam glances off
+      if (s.missile) { burst(e.x + e.w / 2, e.y + e.h / 2, 14, 5); killEnemy(e); }
+      else { beep(2200, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
+      return;
+    }
+    if (s.ice) {                                   // Ice Missile: freeze it solid (no damage)
+      e.frozen = FREEZE_T; e.flash = 0; e.acc = 0; e.vy = 0;
+      beep(1800, 20); burst(x, y, 6, 3);
+      return;
+    }
     if (e.kind == EN_RIPPER && !s.missile) {       // armoured: the beam just tinks off
       beep(2000, 8); spark(x, y, -sgn(s.vx) * 4, -3, 5); return;
     }
@@ -759,11 +791,11 @@ void shotStep(Shot &s) {
 // =====================================================================
 // Major items (new abilities) sit in a Chozo statue's hands inside an orb that has to be shot
 // open, and get the full ceremony. Tanks just float there; missile tanks only get a toast.
-bool majorItem(char k) { return k == 'm' || k == 'l' || k == 'o' || k == 'j'; }
+bool majorItem(char k) { return k == 'm' || k == 'l' || k == 'o' || k == 'j' || k == 'i'; }
 bool orbClosed(uint8_t i) { return majorItem(items[i].kind) && !((orbOpen >> i) & 1); }
 
 const char *itemName(char k) {
-  switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 'o': return "BOMBS"; case 'j': return "SPACE JUMP"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
+  switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 'o': return "BOMBS"; case 'j': return "SPACE JUMP"; case 'i': return "ICE MISSILES"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
 }
 const char *itemHint(char k) {
   switch (k) {
@@ -771,6 +803,7 @@ const char *itemHint(char k) {
     case 'l': return "MODE+OK: SWITCH";
     case 'o': return "BALL, THEN OK: BOMB";
     case 'j': return "FLIP, JUMP AGAIN";
+    case 'i': return "MISSILES FREEZE FOES";
     case 't': return "MISSILES +5";
     default: return "ENERGY +2";
   }
@@ -781,6 +814,7 @@ const char *itemHint2(char k) {
     case 'l': return "OPENS RED DOORS";
     case 'o': return "BREAKS CRACKED ROCK";
     case 'j': return "THE FLIP HITS FOES";
+    case 'i': return "MISSILE AGAIN: SHATTER";
     default: return "";
   }
 }
@@ -792,6 +826,7 @@ void collectItem(uint8_t i) {
   if (k == 'l') { gear |= G_MISSILE; maxMissiles += 5; missiles = maxMissiles; }
   if (k == 'o') gear |= G_BOMB;
   if (k == 'j') gear |= G_SPACE;
+  if (k == 'i') gear |= G_ICE;
   if (k == 't') { maxMissiles += 5; missiles += 5; }
   if (k == 'e') { maxEnergy += 2; energy = maxEnergy; }
   if (k == 't') {                     // small stuff: no stopping the game
@@ -831,7 +866,7 @@ void checkPickups() {
 // enemies, and pops the ball upward if it's caught in it (the bomb jump - chain them to climb).
 // =====================================================================
 void dropBomb() {
-  if (!(gear & G_BOMB)) { beep(140, 15); return; }
+  if (!(eg() & G_BOMB)) { beep(140, 15); return; }
   for (auto &b : bombs)
     if (!b.live) {
       b.live = true; b.t = 0;
@@ -893,7 +928,7 @@ void handleInput(uint8_t e) {
   if (chord) {
     if ((h & B_DOWN) && (h & B_FIRE)) {
       if (++chordT == CHORD_HOLD) {
-        chord = false; pauseSel = 0; mode = M_PAUSE; beep(400, 30);
+        chord = false; pauseSel = 0; pauseTab = 0; gearSel = 0; mode = M_PAUSE; beep(400, 30);
         inputLock = 255; prevHeld = h; return;
       }
     } else {
@@ -950,9 +985,10 @@ void playStep(uint8_t e) {
   // contact damage
   int16_t x0, y0, x1, y1; samusBox(x0, y0, x1, y1);
   int16_t cx = (x0 + x1) / 2;
-  bool spinAttack = (spin || spinAtStart) && (gear & G_SPACE);
+  bool spinAttack = (spin || spinAtStart) && (eg() & G_SPACE);
   for (auto &en1 : en) {
     if (!en1.live) continue;
+    if (en1.frozen && !spinAttack) continue;      // frozen: harmless, and solid to stand on
     if (spinAttack && overlap(x0 - 1, y0 - 1, x1 + 1, y1 + 1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
       if (en1.flash) continue;                // one hit per pass
       en1.flash = 8; burst(en1.x + en1.w / 2, en1.y + en1.h / 2, 6, 4);
@@ -1092,10 +1128,12 @@ static const uint8_t ICON_BOMB[8] = {       // round bomb with a lit fuse
   0b00001010, 0b00010000, 0b00111100, 0b01111110, 0b01101111, 0b01111111, 0b01111110, 0b00111100};
 static const uint8_t ICON_SPACE[8] = {      // spread wings
   0b10000001, 0b11000011, 0b11100111, 0b01111110, 0b00111100, 0b00011000, 0b00100100, 0b01000010};
+static const uint8_t ICON_ICE[8] = {        // snowflake
+  0b00011000, 0b01011010, 0b00111100, 0b11111111, 0b11111111, 0b00111100, 0b01011010, 0b00011000};
 static const uint8_t ICON_ETANK[8] = {      // four-cell energy tank
   0b11111111, 0b10011001, 0b10011001, 0b11111111, 0b11111111, 0b10011001, 0b10011001, 0b11111111};
 const uint8_t *itemIcon(char k) {
-  switch (k) { case 'm': return ICON_MORPH; case 'l': return ICON_MISSILE; case 'o': return ICON_BOMB; case 'j': return ICON_SPACE; case 't': return ICON_MTANK; default: return ICON_ETANK; }
+  switch (k) { case 'm': return ICON_MORPH; case 'l': return ICON_MISSILE; case 'o': return ICON_BOMB; case 'j': return ICON_SPACE; case 'i': return ICON_ICE; case 't': return ICON_MTANK; default: return ICON_ETANK; }
 }
 // icon centred on (cx, cy), each bit drawn as an s×s block
 void drawIcon(char k, int16_t cx, int16_t cy, uint8_t s) {
@@ -1109,8 +1147,9 @@ void drawIcon(char k, int16_t cx, int16_t cy, uint8_t s) {
       }
 }
 
-// Seated Chozo statue (SPR_CHOZO) offering an orb at (ox, oy); its pedestal stands on the floor
-// 20 px below the orb centre. dir +1 = statue sits left of the orb, facing right.
+// Seated Chozo statue (SPR_CHOZO) for the item tile centred on (ox, oy), 3 tiles above the floor:
+// it sits on the floor 20 px below, and holds the orb up at (ox, oy - ORB_LIFT).
+// dir +1 = statue sits left of the orb, facing right.
 void drawChozo(int16_t ox, int16_t oy, int8_t dir) {
   drawFrame(SPR_CHOZO, ox, oy + 20, dir < 0);
 }
@@ -1126,14 +1165,16 @@ void drawItems() {
     }
     if (got) continue;
     if (majorItem(k)) {
+      y -= ORB_LIFT;                            // the orb sits up in the statue's hand
       if (orbClosed(i)) {
-        // Chozo orb: ring with a dithered core and a turning glint
-        circleSafe(x, y, 5);
-        for (int8_t dy = -3; dy <= 3; dy++)
-          for (int8_t dx = -3; dx <= 3; dx++)
-            if (dx * dx + dy * dy <= 10 && ((dx + dy + (frameN >> 3)) & 1)) plot(x + dx, y + dy);
+        // Chozo orb: ring with a dithered core, a highlight and a turning glint
+        circleSafe(x, y, ORB_R);
+        for (int8_t dy = -5; dy <= 5; dy++)
+          for (int8_t dx = -5; dx <= 5; dx++)
+            if (dx * dx + dy * dy <= 26 && ((dx + dy + (frameN >> 3)) & 1)) plot(x + dx, y + dy);
+        hLineSafe(x - 3, y - 4, 2); plot(x - 4, y - 3);
         uint8_t g = (frameN >> 2) & 7;
-        static const int8_t GX[8] = {0, 2, 3, 2, 0, -2, -3, -2}, GY[8] = {-3, -2, 0, 2, 3, 2, 0, -2};
+        static const int8_t GX[8] = {0, 4, 5, 4, 0, -4, -5, -4}, GY[8] = {-5, -4, 0, 4, 5, 4, 0, -4};
         u8g2.setDrawColor(0); plot(x + GX[g], y + GY[g]); u8g2.setDrawColor(1);
       } else {
         // revealed: the item hovers and shines
@@ -1180,12 +1221,23 @@ void drawZoomer(const Enemy &e, int16_t x, int16_t y) {
     }
 }
 
+// ice shell round a frozen enemy: a frame with spikes at the corners and mid-edges
+void drawFrozenShell(int16_t x, int16_t y, uint8_t w, uint8_t h) {
+  frameSafe(x - 2, y - 2, w + 4, h + 4);
+  plot(x - 3, y - 3); plot(x + w + 2, y - 3); plot(x - 3, y + h + 2); plot(x + w + 2, y + h + 2);
+  plot(x + w / 2, y - 3); plot(x + w / 2, y + h + 2); plot(x - 3, y + h / 2); plot(x + w + 2, y + h / 2);
+}
+
 void drawEnemies() {
   for (const auto &e : en) {
     if (!e.live) continue;
     int16_t x = scrX(e.x), y = scrY(e.y);
     if (x < -16 || x > 140 || y < 0 || y > 72) continue;
     if (e.flash & 2) { frameSafe(x - 1, y - 1, e.w + 2, e.h + 2); continue; }
+    if (e.frozen) {
+      if (e.frozen < THAW_WARN && (frameN & 2)) x += 1;          // shivering: about to thaw
+      drawFrozenShell(x, y, e.w, e.h);
+    }
     if (e.kind == EN_ZOOMER) drawZoomer(e, x, y);
     else if (e.kind == EN_SKREE) {
       int8_t sh = (e.st == 2) ? ((frameN & 1) ? 1 : -1) : 0;
@@ -1225,6 +1277,7 @@ void drawShots() {
       if (d > 0) { hLineSafe(x - 5, y, 6); plot(x + 1, y); plot(x - 5, y - 1); plot(x - 5, y + 1); if (frameN & 1) plot(x - 7, y); }
       else { hLineSafe(x, y, 6); plot(x - 1, y); plot(x + 5, y - 1); plot(x + 5, y + 1); if (frameN & 1) plot(x + 7, y); }
       plot(x, y - 1); plot(x, y + 1);
+      if (s.ice) { int16_t n = x + d * 3; plot(n, y - 2); plot(n, y + 2); plot(n + d, y - 1); plot(n + d, y + 1); }
     } else {
       hLineSafe(d > 0 ? x - 3 : x, y, 4);
       plot(x, y - 1); plot(x, y + 1);
@@ -1285,7 +1338,7 @@ void drawSamus() {
   if (ball) { drawBall(x, feet); return; }
   if (spin) {
     drawSpin(x, feet - 11);
-    if (gear & G_SPACE) {                  // Space Jump: a ring of sparks turns round the flip
+    if (eg() & G_SPACE) {                  // Space Jump: a ring of sparks turns round the flip
       for (uint8_t i = 0; i < 6; i++) {
         float ang = (i * 60 + spinPhase * 23) * 0.01745f;
         plot(x + (int16_t)(cosf(ang) * 12), feet - 11 + (int16_t)(sinf(ang) * 12));
@@ -1320,7 +1373,7 @@ void drawHud() {
     u8g2.setDrawColor(1);
   }
   if (modeLabelT) {
-    u8g2.setCursor(64, 6); u8g2.print(weapon ? F("MISSILE") : F("BEAM"));
+    u8g2.setCursor(64, 6); u8g2.print(!weapon ? F("BEAM") : (eg() & G_ICE) ? F("ICE") : F("MISSILE"));
   }
 }
 
@@ -1422,18 +1475,87 @@ void deadStep(uint8_t) {
 }
 
 // ---------------------------------------------------------------- pause: map + status
+// Pause: Left/Right switch tabs (MAP, ITEMS), Action moves the cursor, OK picks, Mode resumes.
+// ITEMS lists the gear Samus owns; each can be switched ON or OFF (Ice sits under Missiles, Bombs
+// under the Morph Ball and are off while their parent is).
+struct GearRow { uint8_t bit, parent; const char *name; };
+static const GearRow GEAR_ROWS[] = {
+  {G_MISSILE, 0, "MISSILES"}, {G_ICE, G_MISSILE, "ICE"}, {G_MORPH, 0, "MORPH BALL"},
+  {G_BOMB, G_MORPH, "BOMBS"}, {G_SPACE, 0, "SPACE JUMP"}};
+uint8_t ownedRows(uint8_t *out) {
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < sizeof(GEAR_ROWS) / sizeof(GEAR_ROWS[0]); i++) if (gear & GEAR_ROWS[i].bit) out[n++] = i;
+  return n;
+}
+
+void toggleGear(uint8_t bit) {
+  bool turningOff = !(gearOff & bit);
+  if (bit == G_MORPH && turningOff && ball) {
+    if (!canStand()) { pauseMsgT = 45; beep(140, 20); return; }   // in a tunnel: stay rolled up
+    ball = false;
+  }
+  gearOff ^= bit;
+  if (!(eg() & G_MISSILE)) weapon = 0;
+  beep(turningOff ? 500 : 900, 12);
+}
+
 void pauseStep(uint8_t e) {
   if (inputLock) { if (watch::held() == 0) inputLock = 0; return; }
-  if (e & (B_LEFT | B_RIGHT)) { pauseSel ^= 1; beep(700, 8); }
-  if (e & (B_UP | B_FIRE)) {
-    if (pauseSel == 0) { mode = M_PLAY; inputLock = 255; beep(600, 15); }
-    else { if (!sandbox) captureSave(lastSave); watch::exitToClock(); }
+  if (pauseMsgT) pauseMsgT--;
+  uint8_t rows[5], n = ownedRows(rows);
+  if ((e & (B_LEFT | B_RIGHT)) && n) { pauseTab ^= 1; beep(700, 8); }
+  if (e & B_DOWN) { mode = M_PLAY; inputLock = 255; return; }
+  if (pauseTab == 0) {
+    if (e & B_UP) { pauseSel ^= 1; beep(700, 8); }
+    if (e & B_FIRE) {
+      if (pauseSel == 0) { mode = M_PLAY; inputLock = 255; beep(600, 15); }
+      else { if (!sandbox) captureSave(lastSave); watch::exitToClock(); }
+    }
+  } else {
+    if (gearSel >= n) gearSel = 0;
+    if (e & B_UP) { gearSel = (gearSel + 1) % n; beep(700, 8); }
+    if (e & B_FIRE) toggleGear(GEAR_ROWS[rows[gearSel]].bit);
   }
-  if (e & B_DOWN) { mode = M_PLAY; inputLock = 255; }
+}
+
+void drawPauseTabs() {
+  uint8_t rows[5];
+  if (!ownedRows(rows)) return;
+  const char *t[2] = {"MAP", "ITEMS"};
+  int16_t x = 82;
+  for (uint8_t i = 0; i < 2; i++) {
+    int16_t w = u8g2.getStrWidth(t[i]);
+    if (pauseTab == i) { fillBoxClipped(x - 2, 0, w + 4, 8); u8g2.setDrawColor(0); }
+    u8g2.setCursor(x, 6); u8g2.print(t[i]); u8g2.setDrawColor(1);
+    x += w + 8;
+  }
+}
+
+void drawPauseItems() {
+  u8g2.setCursor(2, 6); u8g2.print(F("ITEMS"));
+  uint8_t rows[5], n = ownedRows(rows);
+  for (uint8_t k = 0; k < n; k++) {
+    const GearRow &g = GEAR_ROWS[rows[k]];
+    int16_t y = 13 + k * 9;
+    bool sel = k == gearSel;
+    if (sel) { fillBoxClipped(2, y - 1, 124, 9); u8g2.setDrawColor(0); }
+    drawIcon(g.bit == G_MISSILE ? 'l' : g.bit == G_ICE ? 'i' : g.bit == G_MORPH ? 'm' : g.bit == G_BOMB ? 'o' : 'j',
+             (g.parent ? 18 : 8), y + 3, 1);
+    u8g2.setCursor(g.parent ? 26 : 16, y + 6); u8g2.print(g.name);
+    bool parentOff = g.parent && (gearOff & g.parent);
+    u8g2.setCursor(104, y + 6);
+    if (parentOff) u8g2.print(F("--"));
+    else u8g2.print((gearOff & g.bit) ? F("OFF") : F("ON"));
+    u8g2.setDrawColor(1);
+  }
+  if (pauseMsgT) { u8g2.setDrawColor(0); u8g2.drawBox(36, 55, 56, 9); u8g2.setDrawColor(1); drawCenteredText("NEED ROOM", 62); }
 }
 
 void drawPause() {
   u8g2.setFont(u8g2_font_4x6_tr);
+  frameN++;
+  drawPauseTabs();
+  if (pauseTab == 1) { drawPauseItems(); return; }
   u8g2.setCursor(2, 6); u8g2.print(sandbox ? F("TEST ROOM") : F("BRINSTAR"));
   // map: one cell per screen, 7×5 px
   const int16_t ox = 4, oy = 10, cw = 7, chh = 5;
@@ -1445,7 +1567,6 @@ void drawPause() {
     else frameSafe(x, y, w, h);
     if (r == roomAtTile(padTX, padTY)) { u8g2.setCursor(x + 2, y + h - 1); if (r != curRoom || !(frameN & 8)) u8g2.print('S'); }
   }
-  frameN++;
   // status
   u8g2.setCursor(56, 16); u8g2.print(ROOMS[curRoom].name);
   u8g2.setCursor(56, 26); u8g2.print(F("ENERGY ")); u8g2.print(energy); u8g2.print('/'); u8g2.print(maxEnergy);
@@ -1453,7 +1574,7 @@ void drawPause() {
   uint32_t sec = playFrames / 30;
   u8g2.setCursor(56, 42); u8g2.print(F("TIME "));
   watch::print2(sec / 3600); u8g2.print(':'); watch::print2((sec / 60) % 60); u8g2.print(':'); watch::print2(sec % 60);
-  // options
+  // options (Action moves, OK picks)
   u8g2.setFont(u8g2_font_5x7_tr);
   const char *opt[2] = {"RESUME", "CLOCK"};
   for (uint8_t i = 0; i < 2; i++) {
@@ -1609,7 +1730,7 @@ void gameDraw() {
 
 // Alarm interrupted play: come back to the pause screen
 void gameInterrupted() {
-  if (mode == M_PLAY) { pauseSel = 0; mode = M_PAUSE; inputLock = 255; }
+  if (mode == M_PLAY) { pauseSel = 0; pauseTab = 0; gearSel = 0; mode = M_PAUSE; inputLock = 255; }
 }
 
 // -------------------- Theme: Metroid clock face --------------------

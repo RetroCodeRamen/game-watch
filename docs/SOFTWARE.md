@@ -178,8 +178,16 @@ RP2040 has headroom, but keep watch games tiny:
   (unlimited); a ring of sparks turns round the flip. The flip hurts enemies it touches (4 damage, including the
   one it lands on) and Samus takes no contact damage while flipping. It breaks slashed rock (`X`, re-forms on
   room entry). Firing ends the flip.
+- **Ice Missiles:** with Ice on, a missile freezes an enemy for ~5 s instead of hurting it (it shivers for the
+  last 1.5 s). Frozen enemies are harmless and solid (stand on them; one frozen against Samus doesn't trap her);
+  any missile shatters one, the beam glances off. Ice missiles still open red doors. HUD label reads ICE.
+- **Pause:** Left/Right switch MAP / ITEMS tabs, Action moves the cursor, OK picks, Mode resumes. ITEMS lists owned
+  gear with ON/OFF (Ice under Missiles, Bombs under Morph Ball show "--" while the parent is off); the settings
+  (`gearOff`) are saved (save version 3). Turning the Morph Ball off inside a tunnel says NEED ROOM.
+- **Chozo statue:** `SPR_CHOZO`, 38×40, traced from NES-style Chozo pixel art (highlight lines + outline); the
+  orb (radius 7) sits in its raised hand 24 px above the floor.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
-  `@`) with every item (Morph Ball, Missiles, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
+  `@`) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an
   enemy arena with a slashed-rock wall and a high ledge.
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
