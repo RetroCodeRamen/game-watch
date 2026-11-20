@@ -17,7 +17,7 @@ typedef int32_t fx;
 
 // ---- all structs up here, before Arduino's generated prototypes ----
 struct Door { int16_t tx, ty; uint8_t h; char kind; uint8_t timer; };
-struct Item { int16_t tx, ty; char kind; };
+struct Item { int16_t tx, ty; char kind; int8_t face; };   // face: statue side (+1 left of the orb, -1 right)
 struct Enemy {
   bool live; uint8_t kind, st, hp, t, flash, lost;
   int16_t x, y;            // top-left, px
@@ -60,8 +60,10 @@ const uint8_t VIEW_H = 56;
 const fx RUN_MAX = 384;     // 1.5 px/step  (~90 px/s)
 const fx ACC_G = 40, DEC_G = 56, TURN_G = 80;
 const fx ACC_A = 30, DRAG_A = 8;
-const fx GRAV = 28;          // jump peak ≈ 36 px (1.6 × Samus) — clears a 4-tile ledge
-const fx JUMP_V = 720;
+const fx GRAV = 32;          // jump peak ≈ 46 px (2 × Samus): a 4-tile ledge with ~14 px to spare
+const fx JUMP_V = 880;
+const fx JUMP2_V = 700;      // double jump in mid-air: ≈ 28 px more (≈ 7 tiles with both)
+const uint8_t AIR_JUMPS = 1;
 const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
 const fx FALL_MAX = 900;
 const fx SPIN_MIN = 160;     // running this fast when jumping → somersault
@@ -94,7 +96,8 @@ inline int8_t sgn(fx v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 // Samus — x is body centre, y is the feet (bottom edge, exclusive)
 fx sX, sY, sVX, sVY;
 bool ground, ball, crouch, spin, faceR = true, jumpHeld;
-uint8_t coyote, jumpBuf, fireCD, invul, hurtLock, runPhase, animT, spinPhase;
+uint8_t coyote, jumpBuf, airJumps; bool jumpPress;
+uint8_t fireCD, invul, hurtLock, runPhase, animT, spinPhase;
 uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
 uint32_t playFrames;
 
@@ -220,7 +223,8 @@ void buildWorld() {
           while (ty + n < h && ROOMS[r].tiles[(ty + n) * w + tx] == c) n++;
           doors[doorN++] = {gx, gy, n, c, 0};
         }
-        if ((c == 'm' || c == 'l' || c == 't' || c == 'e') && itemN < MAX_ITEM) items[itemN++] = {gx, gy, c};
+        if (strchr("mlteML", c) && itemN < MAX_ITEM)
+          items[itemN++] = {gx, gy, (char)tolower(c), (int8_t)(isupper(c) ? -1 : 1)};
         if (c == 'S') { padTX = gx; padTY = gy; }
       }
   }
@@ -519,6 +523,13 @@ void samusStep(int8_t dir, bool firstStep) {
     spin = (sVX > SPIN_MIN || sVX < -SPIN_MIN);
     beep(spin ? 660 : 760, 14);
   }
+  // double jump: a fresh press in mid-air (after the ledge grace) always somersaults
+  if (jumpPress && jumpBuf && !ground && !coyote && !ball && !crouch && airJumps) {
+    sVY = -JUMP2_V; airJumps--; jumpBuf = 0;
+    spin = true; spinPhase = 0;
+    beep(880, 14);
+  }
+  jumpPress = false;
   if (!jumpHeld && sVY < -JUMP_CUT) sVY = -JUMP_CUT;
   sVY += GRAV; if (sVY > FALL_MAX) sVY = FALL_MAX;
 
@@ -532,7 +543,7 @@ void samusStep(int8_t dir, bool firstStep) {
     ground = boxSolid(x - bodyHW(), y, x + bodyHW(), y + 1);
     if (ground && sVY > 0) sVY = 0;
   }
-  if (ground) spin = false;
+  if (ground) { spin = false; airJumps = AIR_JUMPS; }
   if (spin) spinPhase++;
 
   // animation
@@ -651,6 +662,7 @@ void samusBox(int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) {
 // =====================================================================
 void shotStep(Shot &s) {
   if (s.missile) { s.vx += sgn(s.vx) * MISSILE_ACC; if (s.vx > MISSILE_VMAX) s.vx = MISSILE_VMAX; if (s.vx < -MISSILE_VMAX) s.vx = -MISSILE_VMAX; }
+  int16_t px0 = toPx(s.x);
   s.x += s.vx;
   int16_t x = toPx(s.x), y = toPx(s.y);
   if (!s.life--) { s.live = false; return; }
@@ -668,7 +680,10 @@ void shotStep(Shot &s) {
   for (uint8_t i = 0; i < itemN; i++) {       // a shot cracks a Chozo orb open
     if (((itemsGot >> i) & 1) || !orbClosed(i)) continue;
     int16_t ox = items[i].tx * TILE + 4, oy = items[i].ty * TILE + 4;
-    if (!overlap(x - 2, y - 2, x + 2, y + 2, ox - 5, oy - 5, ox + 5, oy + 5)) continue;
+    // swept from where the shot was, so a point-blank shot from inside the orb still counts
+    int16_t a = min(px0, x) - 2, b = max(px0, x) + 2;
+    if (s.vx > 0) a -= 8; else b += 8;           // back to the muzzle
+    if (!overlap(a, y - 2, b, y + 2, ox - 5, oy - 5, ox + 5, oy + 5)) continue;
     orbOpen |= 1 << i; s.live = false;
     burst(ox, oy, 14, 6); burst(ox, oy, 8, 3);
     watch::playTune(TUNE_ORB, 3);
@@ -730,7 +745,7 @@ void collectItem(uint8_t i) {
     watch::playTune(TUNE_TANK, 3);
     return;
   }
-  itemKind = k; itemT = 0; mode = M_ITEM;
+  msgT = 0; itemKind = k; itemT = 0; mode = M_ITEM;
   if (majorItem(k)) watch::playTune(TUNE_MAJOR, 9);
   else watch::playTune(TUNE_ITEM, 7);
 }
@@ -790,7 +805,7 @@ void handleInput(uint8_t e) {
   if ((e & B_FIRE) && !(h & B_DOWN)) fire();
   if (e & B_UP) {
     if (ball) tryStand();
-    else jumpBuf = JUMP_BUF;
+    else { jumpBuf = JUMP_BUF; jumpPress = true; }
   }
   jumpHeld = (h & B_UP) != 0;
   prevHeld = h;
@@ -975,43 +990,20 @@ void drawIcon(char k, int16_t cx, int16_t cy, uint8_t s) {
       }
 }
 
-// Seated Chozo statue holding an orb at (ox, oy); dir +1 = statue sits left of the orb, facing right.
-// Its pedestal stands on the floor 12 px below the orb centre.
+// Seated Chozo statue (SPR_CHOZO) offering an orb at (ox, oy); its pedestal stands on the floor
+// 20 px below the orb centre. dir +1 = statue sits left of the orb, facing right.
 void drawChozo(int16_t ox, int16_t oy, int8_t dir) {
-  int16_t F = oy + 12;
-  auto X = [&](int16_t d) { return (int16_t)(ox - dir * d); };   // d = distance behind the orb
-  auto span = [&](int16_t d0, int16_t d1, int16_t y) { int16_t a = X(d0), b = X(d1); hLineSafe(min(a, b), y, abs(a - b) + 1); };
-  // pedestal with carved dots
-  frameSafe(min(X(15), X(2)), F - 4, 14, 4);
-  for (int16_t d = 13; d >= 4; d -= 3) plot(X(d), F - 2);
-  // thigh and knee
-  span(13, 3, F - 7); span(13, 3, F - 6);
-  // torso: outline with a dithered fill
-  frameSafe(min(X(13), X(8)), F - 22, 6, 16);
-  for (int16_t y = F - 20; y < F - 8; y += 2) plot(X(10 + ((y >> 1) & 1)), y);
-  // head, eye and beak pointing at the orb
-  circleSafe(X(10), F - 25, 3);
-  plot(X(9), F - 26);
-  lineSafe(X(7), F - 26, X(4), F - 24); lineSafe(X(7), F - 24, X(4), F - 24);
-  // crest
-  lineSafe(X(12), F - 28, X(15), F - 30);
-  // arm: shoulder, elbow, cupped hands under the orb
-  lineSafe(X(8), F - 19, X(5), F - 12); lineSafe(X(5), F - 12, X(3), F - 7);
-  span(2, -5, F - 6); plot(X(-5), F - 7); plot(X(-6), F - 8);
+  drawFrame(SPR_CHOZO, ox, oy + 20, dir < 0);
 }
 
 void drawItems() {
   for (uint8_t i = 0; i < itemN; i++) {
     char k = items[i].kind;
-    int16_t wx = items[i].tx * 8 + 4;
-    int16_t x = scrX(wx), y = scrY(items[i].ty * 8 + 4);
+    int16_t x = scrX(items[i].tx * 8 + 4), y = scrY(items[i].ty * 8 + 4);
     if (x < -24 || x > 152 || y < -8 || y > 80) continue;
     bool got = (itemsGot >> i) & 1;
     if (majorItem(k)) {
-      // the statue faces the middle of its room, and stays once its gift is taken
-      int8_t r = roomAtTile(items[i].tx, items[i].ty);
-      int16_t mid = (rTX(r) + rTW(r) / 2) * 8;
-      drawChozo(x, y, wx < mid ? 1 : -1);
+      drawChozo(x, y, items[i].face);         // stays once its gift is taken
     }
     if (got) continue;
     if (majorItem(k)) {

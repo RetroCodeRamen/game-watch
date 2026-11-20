@@ -158,22 +158,25 @@ RP2040 has headroom, but keep watch games tiny:
   Rooms touch edge to edge, so leaving a room's edge puts Samus in whichever room is there (fade, camera
   snaps to the new room's bounds). Doors are 3-tile columns on room edges: blue opens to any shot, red needs a
   missile and then stays open. Tile/object legend is at the top of the file.
-- **Current build:** Brinstar B01–B06 (ship → Morph Ball shrine → Missile Launcher → junction; B04 was
-  folded into the 2-screen shrine). The junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Current build:** Brinstar B01–B06: ship → surface → Brinstar Shaft (1×4) → Morph Ball shrine (1×3, one-way
+  drop) → ball tunnel back into the shaft → Missile Room (2×2) → Junction (2×2), with a climbable way home from every
+  room. The junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
 - **Items:** each kind has its own 8×8 icon (`ICON_*`). Major items (Morph Ball, Missiles) sit in a seated
   Chozo statue's hands inside an orb that must be shot open; taking one flashes the screen, pulls rings of
   light in to Samus, plays the long fanfare and opens a panel with the icon at 3×. Energy tanks get the panel
-  only; missile tanks just a toast and a jingle. Design rule: each major item is the key to its own escape —
-  the shrine is a one-way drop and the only exit is a ball tunnel.
+  only; missile tanks just a toast and a jingle. Map tile letter case picks the statue's side (`m` statue left, `M` right).
+  Design rules (see the design doc): each major item is the key to its own escape, and Samus can always get back to
+  the ship.
 - **Sprites:** Samus comes from the Metroid II (Game Boy) sheet in `metroid_watch/`, converted by `python3 scripts/gen_metroid_sprites.py` (writes `metroid_gb_sprites.h`; `--preview` writes `assets/metroid_gb_preview.png`): stand, 3-frame run, knees-up jump (turned in quarter steps for the running somersault); the 7 px morph ball is hand-drawn in the script. `assets/metroid_sprite_compare.png` is the GB vs SNES comparison.
-- **Physics (60 Hz):** run 1.5 px/step, jump peak ≈ 36 px (clears a 4-tile ledge), release to cut the jump,
-  jump buffer and ledge grace; running jumps somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
+- **Physics (60 Hz):** run 1.5 px/step; jump peak ≈ 45 px (a 4-tile ledge with room to spare), double jump in
+  mid-air ≈ 28 px more (always somersaults); release to cut the jump, jump buffer and ledge grace; running jumps
+  somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
   Skrees dive and burst into shards, Rippers are beam-proof. Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
 - Host tests: `tools/metroid_test/build.sh`, then `out/check` (room sizes, overlaps, openings line up,
-  door shape, no 2-tile pinch points, Morph Ball reachable standing, and every major item needed to escape
-  from itself) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  door shape, no 2-tile pinch points, Morph Ball reachable standing, the shrine only left by rolling, and the
+  ship reachable again from everywhere at each gear stage — climbs up to 4 tiles, 7 with the double jump) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
   see the header of `run.cpp`).

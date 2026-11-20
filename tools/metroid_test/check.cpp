@@ -36,7 +36,7 @@ int main() {
     int items = 0, enemies = 0;
     for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
       char c = R.tiles[y * w + x];
-      if (strchr("mlte", c)) items++;
+      if (strchr("mlteML", c)) items++;
       if (strchr("zkr", c)) enemies++;
       if (door(c)) {
         if (x != 0 && x != w - 1) { printf("%s: door not on an edge at %d,%d\n", R.id, x, y); bad++; }
@@ -79,84 +79,112 @@ int main() {
     }
     printf("%s %-16s %dx%d at (%d,%d)  items %d  enemies %d\n", R.id, R.name, R.sw, R.sh, R.mx, R.my, items, enemies);
   }
-  // ---- standing reachability before the Morph Ball ----
-  // Samus at full height from the ship pad: walk, step off ledges, jump up to 4 tiles (36 px peak),
-  // jump gaps up to 4 tiles. Doors count as open (any shot opens a blue door). The Morph Ball must be
-  // reachable this way, and so must every door of every room she passes through on the way.
+  // ---- reachability ----
+  // Samus's moves on the tile grid (feet on a solid tile): standing she walks, steps off ledges,
+  // jumps up to 4 tiles (45 px peak), or 7 with the double jump (67 px) with up to 2 tiles of sideways travel, and jumps gaps up to 4
+  // tiles. With the Morph Ball she can roll through 1-tile ducts and drop, but not climb, and stand
+  // again where there's room. Blue doors count as open; red doors are rock until she has missiles.
   {
-    auto T = [](int x, int y) { char c = tileAt(x, y); return c; };
-    auto S = [&](int x, int y) { char c = T(x, y); return !c || solid(c); };   // outside = rock
+    static char G[200][120];
+    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) G[x][y] = tileAt(x, y);
+    bool hasBall = false, redShut = true;
+    auto S = [&](int x, int y) { if (x < 0 || y < 0 || x >= 200 || y >= 120) return true; char c = G[x][y]; return !c || solid(c) || (redShut && c == 'R'); };
     auto body = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S(x, y - i)) return false; return true; };
-    int padX = 0, padY = 0, mX = -1, mY = -1;
-    for (int r = 0; r < ROOM_N; r++) { int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7;
-      for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { char c = ROOMS[r].tiles[y * w + x];
-        if (c == 'S') { padX = ROOMS[r].mx * 16 + x; padY = ROOMS[r].my * 7 + y; }
-        if (c == 'm') { mX = ROOMS[r].mx * 16 + x; mY = ROOMS[r].my * 7 + y; } } }
-    static bool seen[200][120]; static int qx[24000], qy[24000];
-    bool redShut = false;   // red doors count as rock (no missiles yet)
-    auto S2 = [&](int x, int y) { char c = T(x, y); return S(x, y) || (redShut && c == 'R'); };
-    auto body2 = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S2(x, y - i)) return false; return true; };
-    bool gotMorph = false;
-    // flood fill of where standing Samus can stand, from (sx, sy) = feet on that tile
-    auto flood = [&](int sx, int sy) {
+    int padX = 0, padY = 0;
+    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) if (G[x][y] == 'S') { padX = x; padY = y; }
+    static bool seen[2][200][120]; static int qx[48000], qy[48000], qb[48000];
+    auto flood = [&](int sx, int sy, int sb) {
       memset(seen, 0, sizeof seen); int qh = 0, qt = 0;
-      auto push = [&](int x, int y) { if (x < 0 || y < 0 || x >= 200 || y >= 120 || seen[x][y]) return; seen[x][y] = true; qx[qt] = x; qy[qt] = y; qt++; };
-      push(sx, sy);
+      auto push = [&](int x, int y, int b) { if (x < 0 || y < 0 || x >= 200 || y >= 120 || seen[b][x][y]) return; seen[b][x][y] = true; qx[qt] = x; qy[qt] = y; qb[qt] = b; qt++; };
+      push(sx, sy, sb);
       while (qh < qt) {
-        int x = qx[qh], y = qy[qh]; qh++;
-        if (mX >= 0 && abs(x - mX) <= 1 && mY <= y - 1 && mY >= y - 5 && body2(x, y, y - mY)) gotMorph = true;
+        int x = qx[qh], y = qy[qh], b = qb[qh]; qh++;
+        if (b) {                                                   // Morph Ball
+          if (body(x, y, 3)) push(x, y, 0);
+          for (int d = -1; d <= 1; d += 2) { int nx = x + d;
+            if (S(nx, y - 1)) continue;
+            int yy = y; while (yy < 119 && !S(nx, yy)) yy++; push(nx, yy, 1); }
+          continue;
+        }
+        if (hasBall) push(x, y, 1);
         for (int d = -1; d <= 1; d += 2) {
           int nx = x + d;
-          if (body2(nx, y, 3)) {
-            if (S2(nx, y)) push(nx, y);
-            else { int yy = y; while (yy < 119 && !S2(nx, yy)) yy++; push(nx, yy); }   // step off and fall
+          if (body(nx, y, 3)) { int yy = y; while (yy < 119 && !S(nx, yy)) yy++; push(nx, yy, 0); }   // walk / step off
+          for (int up = 1; up <= 7; up++) {                       // jump up onto a ledge (4 tiles; 7 with the double jump)
+            if (!body(x, y, 3 + up)) break;
+            for (int k = 1; k <= 2; k++) { bool ok = true;
+              for (int j = 1; j <= k; j++) if (!body(x + d * j, y - up, 3)) ok = false;
+              if (ok && S(x + d * k, y - up)) push(x + d * k, y - up, 0); }
           }
-          for (int up = 1; up <= 4; up++) {                       // jump up onto a ledge
-            if (!body2(x, y, 3 + up)) break;
-            for (int k = 1; k <= 2; k++) { int tx = x + d * k; bool ok = true;
-              for (int j = 1; j <= k; j++) if (!body2(x + d * j, y - up, 3)) ok = false;
-              if (ok && S2(tx, y - up)) push(tx, y - up); }
-          }
-          if (body2(x, y, 4)) for (int k = 2; k <= 4; k++) {        // jump a gap at the same height
-            bool ok = true; for (int j = 1; j <= k; j++) if (!body2(x + d * j, y, 4) && !(j == k && body2(x + d * j, y, 3))) ok = false;
-            if (ok && S2(x + d * k, y)) push(x + d * k, y);
+          if (body(x, y, 4)) for (int k = 2; k <= 4; k++) {        // jump a gap at the same height
+            bool ok = true; for (int j = 1; j <= k; j++) if (!body(x + d * j, y, 4) && !(j == k && body(x + d * j, y, 3))) ok = false;
+            if (ok && S(x + d * k, y)) push(x + d * k, y, 0);
           }
         }
       }
+      return qt;
     };
-    redShut = true;
-    flood(padX, padY);
-    if (!gotMorph) { printf("Morph Ball is NOT reachable at full height from the ship\n"); bad++; }
-    else printf("\nMorph Ball reachable at full height from the ship\n");
-    // every door in a room standing Samus reaches must itself be reachable standing
-    for (int r = 0; r < ROOM_N; r++) {
+    // can standing Samus touch the item at tile (ix, iy)? (orbs float above the floor)
+    auto touches = [&](int ix, int iy) {
+      for (int x = ix - 1; x <= ix + 1; x++) for (int y = iy + 1; y <= iy + 3; y++) if (seen[0][x][y] && body(x, y, y - iy)) return true;
+      return false;
+    };
+    int mX = -1, mY = -1, lX = -1, lY = -1;
+    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) { if (G[x][y] == 'm' || G[x][y] == 'M') { mX = x; mY = y; } if (G[x][y] == 'l' || G[x][y] == 'L') { lX = x; lY = y; } }
+    auto roomsSeen = [&](const char *label) {
+      printf("  %s:", label);
+      for (int r = 0; r < ROOM_N; r++) { int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7, x0 = ROOMS[r].mx * 16, y0 = ROOMS[r].my * 7; bool v = false;
+        for (int y = 0; y < h && !v; y++) for (int x = 0; x < w; x++) if (seen[0][x0 + x][y0 + y] || seen[1][x0 + x][y0 + y]) { v = true; break; }
+        if (v) printf(" %s", ROOMS[r].id); }
+      printf("\n");
+    };
+
+    // 1. before the Morph Ball: everything is done at full height
+    printf("\n");
+    flood(padX, padY, 0);
+    roomsSeen("before Morph Ball, standing reaches");
+    if (mX < 0 || !touches(mX, mY)) { printf("Morph Ball is NOT reachable at full height from the ship\n"); bad++; }
+    for (int r = 0; r < ROOM_N; r++) {                     // every door of a room she reaches, at full height
       int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7, x0 = ROOMS[r].mx * 16, y0 = ROOMS[r].my * 7;
       bool visited = false;
-      for (int y = 0; y < h && !visited; y++) for (int x = 0; x < w; x++) if (seen[x0 + x][y0 + y]) { visited = true; break; }
+      for (int y = 0; y < h && !visited; y++) for (int x = 0; x < w; x++) if (seen[0][x0 + x][y0 + y]) { visited = true; break; }
       if (!visited) continue;
-      printf("  pre-Morph-Ball room %s\n", ROOMS[r].id);
       for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
         char c = ROOMS[r].tiles[y * w + x];
         if (!door(c) || (y > 0 && ROOMS[r].tiles[(y - 1) * w + x] == c)) continue;
-        int gx = x0 + x, fy = y0 + y + 3;   // standing in the doorway, feet on the tile below it
-        bool ok = seen[gx][fy] || seen[gx + 1][fy] || seen[gx - 1][fy];
+        int gx = x0 + x, fy = y0 + y + 3;
+        bool ok = seen[0][gx][fy] || seen[0][gx + 1][fy] || seen[0][gx - 1][fy];
         if (!ok && roomAt(gx + (x == 0 ? -1 : 1), y0 + y) >= 0) {
           printf("%s: door at %d,%d can't be reached at full height before the Morph Ball\n", ROOMS[r].id, x, y); bad++; }
       }
     }
-    // Each major item is the key to its own escape: starting at the item WITHOUT its power
-    // (standing only for the Morph Ball; red doors shut for the Missiles), Samus must not be
-    // able to get back to the ship.
-    for (int r = 0; r < ROOM_N; r++) { int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7;
-      for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { char c = ROOMS[r].tiles[y * w + x];
-        if (c != 'm' && c != 'l') continue;
-        int gx = ROOMS[r].mx * 16 + x, gy = ROOMS[r].my * 7 + y;
-        while (gy < 119 && !S(gx, gy)) gy++;           // feet on the floor below the item
-        redShut = true;                                // no missiles yet either way
-        flood(gx, gy);
-        if (seen[padX][padY]) { printf("%s: from the %s Samus can walk home without using it\n", ROOMS[r].id, c == 'm' ? "Morph Ball" : "Missiles"); bad++; }
-        else printf("  %s: %s is needed to escape\n", ROOMS[r].id, c == 'm' ? "Morph Ball" : "Missiles");
-      } }
+    // 2. the Morph Ball shrine is a trap without the ball: from the item, standing only, no way home
+    if (mX >= 0) {
+      int fy = mY; while (fy < 119 && !S(mX, fy)) fy++;
+      flood(mX, fy, 0);
+      if (seen[0][padX][padY]) { printf("from the Morph Ball Samus can walk home without rolling\n"); bad++; }
+      else printf("  Morph Ball shrine: the only way out is to roll\n");
+    }
+    // 3. backtracking: at each gear stage, from everywhere Samus can get to, she can get back to the ship
+    struct Stage { const char *name; bool ball, missiles; } stages[] = {{"with Morph Ball", true, false}, {"with Morph Ball + Missiles", true, true}};
+    for (auto &st : stages) {
+      hasBall = st.ball; redShut = !st.missiles;
+      flood(padX, padY, 0);
+      if (st.ball && !st.missiles && lX >= 0 && !touches(lX, lY)) { printf("Missile Launcher is NOT reachable with the Morph Ball\n"); bad++; }
+      char label[64]; snprintf(label, 64, "%s, Samus reaches", st.name); roomsSeen(label);
+      static int fx[48000], fyy[48000], fb[48000]; int n = 0;
+      for (int b = 0; b < 2; b++) for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) if (seen[b][x][y]) { fx[n] = x; fyy[n] = y; fb[n] = b; n++; }
+      int stuck[32] = {0}, sx[32], sy[32];
+      for (int i = 0; i < n; i++) {
+        flood(fx[i], fyy[i], fb[i]);
+        if (seen[0][padX][padY] || seen[1][padX][padY]) continue;
+        int r = roomAt(fx[i], fyy[i] - 1); if (r < 0) r = roomAt(fx[i], fyy[i]); if (r < 0) continue;
+        if (!stuck[r]) { sx[r] = fx[i] - ROOMS[r].mx * 16; sy[r] = fyy[i] - ROOMS[r].my * 7; }
+        stuck[r]++;
+      }
+      for (int r = 0; r < ROOM_N; r++) if (stuck[r]) {
+        printf("%s: %d spots %s can't get back to the ship (e.g. feet on %d,%d)\n", ROOMS[r].id, stuck[r], st.name, sx[r], sy[r]); bad++; }
+    }
   }
   printf(bad ? "\n%d problems\n" : "\nall checks passed\n", bad);
   return bad ? 1 : 0;

@@ -1,6 +1,6 @@
 # Metroid Watch Game Design Document
 
-**RP2040 watch · Design Revision 4**
+**RP2040 watch · Design Revision 5**
 
 Samus returns to Zebes when a shut-down Pirate relay broadcasts her old distress code. She explores two boss routes in either order and unlocks Tourian. After destroying Mother Brain, she races back to her ship. The game is a side-view adventure for a 128 × 64 black-and-white display and five physical buttons.
 
@@ -40,7 +40,7 @@ Explore a room, read its hazards or route clues, and decide whether to fight, sl
 | **Input** | **Standing or airborne** | **Morph Ball** |
 | -------------- | --------------------------------------------------------------------------- | -------------------------------------------- |
 | Left / Right | Move and turn. Hold to keep running. Steer in the air. | Roll in either direction. |
-| Up | Jump. Screw Attack activates during the jump when enabled. | Unused by itself. |
+| Up | Jump; press again in mid-air to double jump. With Space Jump, keep pressing to keep somersaulting. | Unused by itself. |
 | Down | Fire the current weapon. At a save pad, interact when the prompt appears. | Drop a bomb if enabled. |
 | Menu tap | Cycle Gun → Missiles → Morph Ball → Gun. | Return to Gun when there is room to stand. |
 | Menu hold | Pause and open the Start menu. | Pause and open the Start menu. |
@@ -55,11 +55,11 @@ Down fires one shot per press. Buffer early jump presses briefly and give the pl
 
 ### Movement and damage
 
-Begin playtests with a jump rise of roughly 20–24 pixels and tune it with the 22-pixel sprite. Preserve horizontal direction and momentum during morphing. Ordinary enemy contact takes 1 energy and grants a brief recovery window.
+The jump rises about 45 pixels (twice Samus's height) and the double jump adds about 28 more, so one jump climbs a 4-tile ledge and a double jump about 7 tiles. Level geometry is checked against those numbers. Preserve horizontal direction and momentum during morphing. Ordinary enemy contact takes 1 energy and grants a brief recovery window.
 
 Start with 6 energy. Lava and spikes take 1 energy and return Samus to the latest safe footing in the room. At zero energy, use the last permanent save or the escape checkpoint. Scroll within larger rooms and give the player safe footing and a visible approach on doorway entry.
 
-The HUD briefly identifies the current mode after each tap. Enabling Ice Missiles changes the missile type within the same mode. Disabling Screw Attack leaves the normal jump available.
+The HUD briefly identifies the current mode after each tap. Enabling Ice Missiles changes the missile type within the same mode. Disabling Space Jump leaves the normal jump available.
 
 ## Start menu and opening
 
@@ -71,7 +71,7 @@ The Start menu shows inventory toggles, one zone map, and mission progress on se
 
 | **Tab** | **Controls and contents** |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Items | Up moves the selection. Down toggles Missiles, Morph Ball, Bombs, Ice Missiles, or Screw Attack. Show ON or OFF for acquired gear. Newly acquired items start enabled. |
+| Items | Up moves the selection. Down toggles Missiles, Morph Ball, Bombs, Ice Missiles, or Space Jump. Show ON or OFF for acquired gear. Newly acquired items start enabled. |
 | Map | Open on the current zone. Up and Down browse zones. Fill the current room, mark known saves with S, and mark a seen exit with ?. Keep undiscovered rooms off the map. |
 | Mission | Show the current objective, boss clears, missile tanks collected, and run time. Down activates Save & Clock and suspends the game at the current position. |
 
@@ -113,7 +113,7 @@ FIND OUT WHO SENT IT.
 | Morph Ball | Brinstar B03 | Tap Menu to cycle into Morph Ball. Roll through low tunnels to reach the launcher. |
 | Missile Launcher | Brinstar B05 with tank #1 | Costs one round per shot. Opens red doors and damages Ridley and Mother Brain’s glass. A hit permanently opens the door in the current save state. |
 | Bombs | Kraid’s Lair K03 | Down in ball form drops a short-fuse bomb. Unlimited with one live bomb at a time. Opens cracked floors and dislodges attached Metroids. |
-| Screw Attack | Kraid defeat at K08 | Jumping activates the attack when enabled. Damages small enemies on contact and breaks marked Screw Attack blocks. Hazards and boss attacks still damage Samus. |
+| Space Jump | Kraid defeat at K08 | Unlimited mid-air jumps while somersaulting, and the somersault damages small enemies on contact and breaks marked Space Jump blocks. Hazards and boss attacks still damage Samus. (Replaces Space Jump; the double jump is part of Samus's base suit.) |
 | Ice Missiles | Ridley defeat at N08 | Adds an Ice toggle to the missile slot. One ice hit freezes a Metroid and a second shatters it while frozen. Switching Ice off gives regular missiles. Both types open red doors and work on bosses. |
 
 ### Eight missile tanks
@@ -134,31 +134,38 @@ Leave a retreat to a refill from every missile gate and from both missile-depend
 
 ## Brinstar
 
-A surface approach bends down into the central shaft. The player sees the escape vent and a bomb alcove on the first visit, then chooses either boss branch at B06.
+A surface approach leads east into the Brinstar Shaft, the spine of the zone and the road home. The shrine at the top of the shaft holds the Morph Ball; the ball tunnels at the bottom lead on to the Missile Launcher and the junction, where Samus chooses either boss branch.
 
 ```mermaid
 flowchart TD
     B01 --- B02
     B02 --- B03
-    B02 ---|"Bombs"| B08
-    B03 ---|"Morph Ball"| B04
-    B04 --- B05
+    B03 -->|"drop"| B04
+    B04 -->|"Morph Ball tunnel"| B03
+    B03 ---|"Morph Ball"| B05
     B05 --- B06
-    B06 --- B07
+    B02 ---|"Bombs"| B08
+    B06 ---|"Both bosses"| B07
 ```
-
-W × H measures a first-pass room footprint in 128 × 56 play windows. Labeled links show the gates and arrows show one-way exits. The room descriptions give relative positions and cross-zone links.
 
 | **ID** | **Room** | **W × H** | **Shape and traversal** |
 | -------- | ----------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| B01 | Ship and Landing Site | 2×1 | Wide surface pad and starting save. East to B02. The shaft vent beside the ship receives the alarm exit from T07. |
-| B02 | Surface Path | 2×1 | Rocky shelf. West to the ship, east to B03. Show the cracked floor and tank #2 below before Samus has Bombs. |
-| B03 | Morph Ball Chamber | 1×1 | Standing-height pickup on entry from the west. Pick up Morph Ball before using the low outlet down toward B04. |
-| B04 | Low Duct | 1×1 | Low duct and descending bend. Provide standing clearance and a safe landing at both ends. Continue down to B05. |
-| B05 | Missile Landing | 1×2 | Launcher and tank #1 auto-collect on the main path. B04 above, junction below. N09 arrives at a grille on the east wall. |
-| B06 | Junction Shaft | 2×2 | Vertical hub. B05 above, missile doors west to K01 and east to N01, and the lower landing B07 below. |
-| B07 | Tourian Approach | 1×1 | Landing above the locked hatch. K09 drops here from the west. B06 remains open above. Hatch below to T01 requires both bosses. |
-| B08 | Buried Alcove | 1×1 | Tank #2 below B02. Bomb down through the seam from B02. Put a step or short ledge beneath it so Samus can jump back out. |
+| B01 | Ship and Landing Site | 2×2 | Ship and starting save (the primary save until Kraid's K07). East to B02. The shaft vent beside the ship receives the alarm exit from T07. |
+| B02 | Surface Path | 2×1 | Rocky shelf. West to the ship, east into the top of B03. Show the cracked floor and tank #2 below before Samus has Bombs. |
+| B03 | Brinstar Shaft | 1×4 | Doors near the top: west to B02, east to the shrine, across a 2-tile gap. Shelves step down the middle and climb back with the base jump and double jump. At the bottom a ball-sized hole in each wall: east returns from the shrine, west goes on to B05. Both are visible before the Morph Ball. |
+| B04 | Morph Ball Shrine | 1×3 | One way in: the door ledge drops 13 tiles (deeper than a double jump) into the statue's chamber. Shoot the Chozo orb, take the Morph Ball, and roll out through the west tunnel into the bottom of B03. |
+| B05 | Missile Room | 2×2 | Rolled into from the bottom of B03 (east duct, top right). A step and a long shelf lead down to the floor and back up. The Missile Launcher (with tank #1) sits in a Chozo statue's hands. East door to B06. |
+| B06 | Junction | 2×2 | Hub. Blue door (upper west) back to B05, climbed via a step and a ledge. Missile doors west to K01 and east to N01. Locked hatch down to B07. |
+| B07 | Tourian Approach | 1×1 | Landing above the Tourian hatch. K09 drops here from the west. Hatch to T01 requires both bosses. (Not built yet.) |
+| B08 | Buried Alcove | 1×1 | Tank #2 below B02. Bomb down through the seam from B02. Put a step or short ledge beneath it so Samus can jump back out. (Not built yet.) |
+
+### Item rooms and backtracking
+
+- Every major item (Morph Ball, Missiles, Bombs, Space Jump, Ice Missiles) sits in a Chozo statue's hands inside an orb that Samus shoots open, and gets the full pickup ceremony. Missile and Energy Tanks are low-key.
+- Where possible, the room an item is found in can only be left by using that item (the Morph Ball shrine is the model).
+- Samus can always get back to the ship from anywhere she can reach with the gear she has. The ship is the save point until the boss-branch saves. One-way drops are fine only if the way they lead also loops home.
+- Before the Morph Ball, every required passage fits Samus at full height (no crouch-only gaps).
+- `tools/metroid_test/out/check` checks these rules on the real room data.
 
 ## Kraid’s Lair
 
@@ -174,7 +181,7 @@ flowchart TD
     K06 --- K07
     K07 --- K08
     K08 ---|"Kraid defeated"| K09
-    K09 ---|"Screw Attack"| K10
+    K09 ---|"Space Jump"| K10
 ```
 
 Footprints are width × height in play windows. Cross-zone links appear in the room descriptions.
@@ -188,9 +195,9 @@ Footprints are width × height in play windows. Cross-zone links appear in the r
 | K05 | Lower Cache | 2×1 | Automatic tank #3 on the main path. The lower gallery turns east toward K06. |
 | K06 | Lower Tunnels | 2×2 | Low ducts alternate with standing pockets on the reversible climb. Energy Tank #1 sits on a side ledge before K07. West to K05. |
 | K07 | Kraid Save | 1×1 | Save and refill at the top of the lower climb. Enter Kraid to the east. |
-| K08 | Kraid | 2×2 | Arena east of the save. Beam-accessible weak point. Victory gives Screw Attack and opens the east door to K09. |
-| K09 | Service Chute | 1×1 | Screw Attack opens a one-way outlet into B07. Keep the west route through cleared K08 for returning to the cache. |
-| K10 | Screw Attack Cache | 1×1 | Tank #4 behind a separate Screw Attack block below K09. Provide a return ledge to the chute without taking its one-way exit. |
+| K08 | Kraid | 2×2 | Arena east of the save. Beam-accessible weak point. Victory gives Space Jump and opens the east door to K09. |
+| K09 | Service Chute | 1×1 | Space Jump opens a one-way outlet into B07. Keep the west route through cleared K08 for returning to the cache. |
+| K10 | Space Jump Cache | 1×1 | Tank #4 behind a separate Space Jump block below K09. Provide a return ledge to the chute without taking its one-way exit. |
 
 ## Norfair
 
@@ -205,7 +212,7 @@ flowchart TD
     N05 --- N06
     N06 --- N07
     N07 --- N08
-    N04 ---|"Screw Attack"| N06
+    N04 ---|"Space Jump"| N06
     N05 --- N10
     N10 -->|"One way"| N04
     N08 ---|"Ridley defeated"| N09
@@ -218,7 +225,7 @@ Footprints are width × height in play windows. Cross-zone links appear in the r
 | N01 | Norfair Entrance | 1×1 | Missile door from B06 at the upper west edge. Keep it open in both directions once shot. Descend to N02. |
 | N02 | Lava Crossing | 2×1 | Wide lava lane with a safe midpoint shelf and a visible landing. Lower outlet goes to N03. |
 | N03 | Lower Shaft | 1×3 | Base-jump ledges lead to Energy Tank #2 on a side shelf. N02 above, east exit to N04 at the lower landing. |
-| N04 | Missile Ledge | 2×1 | Auto-collect tank #5 before the route splits. East to N05 or high Screw Attack bypass to N06. The return drop from N10 lands here. |
+| N04 | Missile Ledge | 2×1 | Auto-collect tank #5 before the route splits. East to N05 or high Space Jump bypass to N06. The return drop from N10 lands here. |
 | N05 | Hot Corridor | 2×2 | Bolt Pirate guards the lower east lane. Climb to N06 or take a smaller overhead route west to N10. Both climbs work with the base jump. |
 | N06 | Upper Cache | 1×1 | Auto-collect tank #6 after the main climb and bypass merge. South to N05, east to N07, and back across the opened bypass to N04. |
 | N07 | Ridley Save | 1×1 | Save and refill at the upper east landing. Descend to Ridley. The path remains open back from the arena. |
@@ -260,7 +267,7 @@ The progression review checked both boss orders and a clear with all eight missi
 
 ### Ability gates
 
-Grant Morph Ball in B03 before B04. Grant Bombs in K03 before the first bomb floor. Both B06 branch doors take one missile hit and then stay open in both directions. Kraid’s weak point works with the Power Beam. Boss victories award Screw Attack or Ice Missiles in the same state update that opens their exits.
+Grant Morph Ball in the B04 shrine before the ball tunnels at the bottom of B03. Grant Bombs in K03 before the first bomb floor. Both B06 branch doors take one missile hit and then stay open in both directions. Kraid’s weak point works with the Power Beam. Boss victories award Space Jump or Ice Missiles in the same state update that opens their exits.
 
 Require both boss clears at the Tourian gate. Kraid’s shortcut enters B07 above the locked gate, and Ridley’s lift enters B05. Keep both boss arenas traversable on a return trip so their shortcuts and side tanks remain reachable.
 
@@ -276,7 +283,7 @@ Keep the Start menu available while Samus is rolled up or latched. A player can 
 
 ### Route clues
 
-Give bomb floors a jagged seam, Screw Attack blocks a diagonal slash, and missile doors a double bar. Show each hidden route’s clue from an adjoining room on the main path.
+Give bomb floors a jagged seam, Space Jump blocks a diagonal slash, and missile doors a double bar. Show each hidden route’s clue from an adjoining room on the main path.
 
 ### Geometry checks in the build
 
@@ -304,7 +311,7 @@ Both Pirate variants use the humanoid mantis design. Give Swipe a raised claw fo
 
 ### Kraid
 
-Kraid braces, sends a low volley across the arena, then exposes his belly at the height of a normal jump shot. Start with six beam hits, with enough time for one clean hit in each opening. Missiles can also damage the weak point. Victory grants Screw Attack immediately and opens the exit. The safe return to K07 remains available.
+Kraid braces, sends a low volley across the arena, then exposes his belly at the height of a normal jump shot. Start with six beam hits, with enough time for one clean hit in each opening. Missiles can also damage the weak point. Victory grants Space Jump immediately and opens the exit. The safe return to K07 remains available.
 
 ### Ridley
 
@@ -364,7 +371,7 @@ Keep Samus somewhat behind the camera center in her direction of travel so the p
 
 ### Art and sound
 
-Use irregular bright outlines and sparse rock texture in Brinstar. Give Kraid’s Lair spiked stone, Norfair bright lava edges, and Tourian straight metal lines. Reserve the strongest contrast for characters, hazards, and shots. Treat the new 22-pixel pose as the reference for idle, run, aim, jump, Morph Ball, and Screw Attack art.
+Use irregular bright outlines and sparse rock texture in Brinstar. Give Kraid’s Lair spiked stone, Norfair bright lava edges, and Tourian straight metal lines. Reserve the strongest contrast for characters, hazards, and shots. Treat the new 22-pixel pose as the reference for idle, run, aim, jump, Morph Ball, and Space Jump art.
 
 Use short optional buzzer cues for pickups, doors, damage, saves, and the escape alarm. Pair each important cue with visible feedback.
 
