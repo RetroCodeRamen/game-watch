@@ -65,6 +65,8 @@ const fx GRAV = 32;          // jump peak ≈ 46 px (2 × Samus): a 4-tile ledge
 const fx JUMP_V = 880;
 const fx JUMP2_V = 700;      // double jump in mid-air: ≈ 28 px more (≈ 7 tiles with both)
 const uint8_t AIR_JUMPS = 1;
+const fx SPACE_READY = -200;  // Space Jump: the next jump comes once the last one has nearly topped out
+const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies
 const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
 const fx FALL_MAX = 900;
 const fx SPIN_MIN = 160;     // running this fast when jumping → somersault
@@ -88,7 +90,7 @@ const uint8_t MISSILE_LIFE = 70;
 const uint8_t MAX_SHOTS = 3;
 
 // ---- gear bits ----
-enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SCREW = 8, G_ICE = 16 };
+enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SPACE = 8, G_ICE = 16 };
 
 // ---- enemies ----
 enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER };
@@ -201,7 +203,7 @@ bool isBroken(int16_t tx, int16_t ty) {
 bool solidTile(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   switch (c) {
-    case 'B': return !isBroken(tx, ty);
+    case 'B': case 'X': return !isBroken(tx, ty);
     case '#': case '=': case 'G': case 'h': case 'S': return true;
     case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
     default: return false;
@@ -210,7 +212,7 @@ bool solidTile(int16_t tx, int16_t ty) {
 // Solid, for drawing rock outlines (doors count as wall so rock doesn't outline against them)
 bool rockish(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
-  if (c == 'B') return !isBroken(tx, ty);
+  if (c == 'B' || c == 'X') return !isBroken(tx, ty);
   return c == '#' || c == '=' || c == 'G' || c == 'D' || c == 'R';
 }
 
@@ -242,7 +244,7 @@ void buildWorld() {
           while (ty + n < h && ROOMS[r].tiles[(ty + n) * w + tx] == c) n++;
           doors[doorN++] = {gx, gy, n, c, 0};
         }
-        if (strchr("mlteoMLO", c) && itemN < MAX_ITEM)
+        if (strchr("mlteojMLOJ", c) && itemN < MAX_ITEM)
           items[itemN++] = {gx, gy, (char)tolower(c), (int8_t)(isupper(c) ? -1 : 1)};
         if (c == 'S') { padTX = gx; padTY = gy; }
         if (c == '@') { sbTX = gx; sbTY = gy; }
@@ -409,7 +411,7 @@ void continueGame() { sandbox = false; loadFrom(lastSave); mode = M_PLAY; cardT 
 // The hidden test room: every item, nothing saved; dying puts Samus back at its start.
 void startSandbox() {
   sandbox = true;
-  gear = G_MORPH | G_MISSILE | G_BOMB;
+  gear = G_MORPH | G_MISSILE | G_BOMB | G_SPACE;
   maxEnergy = energy = 10; maxMissiles = missiles = 30; weapon = 0;
   itemsGot = 0; orbOpen = 0; redOpen = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
@@ -564,8 +566,10 @@ void samusStep(int8_t dir, bool firstStep) {
     beep(spin ? 660 : 760, 14);
   }
   // double jump: a fresh press in mid-air (after the ledge grace) always somersaults
-  if (jumpPress && jumpBuf && !ground && !coyote && !ball && !crouch && airJumps) {
-    sVY = -JUMP2_V; airJumps--; jumpBuf = 0;
+  bool spaceOK = (gear & G_SPACE) && spin && sVY > SPACE_READY;
+  if (jumpPress && jumpBuf && !ground && !coyote && !ball && !crouch && (airJumps || spaceOK)) {
+    if (!spaceOK) airJumps--;
+    sVY = -JUMP2_V; jumpBuf = 0;
     spin = true; spinPhase = 0;
     beep(880, 14);
   }
@@ -586,6 +590,11 @@ void samusStep(int8_t dir, bool firstStep) {
   }
   if (ground) { spin = false; airJumps = AIR_JUMPS; }
   if (spin) spinPhase++;
+  if (spin && (gear & G_SPACE)) {           // the Space Jump somersault cuts through slashed rock
+    int16_t x = toPx(sX), y = toPx(sY);
+    for (int16_t ty = (y - BODY_H - 2) >> 3; ty <= (y + 1) >> 3; ty++)
+      for (int16_t tx = (x - BODY_HW - 2) >> 3; tx <= (x + BODY_HW + 1) >> 3; tx++) breakBlock(tx, ty, 'X');
+  }
 
   // animation
   if (ground && !ball && (sVX > 64 || sVX < -64)) { if (++animT >= 7) { animT = 0; runPhase++; } }
@@ -750,17 +759,18 @@ void shotStep(Shot &s) {
 // =====================================================================
 // Major items (new abilities) sit in a Chozo statue's hands inside an orb that has to be shot
 // open, and get the full ceremony. Tanks just float there; missile tanks only get a toast.
-bool majorItem(char k) { return k == 'm' || k == 'l' || k == 'o'; }
+bool majorItem(char k) { return k == 'm' || k == 'l' || k == 'o' || k == 'j'; }
 bool orbClosed(uint8_t i) { return majorItem(items[i].kind) && !((orbOpen >> i) & 1); }
 
 const char *itemName(char k) {
-  switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 'o': return "BOMBS"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
+  switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 'o': return "BOMBS"; case 'j': return "SPACE JUMP"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
 }
 const char *itemHint(char k) {
   switch (k) {
     case 'm': return "MODE TWICE: ROLL UP";
     case 'l': return "MODE+OK: SWITCH";
     case 'o': return "BALL, THEN OK: BOMB";
+    case 'j': return "FLIP, JUMP AGAIN";
     case 't': return "MISSILES +5";
     default: return "ENERGY +2";
   }
@@ -770,6 +780,7 @@ const char *itemHint2(char k) {
     case 'm': return "ROLL INTO TUNNELS";
     case 'l': return "OPENS RED DOORS";
     case 'o': return "BREAKS CRACKED ROCK";
+    case 'j': return "THE FLIP HITS FOES";
     default: return "";
   }
 }
@@ -780,6 +791,7 @@ void collectItem(uint8_t i) {
   if (k == 'm') gear |= G_MORPH;
   if (k == 'l') { gear |= G_MISSILE; maxMissiles += 5; missiles = maxMissiles; }
   if (k == 'o') gear |= G_BOMB;
+  if (k == 'j') gear |= G_SPACE;
   if (k == 't') { maxMissiles += 5; missiles += 5; }
   if (k == 'e') { maxEnergy += 2; energy = maxEnergy; }
   if (k == 't') {                     // small stuff: no stopping the game
@@ -829,8 +841,8 @@ void dropBomb() {
     }
 }
 
-void breakBlock(int16_t tx, int16_t ty) {
-  if (rawTile(tx, ty) != 'B' || isBroken(tx, ty) || brokenN >= MAX_BROKEN) return;
+void breakBlock(int16_t tx, int16_t ty, char kind) {
+  if (rawTile(tx, ty) != kind || isBroken(tx, ty) || brokenN >= MAX_BROKEN) return;
   brokenX[brokenN] = tx; brokenY[brokenN] = ty; brokenN++;
   int16_t x = tx * 8 + 4, y = ty * 8 + 4;
   spark(x, y, -3, -4, 9); spark(x, y, 3, -4, 9); spark(x, y, -2, 2, 7); spark(x, y, 2, 2, 7);
@@ -840,7 +852,7 @@ void explodeBomb(Bomb &b) {
   beep(110, 45);
   burst(b.x, b.y, 10, 5);
   for (int16_t ty = (b.y - BOMB_R) >> 3; ty <= (b.y + BOMB_R) >> 3; ty++)        // cracked rock in reach
-    for (int16_t tx = (b.x - BOMB_R) >> 3; tx <= (b.x + BOMB_R) >> 3; tx++) breakBlock(tx, ty);
+    for (int16_t tx = (b.x - BOMB_R) >> 3; tx <= (b.x + BOMB_R) >> 3; tx++) breakBlock(tx, ty, 'B');
   for (auto &e : en) {                                                          // enemies
     if (!e.live || !overlap(b.x - BOMB_R, b.y - BOMB_R, b.x + BOMB_R, b.y + BOMB_R, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
     e.flash = 6;
@@ -915,6 +927,7 @@ void playStep(uint8_t e) {
   if ((h & B_LEFT) && !(h & B_RIGHT)) dir = -1;
   if ((h & B_RIGHT) && !(h & B_LEFT)) dir = 1;
 
+  bool spinAtStart = spin;                // a flip that lands this frame still hits what it lands on
   for (uint8_t step = 0; step < 2; step++) {
     samusStep(dir, step == 0);
     for (auto &s : shots) if (s.live) shotStep(s);
@@ -937,8 +950,16 @@ void playStep(uint8_t e) {
   // contact damage
   int16_t x0, y0, x1, y1; samusBox(x0, y0, x1, y1);
   int16_t cx = (x0 + x1) / 2;
+  bool spinAttack = (spin || spinAtStart) && (gear & G_SPACE);
   for (auto &en1 : en) {
-    if (!en1.live || invul) continue;
+    if (!en1.live) continue;
+    if (spinAttack && overlap(x0 - 1, y0 - 1, x1 + 1, y1 + 1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
+      if (en1.flash) continue;                // one hit per pass
+      en1.flash = 8; burst(en1.x + en1.w / 2, en1.y + en1.h / 2, 6, 4);
+      if (en1.hp <= SPIN_DMG) killEnemy(en1); else { en1.hp -= SPIN_DMG; beep(600, 10); }
+      continue;
+    }
+    if (invul) continue;
     if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
       hurt(cx < en1.x + en1.w / 2 ? -1 : 1, 1);
   }
@@ -992,6 +1013,8 @@ void drawRock(int16_t tx, int16_t ty, int16_t x, int16_t y, char c) {
     for (int8_t i = 1; i < 7; i += 2) plot(x + i, y + 3);
   } else if (c == 'B') {                 // bomb block: jagged seam
     for (int8_t i = 0; i < 8; i++) plot(x + i, y + 3 + ((i & 2) ? 1 : 0) - ((i & 1) ? 1 : 0));
+  } else if (c == 'X') {                 // Space Jump block: a diagonal slash
+    lineSafe(x + 1, y + 6, x + 6, y + 1); lineSafe(x + 2, y + 6, x + 6, y + 2);
   } else if (c == 'G') {                 // locked hatch
     frameSafe(x, y, 8, 8); lineSafe(x + 1, y + 1, x + 6, y + 6); lineSafe(x + 6, y + 1, x + 1, y + 6);
   } else if (((h >> 12) & 7) == 0) {     // sparse rock grain
@@ -1052,7 +1075,7 @@ void drawWorld() {
     for (int16_t tx = tx0; tx <= tx0 + 16; tx++) {
       char c = rawTile(tx, ty);
       int16_t x = scrX(tx * 8), y = scrY(ty * 8);
-      if (c == '#' || c == '=' || c == 'G' || (c == 'B' && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
+      if (c == '#' || c == '=' || c == 'G' || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
     }
   for (uint8_t i = 0; i < doorN; i++) drawDoor(i);
   drawShip();
@@ -1067,10 +1090,12 @@ static const uint8_t ICON_MTANK[8] = {      // capsule with a little missile
   0b01111110, 0b10000001, 0b10011001, 0b10111101, 0b10011001, 0b10100101, 0b10000001, 0b01111110};
 static const uint8_t ICON_BOMB[8] = {       // round bomb with a lit fuse
   0b00001010, 0b00010000, 0b00111100, 0b01111110, 0b01101111, 0b01111111, 0b01111110, 0b00111100};
+static const uint8_t ICON_SPACE[8] = {      // spread wings
+  0b10000001, 0b11000011, 0b11100111, 0b01111110, 0b00111100, 0b00011000, 0b00100100, 0b01000010};
 static const uint8_t ICON_ETANK[8] = {      // four-cell energy tank
   0b11111111, 0b10011001, 0b10011001, 0b11111111, 0b11111111, 0b10011001, 0b10011001, 0b11111111};
 const uint8_t *itemIcon(char k) {
-  switch (k) { case 'm': return ICON_MORPH; case 'l': return ICON_MISSILE; case 'o': return ICON_BOMB; case 't': return ICON_MTANK; default: return ICON_ETANK; }
+  switch (k) { case 'm': return ICON_MORPH; case 'l': return ICON_MISSILE; case 'o': return ICON_BOMB; case 'j': return ICON_SPACE; case 't': return ICON_MTANK; default: return ICON_ETANK; }
 }
 // icon centred on (cx, cy), each bit drawn as an s×s block
 void drawIcon(char k, int16_t cx, int16_t cy, uint8_t s) {
@@ -1258,7 +1283,16 @@ void drawSamus() {
   if (invul && ((invul >> 2) & 1)) return;
   int16_t x = scrX(toPx(sX)), feet = scrY(toPx(sY));
   if (ball) { drawBall(x, feet); return; }
-  if (spin) { drawSpin(x, feet - 11); return; }
+  if (spin) {
+    drawSpin(x, feet - 11);
+    if (gear & G_SPACE) {                  // Space Jump: a ring of sparks turns round the flip
+      for (uint8_t i = 0; i < 6; i++) {
+        float ang = (i * 60 + spinPhase * 23) * 0.01745f;
+        plot(x + (int16_t)(cosf(ang) * 12), feet - 11 + (int16_t)(sinf(ang) * 12));
+      }
+    }
+    return;
+  }
   const SprFrame *f = &SPR_STAND;
   if (crouch) f = &SPR_CROUCH;
   else if (!ground) f = &SPR_JUMP;

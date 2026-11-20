@@ -12,9 +12,9 @@
 //   'h' ship hull (solid, drawn as the ship)   'S' save pad on the ship (solid)
 //   '@' test-room start (empty)
 // Objects (the tile itself is empty):
-//   'm' Morph Ball  'l' Missile Launcher (+5)  'o' Bombs  — major items: 3 tiles above the floor, in an orb on a
+//   'm' Morph Ball  'l' Missile Launcher (+5)  'o' Bombs  'j' Space Jump  — major items: 3 tiles above the floor, in an orb on a
 //       Chozo statue's palm. Lower case: statue sits left of the orb, facing right; upper case
-//       ('M', 'L', 'O'): statue on the right, facing left. Face it toward where Samus arrives.
+//       ('M', 'L', 'O', 'J'): statue on the right, facing left. Face it toward where Samus arrives.
 //   't' missile tank (+5)  'e' Energy Tank (+2)
 //   'z' Zoomer (crawls round surfaces)  'k' Skree (hangs from the ceiling, dives)
 //   'r' Ripper (flies a lane, beam-proof)
@@ -171,20 +171,21 @@ static const char T_B06[] =
 // Not part of the world: reached from the title (hold Left + Right). Samus starts at '@' with
 // everything. Left to right: the Bombs orb and a cracked-rock plug at ball height; a pit under a
 // cracked-rock lid (with a step to climb out); a wall whose only gap is a ball hole 2 tiles up
-// (bomb jump); an enemy arena with a ledge and a red door.
+// (bomb jump); the Space Jump orb; an enemy arena with a ledge, a wall of slashed rock to flip
+// through, a ledge 8 tiles up (Space Jump, or a perfect double jump) and a red door.
 static const char T_SB[] =
   "################################################################"
   "#              #                      ##            k          #"
-  "#              #                      ##                       #"
-  "#              #                      ##                       #"
-  "#              #                      ##                       #"
-  "#              #                      ##                       #"
-  "#              #                      ##          r            #"
-  "#              #                      ##                       #"
-  "#              #                      ##    ====               #"
-  "#          O   #                                               R"
-  "#              #                      ##                       R"
-  "#  @   z       B           z          ##     z          z      R"
+  "#              #                      ##              X        #"
+  "#              #                      ##              X        #"
+  "#              #                      ##              X  ===== #"
+  "#              #                      ##              X        #"
+  "#              #                      ##          r   X        #"
+  "#              #                      ##              X        #"
+  "#              #                      ##    ====      X        #"
+  "#          O   #                 J                    X        R"
+  "#              #                      ##              X        R"
+  "#  @   z       B           z          ##     z        X z      R"
   "###################BBBBB########################################"
   "###################     ########################################"
   "###################     ########################################"

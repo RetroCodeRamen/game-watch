@@ -21,7 +21,7 @@ char tileAt(int tx, int ty) {
   int w = ROOMS[r].sw * 16;
   return ROOMS[r].tiles[(ty - ROOMS[r].my * 7) * w + tx - ROOMS[r].mx * 16];
 }
-bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'G' || c == 'h' || c == 'S'; }
+bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'X' || c == 'G' || c == 'h' || c == 'S'; }
 bool door(char c) { return c == 'D' || c == 'R'; }
 
 int main() {
@@ -36,7 +36,7 @@ int main() {
     int items = 0, enemies = 0;
     for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
       char c = R.tiles[y * w + x];
-      if (strchr("mlteoMLO", c)) items++;
+      if (strchr("mlteojMLOJ", c)) items++;
       if (strchr("zkr", c)) enemies++;
       if (door(c)) {
         if (x != 0 && x != w - 1) { printf("%s: door not on an edge at %d,%d\n", R.id, x, y); bad++; }

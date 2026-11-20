@@ -174,9 +174,14 @@ RP2040 has headroom, but keep watch games tiny:
 - **Bombs:** in the ball, Select/OK drops a bomb (up to 3 live, ~0.6 s fuse). The blast (11 px) breaks cracked
   rock (`B`, re-forms when you re-enter the room), hurts enemies (2), and pops the ball ~23 px if it's caught in
   it: a bomb jump reaches a ball hole 2 tiles up. Bombs dropped in mid-air stay where they're dropped.
+- **Space Jump:** while somersaulting, Up again once the last jump has nearly topped out gives another
+  (unlimited); a ring of sparks turns round the flip. The flip hurts enemies it touches (4 damage, including the
+  one it lands on) and Samus takes no contact damage while flipping. It breaks slashed rock (`X`, re-forms on
+  room entry). Firing ends the flip.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
-  `@`) with every item, 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
-  map. It has a Bombs orb, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall and an enemy arena.
+  `@`) with every item (Morph Ball, Missiles, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
+  map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an
+  enemy arena with a slashed-rock wall and a high ledge.
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
   Skrees dive and burst into shards, Rippers are beam-proof. Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
