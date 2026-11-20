@@ -37,7 +37,7 @@ int main() {
     for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
       char c = R.tiles[y * w + x];
       if (strchr("mlteojMLOJ", c)) items++;
-      if (strchr("zkr", c)) enemies++;
+      if (strchr("zkrupqn", c)) enemies++;
       if (door(c)) {
         if (x != 0 && x != w - 1) { printf("%s: door not on an edge at %d,%d\n", R.id, x, y); bad++; }
         if (y == 0 || R.tiles[(y - 1) * w + x] != c) {
@@ -85,10 +85,10 @@ int main() {
   // tiles. With the Morph Ball she can roll through 1-tile ducts and drop, but not climb, and stand
   // again where there's room. Blue doors count as open; red doors are rock until she has missiles.
   {
-    static char G[200][120];
-    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) G[x][y] = tileAt(x, y);
+    static char G[260][120];
+    for (int x = 0; x < 260; x++) for (int y = 0; y < 120; y++) G[x][y] = tileAt(x, y);
     bool hasBall = false, redShut = true;
-    auto S = [&](int x, int y) { if (x < 0 || y < 0 || x >= 200 || y >= 120) return true; char c = G[x][y]; return !c || solid(c) || (redShut && c == 'R'); };
+    auto S = [&](int x, int y) { if (x < 0 || y < 0 || x >= 260 || y >= 120) return true; char c = G[x][y]; return !c || solid(c) || (redShut && c == 'R'); };
     auto body = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S(x, y - i)) return false; return true; };
     int padX = 0, padY = 0;
     for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) if (G[x][y] == 'S') { padX = x; padY = y; }

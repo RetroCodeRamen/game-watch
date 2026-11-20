@@ -17,7 +17,8 @@
 //       ('M', 'L', 'O', 'J'): statue on the right, facing left. Face it toward where Samus arrives.
 //   't' missile tank (+5)  'e' Energy Tank (+2)
 //   'z' Zoomer (crawls round surfaces)  'k' Skree (hangs from the ceiling, dives)
-//   'r' Ripper (flies a lane, beam-proof)
+//   'r' Ripper (flies a lane, beam-proof)  'u' turret (on the wall beside it)
+//   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid
 // Doors sit in a room's edge column, 3 tiles tall; the room next door has its own door facing it.
 
 #include <Arduino.h>
@@ -196,6 +197,25 @@ static const char T_SB[] =
   "################################################################"
   "################################################################";
 
+// ---------------------------------------------------------------- SB2 Enemy Test Room 3×2 (hidden)
+// Through the test room's red door. Left to right: a Swipe Pirate on patrol, a low wall, a Bolt
+// Pirate guarding the middle (a ledge above its lane), a turret on the far wall, two Metroids.
+static const char T_SB2[] =
+  "################################################"
+  "#                                              #"
+  "#                                              #"
+  "#                                         n    #"
+  "#                                   n          #"
+  "#                                              #"
+  "#                                              #"
+  "#                                              #"
+  "#                         =====                #"
+  "D                                              #"
+  "D               #                             u#"
+  "D       p       #     q                        #"
+  "################################################"
+  "################################################";
+
 static const RoomDef ROOMS[] = {
   {"B01", "LANDING SITE",   0, 0, 2, 2, 0, T_B01},
   {"B02", "SURFACE PATH",   2, 1, 2, 1, 0, T_B02},
@@ -204,5 +224,6 @@ static const RoomDef ROOMS[] = {
   {"B05", "MISSILE ROOM",   2, 3, 2, 2, 0, T_B05},
   {"B06", "JUNCTION",       4, 4, 2, 2, 0, T_B06},
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
+  {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
 };
 static const uint8_t ROOM_N = sizeof(ROOMS) / sizeof(ROOMS[0]);

@@ -27,7 +27,7 @@ struct Enemy {
   uint16_t frozen;          // Ice Missiles: physics steps left frozen (solid, harmless)
 };
 struct Shot { bool live; bool missile, ice; fx x, y, vx; uint8_t life; };
-struct Bullet { bool live; fx x, y, vx, vy; uint8_t life; };
+struct Bullet { bool live; fx x, y, vx, vy; uint8_t life, kind; };   // kind: 0 shard, 1 turret shot, 2 pirate bolt
 struct Drop { bool live; uint8_t kind; int16_t x, y; uint16_t life; };
 struct Spark { int16_t x, y; int8_t vx, vy; uint8_t life; };
 struct Bomb { bool live; int16_t x, y; uint8_t t; };   // t counts up: fuse, then the blast
@@ -69,6 +69,8 @@ const uint8_t AIR_JUMPS = 1;
 const fx SPACE_READY = -200;  // Space Jump: the next jump comes once the last one has nearly topped out
 const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies
 const int8_t ORB_R = 7, ORB_LIFT = 4;   // Chozo orb radius; drawn this far above the item tile centre
+// Metroid timings (physics steps): pulse before a dive, dive length, energy drain while latched, stun
+const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 50, MET_STUN = 70;
 const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
 const uint16_t THAW_WARN = 90;  // ...and shivers for the last 1.5 s
 const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
@@ -97,7 +99,9 @@ const uint8_t MAX_SHOTS = 3;
 enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SPACE = 8, G_ICE = 16 };
 
 // ---- enemies ----
-enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER };
+enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID };
+// weapon that hit an enemy
+enum : uint8_t { HIT_BEAM, HIT_MISSILE, HIT_BOMB, HIT_SPIN };
 const uint8_t MAX_EN = 12, MAX_BUL = 8, MAX_DROP = 6, MAX_SPARK = 32, MAX_DOOR = 24, MAX_ITEM = 16;
 
 inline int16_t toPx(fx v) { return (int16_t)(v >> 8); }
@@ -331,7 +335,7 @@ void spawnEnemies(uint8_t r) {
   for (int16_t ty = 0; ty < h; ty++)
     for (int16_t tx = 0; tx < w; tx++) {
       char c = ROOMS[r].tiles[ty * w + tx];
-      if (n >= MAX_EN || (c != 'z' && c != 'k' && c != 'r')) continue;
+      if (n >= MAX_EN || !strchr("zkrupqn", c)) continue;
       Enemy &e = en[n++];
       memset(&e, 0, sizeof e);
       e.live = true;
@@ -340,6 +344,15 @@ void spawnEnemies(uint8_t r) {
                       e.nx = 0; e.ny = -1; e.dx = (tx & 1) ? -1 : 1; e.dy = 0; }
       if (c == 'k') { e.kind = EN_SKREE; e.w = 8; e.h = 10; e.hp = 2; e.x = x; e.y = y; }
       if (c == 'r') { e.kind = EN_RIPPER; e.w = 12; e.h = 6; e.hp = 1; e.x = x - 2; e.y = y + 1; e.dx = 1; }
+      if (c == 'u') {             // turret: bolted to the wall beside it, firing away from it
+        bool wallR = solidTile(rTX(r) + tx + 1, rTY(r) + ty);
+        e.kind = EN_TURRET; e.w = 8; e.h = 6; e.hp = 3; e.x = x; e.y = y + 1; e.dx = wallR ? -1 : 1;
+      }
+      if (c == 'p' || c == 'q') { // Space Pirates stand on the floor below the tile, facing into the room
+        e.kind = c == 'p' ? EN_SWIPE : EN_BOLT; e.w = 10; e.h = 23; e.hp = 6;
+        e.x = x - 1; e.y = y + 8 - 23; e.dx = (tx < w / 2) ? 1 : -1;
+      }
+      if (c == 'n') { e.kind = EN_METROID; e.w = 12; e.h = 10; e.hp = 1; e.x = x - 2; e.y = y; }
     }
 }
 
@@ -448,6 +461,14 @@ void hurt(int8_t fromDir, uint8_t dmg) {
   if (energy == 0) { mode = M_DEAD; deadT = 0; cardT = 0; msgT = 0; watch::playTune(TUNE_DEAD, 4); return; }
   invul = 90; hurtLock = 14; spin = false;
   sVX = fromDir * 256; sVY = -360; ground = false;
+}
+
+// A latched Metroid sucks energy: no knock-back, no invulnerability
+void drainEnergy() {
+  if (mode != M_PLAY) return;
+  beep(90, 40);
+  if (energy > 1) { energy--; return; }
+  energy = 0; mode = M_DEAD; deadT = 0; cardT = 0; msgT = 0; watch::playTune(TUNE_DEAD, 4);
 }
 
 // Leave the ball (Action): all the way up if there's room, else to a crouch (nudging a couple of px)
@@ -644,8 +665,26 @@ void zoomerCrawl(Enemy &e) {
   } else e.lost = 0;
 }
 
-void enemyBullet(int16_t x, int16_t y, fx vx, fx vy) {
-  for (auto &b : bul) if (!b.live) { b = {true, toFx(x), toFx(y), vx, vy, 26}; return; }
+int8_t enemyBullet(int16_t x, int16_t y, fx vx, fx vy, uint8_t life = 26, uint8_t kind = 0) {
+  for (uint8_t i = 0; i < MAX_BUL; i++)
+    if (!bul[i].live) { bul[i] = {true, toFx(x), toFx(y), vx, vy, life, kind}; return i; }
+  return -1;
+}
+
+void killEnemy(Enemy &e);
+// Every weapon hit goes through here: Metroids only care about ice (then a shattering missile) and
+// bombs (which knock a latched one off); Rippers shrug off the beam.
+void damageEnemy(Enemy &e, uint8_t dmg, uint8_t how, int8_t fromDir) {
+  if (e.kind == EN_METROID) {
+    if (how == HIT_BOMB) { e.st = 4; e.t = MET_STUN; e.y -= 10; e.x += fromDir * 8; beep(500, 30); }
+    else if (how == HIT_MISSILE) { if (e.st != 3) { e.st = 4; e.t = 20; e.x += fromDir * 6; } beep(1600, 8); }
+    else beep(2000, 6);
+    return;
+  }
+  if (e.kind == EN_RIPPER && how == HIT_BEAM) { beep(2000, 8); return; }
+  e.flash = 6;
+  if (e.hp <= dmg) killEnemy(e);
+  else { e.hp -= dmg; beep(600, 10); }
 }
 
 void killEnemy(Enemy &e) {
@@ -659,6 +698,112 @@ void killEnemy(Enemy &e) {
   if (energy < maxEnergy && roll < 45) kind = 1;
   else if ((gear & G_MISSILE) && missiles < maxMissiles && roll < 75) kind = 2;
   if (kind) for (auto &d : drops) if (!d.live) { d = {true, kind, cx, cy, 300}; break; }
+}
+
+// ---- Turret: waits, flashes its barrel (the tell), fires a shot along the floor of its lane
+const uint8_t TURRET_WAIT = 90, TURRET_TELL = 26;
+void turretStep(Enemy &e, int16_t samX, int16_t samY) {
+  (void)samY;
+  int16_t dx = samX - (e.x + 4);
+  bool ahead = (e.dx > 0 ? dx > 0 : dx < 0) && abs(dx) < 140;
+  if (e.st == 0) { if (ahead || e.t) e.t++; if (e.t >= TURRET_WAIT) { e.st = 1; e.t = 0; } }
+  else if (++e.t >= TURRET_TELL) {
+    enemyBullet(e.dx > 0 ? e.x + 9 : e.x - 2, e.y + 2, e.dx * 400, 0, 220, 1);
+    beep(1500, 10); e.st = 0; e.t = 0;
+  }
+}
+
+// ---- Space Pirates (23 px). Both walk on floors and turn at walls and ledges.
+bool pirateCanStep(const Enemy &e, int8_t d) {
+  int16_t nx = e.x + d;
+  if (enemySolidAt(e, nx, e.y)) return false;
+  int16_t fx = d > 0 ? nx + e.w - 1 : nx;
+  return solidTile(fx >> 3, (e.y + e.h) >> 3);
+}
+bool samusNear(const Enemy &e, int16_t samX, int16_t samY, int16_t rx, int16_t ry) {
+  int16_t cx = e.x + e.w / 2, feet = e.y + e.h;
+  return abs(samX - cx) < rx && abs(samY - feet) < ry;
+}
+// Swipe Pirate: patrols; when Samus is close it turns, raises its hooked claw (the tell), swipes in
+// front of itself, then needs a moment to recover.
+const uint8_t SWIPE_TELL = 22, SWIPE_HIT = 10, SWIPE_REST = 36;
+void swipeStep(Enemy &e, int16_t samX, int16_t samY) {
+  switch (e.st) {
+    case 0:
+      if (samusNear(e, samX, samY, 32, 22)) { e.dx = samX > e.x + e.w / 2 ? 1 : -1; e.st = 1; e.t = SWIPE_TELL; beep(420, 15); break; }
+      if (++e.acc >= 2) { e.acc = 0; if (pirateCanStep(e, e.dx)) e.x += e.dx; else e.dx = -e.dx; }
+      e.lost++;                                   // walk cycle
+      break;
+    case 1: if (!--e.t) { e.st = 2; e.t = SWIPE_HIT; beep(300, 25); } break;
+    case 2: if (!--e.t) { e.st = 3; e.t = SWIPE_REST; } break;
+    default: if (!--e.t) e.st = 0; break;
+  }
+}
+// the swipe's reach: a box in front of the pirate at chest height
+void swipeBox(const Enemy &e, int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) {
+  y0 = e.y + 7; y1 = e.y + 15;
+  if (e.dx > 0) { x0 = e.x + e.w; x1 = x0 + 12; } else { x1 = e.x; x0 = x1 - 12; }
+}
+// Bolt Pirate: guards its spot facing Samus; reaches out (the tell, with a blinking muzzle) and fires
+// one slow bolt at a time, high enough to crouch under and low enough to jump over.
+const uint8_t BOLT_TELL = 26, BOLT_REST = 50;
+void boltStep(Enemy &e, int16_t samX, int16_t samY) {
+  bool seen = samusNear(e, samX, samY, 150, 40);
+  if (seen && e.st == 0) e.dx = samX > e.x + e.w / 2 ? 1 : -1;
+  switch (e.st) {
+    case 0: {
+      bool boltOut = e.lost && bul[e.lost - 1].live && bul[e.lost - 1].kind == 2;
+      if (seen && !boltOut) { e.st = 1; e.t = BOLT_TELL; }
+      break;
+    }
+    case 1:
+      if (!--e.t) {
+        int8_t i = enemyBullet(e.dx > 0 ? e.x + e.w + 7 : e.x - 8, e.y + 5, e.dx * 300, 0, 255, 2);
+        e.lost = i >= 0 ? i + 1 : 0;
+        beep(700, 20); e.st = 2; e.t = BOLT_REST;
+      }
+      break;
+    default: if (!--e.t) e.st = 0; break;
+  }
+}
+
+// ---- Metroid: drifts toward Samus, pulses (the tell), dives; on contact it latches onto her head and
+// drains energy until a bomb blast knocks it off. Ice freezes it, then any missile shatters it.
+void metroidStep(Enemy &e, int16_t samX, int16_t samY) {
+  int16_t cx = e.x + 6, cy = e.y + 5;
+  int16_t tx = samX, ty = samY - bodyH() / 2 - 2;
+  switch (e.st) {
+    case 0: {                                   // drift toward her, bobbing
+      int16_t dx = tx - cx, dy = ty - cy;
+      if (abs(dx) < 120 && abs(dy) < 80) {
+        if (++e.acc >= 3) { e.acc = 0; e.x += sgn(dx); if (abs(dy) > 4) e.y += sgn(dy); }
+        if (abs(dx) < 40 && abs(dy) < 30) { e.st = 1; e.t = MET_TELL; beep(200, 30); }
+      }
+      if ((frameN & 15) == 0) e.y += (frameN & 16) ? 1 : -1;
+      break;
+    }
+    case 1:                                     // pulse, then dive at where she is now
+      if (!--e.t) {
+        int16_t dx = tx - cx, dy = ty - cy; int16_t m = max(abs(dx), abs(dy)); if (m < 1) m = 1;
+        e.nx = (int8_t)(dx * 2 / m); e.ny = (int8_t)(dy * 2 / m);
+        if (!e.nx && !e.ny) e.ny = 1;
+        e.st = 2; e.t = MET_DIVE;
+      }
+      break;
+    case 2:                                     // diving
+      if (!enemySolidAt(e, e.x + e.nx, e.y)) e.x += e.nx;
+      if (!enemySolidAt(e, e.x, e.y + e.ny)) e.y += e.ny;
+      if (!--e.t) { e.st = 4; e.t = MET_STUN / 2; }
+      break;
+    case 3:                                     // latched on: ride her head and drain
+      e.x = samX - 6; e.y = samY - bodyH() - 7;
+      if (++e.t >= MET_DRAIN) { e.t = 0; drainEnergy(); }
+      break;
+    default:                                    // knocked away / recovering: float up, then hunt again
+      if ((e.t & 3) == 0 && !enemySolidAt(e, e.x, e.y - 1)) e.y--;
+      if (!--e.t) e.st = 0;
+      break;
+  }
 }
 
 void enemyStep(Enemy &e) {
@@ -715,6 +860,10 @@ void enemyStep(Enemy &e) {
         else e.x += e.dx;
       }
       break;
+    case EN_TURRET: turretStep(e, samX, samY); break;
+    case EN_SWIPE: swipeStep(e, samX, samY); break;
+    case EN_BOLT: boltStep(e, samX, samY); break;
+    case EN_METROID: metroidStep(e, samX, samY); break;
   }
   // left the room (fell out / crawled through a door): gone
   if (e.x + e.w < roomPx0(curRoom) || e.x > roomPx1(curRoom) || e.y > roomPy1(curRoom)) e.live = false;
@@ -770,18 +919,14 @@ void shotStep(Shot &s) {
       else { beep(2200, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
       return;
     }
-    if (s.ice) {                                   // Ice Missile: freeze it solid (no damage)
+    if (s.ice && !(e.kind == EN_METROID && e.st == 3)) {   // Ice Missile: freeze it solid (no damage)
       e.frozen = FREEZE_T; e.flash = 0; e.acc = 0; e.vy = 0;
+      if (e.kind == EN_METROID) e.st = 0;
       beep(1800, 20); burst(x, y, 6, 3);
       return;
     }
-    if (e.kind == EN_RIPPER && !s.missile) {       // armoured: the beam just tinks off
-      beep(2000, 8); spark(x, y, -sgn(s.vx) * 4, -3, 5); return;
-    }
-    uint8_t dmg = s.missile ? 4 : 1;
-    e.flash = 6;
-    if (e.hp <= dmg) killEnemy(e);
-    else { e.hp -= dmg; beep(600, 10); }
+    if (e.kind == EN_RIPPER && !s.missile) spark(x, y, -sgn(s.vx) * 4, -3, 5);
+    damageEnemy(e, s.missile ? 4 : 1, s.missile ? HIT_MISSILE : HIT_BEAM, sgn(s.vx));
     return;
   }
 }
@@ -890,9 +1035,11 @@ void explodeBomb(Bomb &b) {
     for (int16_t tx = (b.x - BOMB_R) >> 3; tx <= (b.x + BOMB_R) >> 3; tx++) breakBlock(tx, ty, 'B');
   for (auto &e : en) {                                                          // enemies
     if (!e.live || !overlap(b.x - BOMB_R, b.y - BOMB_R, b.x + BOMB_R, b.y + BOMB_R, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
-    e.flash = 6;
-    if (e.hp <= 2) killEnemy(e); else e.hp -= 2;
+    damageEnemy(e, 2, HIT_BOMB, e.x + e.w / 2 > b.x ? 1 : -1);
   }
+  for (auto &e : en)              // a Metroid latched onto Samus gets blasted off by a bomb at her feet
+    if (e.live && e.kind == EN_METROID && e.st == 3 && abs(toPx(sX) - b.x) <= BOMB_R + 4 && abs(toPx(sY) - 3 - b.y) <= BOMB_R + 4)
+      damageEnemy(e, 0, HIT_BOMB, toPx(sX) >= b.x ? 1 : -1);
   if (ball) {                     // bomb jump: the ball's centre within reach pops up, keeping its roll
     int16_t cx = toPx(sX), cy = toPx(sY) - 3;
     if (abs(cx - b.x) <= BOMB_R && abs(cy - b.y) <= BOMB_R) { sVY = -BOMB_JUMP_V; ground = false; coyote = 0; bombPop = true; }
@@ -991,11 +1138,24 @@ void playStep(uint8_t e) {
     if (en1.frozen && !spinAttack) continue;      // frozen: harmless, and solid to stand on
     if (spinAttack && overlap(x0 - 1, y0 - 1, x1 + 1, y1 + 1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
       if (en1.flash) continue;                // one hit per pass
-      en1.flash = 8; burst(en1.x + en1.w / 2, en1.y + en1.h / 2, 6, 4);
-      if (en1.hp <= SPIN_DMG) killEnemy(en1); else { en1.hp -= SPIN_DMG; beep(600, 10); }
+      if (en1.kind == EN_METROID) { if (en1.st != 3) { en1.st = 4; en1.t = 30; en1.y -= 6; } continue; }
+      burst(en1.x + en1.w / 2, en1.y + en1.h / 2, 6, 4);
+      damageEnemy(en1, SPIN_DMG, HIT_SPIN, cx < en1.x + en1.w / 2 ? 1 : -1);
+      en1.flash = 8;
+      continue;
+    }
+    if (en1.kind == EN_METROID) {
+      if (en1.st <= 2 && overlap(x0, y0, x1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
+        bool other = false; for (auto &o : en) if (&o != &en1 && o.live && o.kind == EN_METROID && o.st == 3) other = true;
+        if (!other) { en1.st = 3; en1.t = 0; beep(150, 60); }
+      }
       continue;
     }
     if (invul) continue;
+    if (en1.kind == EN_SWIPE && en1.st == 2) {
+      int16_t a0, b0, a1, b1; swipeBox(en1, a0, b0, a1, b1);
+      if (overlap(x0, y0, x1, y1, a0, b0, a1, b1)) { hurt(en1.dx, 2); continue; }
+    }
     if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
       hurt(cx < en1.x + en1.w / 2 ? -1 : 1, 1);
   }
@@ -1232,11 +1392,41 @@ void drawEnemies() {
   for (const auto &e : en) {
     if (!e.live) continue;
     int16_t x = scrX(e.x), y = scrY(e.y);
-    if (x < -16 || x > 140 || y < 0 || y > 72) continue;
+    if (x < -24 || x > 148 || y < -24 || y > 72) continue;
     if (e.flash & 2) { frameSafe(x - 1, y - 1, e.w + 2, e.h + 2); continue; }
     if (e.frozen) {
       if (e.frozen < THAW_WARN && (frameN & 2)) x += 1;          // shivering: about to thaw
       drawFrozenShell(x, y, e.w, e.h);
+    }
+    if (e.kind == EN_TURRET) {
+      // a plate on the wall, a round body and a barrel that flashes before it fires
+      int16_t px = e.dx > 0 ? x : x + 6;
+      vLineSafe(px, y - 1, 8); vLineSafe(px + 1, y, 6);
+      int16_t bx = e.dx > 0 ? x + 2 : x + 1;
+      fillBoxClipped(bx, y, 5, 6);
+      u8g2.setDrawColor(0); plot(bx + 2, y + 2); u8g2.setDrawColor(1);
+      bool tell = e.st == 1 && (frameN & 1);
+      int16_t mx = e.dx > 0 ? x + 7 : x - 3;
+      hLineSafe(mx, y + 2, tell ? 5 : 4); if (tell) hLineSafe(mx, y + 3, 4);
+      continue;
+    }
+    if (e.kind == EN_SWIPE || e.kind == EN_BOLT) {
+      const SprFrame *f = &SPR_PIRATE;
+      if ((e.kind == EN_SWIPE && e.st == 1)) f = &SPR_PIRATE_RAISE;
+      if ((e.kind == EN_SWIPE && e.st == 2) || (e.kind == EN_BOLT && e.st == 1)) f = &SPR_PIRATE_REACH;
+      int16_t bob = (e.kind == EN_SWIPE && e.st == 0 && (e.lost & 8)) ? 1 : 0;
+      drawFrame(*f, x + e.w / 2, y + e.h + bob, e.dx < 0);
+      if (e.kind == EN_BOLT && e.st == 1 && (frameN & 2)) {     // muzzle glints before the bolt
+        int16_t mx = e.dx > 0 ? x + e.w + 7 : x - 8;
+        plot(mx, y + 4); plot(mx, y + 6); plot(mx - 1, y + 5); plot(mx + 1, y + 5);
+      }
+      continue;
+    }
+    if (e.kind == EN_METROID) {
+      uint8_t ph = e.st == 1 ? (frameN & 1) : (e.st == 3 ? (frameN >> 1) & 1 : (frameN >> 3) & 1);
+      drawFrame(*SPR_METROID[ph], x + 6, y + 10, false);
+      if (e.st == 3 && (frameN & 4)) { plot(x + 2, y + 11); plot(x + 9, y + 11); }   // draining
+      continue;
     }
     if (e.kind == EN_ZOOMER) drawZoomer(e, x, y);
     else if (e.kind == EN_SKREE) {
@@ -1264,7 +1454,11 @@ void drawEnemies() {
   for (const auto &b : bul) {
     if (!b.live) continue;
     int16_t x = scrX(toPx(b.x)), y = scrY(toPx(b.y));
-    plot(x, y); plot(x + 1, y); plot(x, y + 1); plot(x + 1, y + 1);
+    if (b.kind == 2) {                       // pirate bolt: a crackling dash
+      hLineSafe(x - 3, y, 7); plot(x + ((frameN & 2) ? -2 : 2), y - 1); plot(x + ((frameN & 2) ? 1 : -1), y + 1);
+    } else if (b.kind == 1) {                // turret shot: a small diamond
+      plot(x, y - 1); hLineSafe(x - 1, y, 3); plot(x, y + 1);
+    } else { plot(x, y); plot(x + 1, y); plot(x, y + 1); plot(x + 1, y + 1); }
   }
 }
 

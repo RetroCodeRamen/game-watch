@@ -186,8 +186,17 @@ RP2040 has headroom, but keep watch games tiny:
   (`gearOff`) are saved (save version 3). Turning the Morph Ball off inside a tunnel says NEED ROOM.
 - **Chozo statue:** `SPR_CHOZO`, 38×40, traced from NES-style Chozo pixel art (highlight lines + outline); the
   orb (radius 7) sits in its raised hand 24 px above the floor.
+- **Enemies (beyond Zoomer, Skree, Ripper):** every weapon hit goes through `damageEnemy`.
+  - Turret (`u`): bolted to the wall beside it; flashes its barrel, then fires along its lane at shoulder height.
+  - Swipe Pirate (`p`, 23 px): patrols, turns ledges; when Samus is close it raises its claw (tell), swipes in
+    front (2 damage), then rests. 6 hp.
+  - Bolt Pirate (`q`): guards its spot facing Samus; reaches out with a blinking muzzle (tell), fires one slow bolt
+    at a time, high enough to crouch under and low enough to jump. 6 hp.
+  - Metroid (`n`): drifts toward Samus, pulses (tell), dives; on contact it latches onto her head and drains 1
+    energy every ~0.8 s. Only a bomb blast knocks it off. Beam, missiles and the flip don't hurt it (missiles
+    shove it); Ice freezes it, then any missile shatters it.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
-  `@`) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
+  `@`; its red door leads to `SB2`, the enemy test room) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an
   enemy arena with a slashed-rock wall and a high ledge.
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,

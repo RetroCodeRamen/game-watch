@@ -3,6 +3,7 @@
 // script tokens: <frames>:<buttons>  buttons from L R U(action) D(mode/down) F(fire/ok) . = none
 //   e.g. "40:. 1:U 60:R 1:D"  ·  "shot" dumps the current frame  ·  "every:N" dumps every N frames
 //   "warp:<room>:<tx>:<ty>" puts Samus on a tile  ·  "gear:<bits>"  ·  "god" makes her immune
+//   "keep:<kind>" removes every enemy but that kind (4 turret, 5 Swipe, 6 Bolt, 7 Metroid)
 #include "pp.cpp"
 #include <stdio.h>
 #include <string>
@@ -34,6 +35,7 @@ int main(int argc, char **argv) {
     if (tok == "shot") { dump(); continue; }
     if (tok.rfind("en:", 0) == 0) { energy = atoi(tok.c_str() + 3); continue; }
     if (tok == "god") { god = true; continue; }
+    if (tok.rfind("keep:", 0) == 0) { int k = atoi(tok.c_str() + 5); for (auto &e : en) if (e.kind != k) e.live = false; continue; }   // only this enemy kind
     if (tok.rfind("every:", 0) == 0) { every = atoi(tok.c_str() + 6); continue; }
     if (tok.rfind("gear:", 0) == 0) { gear = atoi(tok.c_str() + 5); if (gear & G_MISSILE) { maxMissiles = missiles = 10; } continue; }
     if (tok.rfind("warp:", 0) == 0) { int r, tx, ty; sscanf(tok.c_str(), "warp:%d:%d:%d", &r, &tx, &ty);
