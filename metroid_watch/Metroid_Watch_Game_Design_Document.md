@@ -112,7 +112,7 @@ FIND OUT WHO SENT IT.
 | Power Beam | Starting weapon | Unlimited horizontal shots. Handles common enemies, Kraid’s weak point, and Mother Brain after her glass breaks. |
 | Morph Ball | Brinstar B03 | Tap Menu to cycle into Morph Ball. Roll through low tunnels to reach the launcher. |
 | Missile Launcher | Brinstar B05 with tank #1 | Costs one round per shot. Opens red doors and damages Ridley and Mother Brain’s glass. A hit permanently opens the door in the current save state. |
-| Bombs | Kraid’s Lair K03 | Down in ball form drops a short-fuse bomb. Unlimited with one live bomb at a time. Opens cracked floors and dislodges attached Metroids. |
+| Bombs | Kraid’s Lair K03 | Select/OK in ball form drops a bomb (up to three live, about 0.6 s fuse). The blast breaks cracked rock, hurts enemies, dislodges attached Metroids, and pops the ball about 3 tiles if it is caught in it (a bomb jump reaches a ball hole 2 tiles up). |
 | Space Jump | Kraid defeat at K08 | Unlimited mid-air jumps while somersaulting, and the somersault damages small enemies on contact and breaks marked Space Jump blocks. Hazards and boss attacks still damage Samus. (Replaces Space Jump; the double jump is part of Samus's base suit.) |
 | Ice Missiles | Ridley defeat at N08 | Adds an Ice toggle to the missile slot. One ice hit freezes a Metroid and a second shatters it while frozen. Switching Ice off gives regular missiles. Both types open red doors and work on bosses. |
 

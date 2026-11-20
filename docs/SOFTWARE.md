@@ -171,6 +171,12 @@ RP2040 has headroom, but keep watch games tiny:
 - **Physics (60 Hz):** run 1.5 px/step; jump peak ≈ 45 px (a 4-tile ledge with room to spare), double jump in
   mid-air ≈ 28 px more (always somersaults); release to cut the jump, jump buffer and ledge grace; running jumps
   somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
+- **Bombs:** in the ball, Select/OK drops a bomb (up to 3 live, ~0.6 s fuse). The blast (11 px) breaks cracked
+  rock (`B`, re-forms when you re-enter the room), hurts enemies (2), and pops the ball ~23 px if it's caught in
+  it: a bomb jump reaches a ball hole 2 tiles up. Bombs dropped in mid-air stay where they're dropped.
+- **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
+  `@`) with every item, 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
+  map. It has a Bombs orb, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall and an enemy arena.
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
   Skrees dive and burst into shards, Rippers are beam-proof. Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
