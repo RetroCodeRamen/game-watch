@@ -15,3 +15,4 @@ build/
 
 # Claude Code local settings
 .claude/settings.local.json
+tools/metroid_test/out/
