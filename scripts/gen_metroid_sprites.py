@@ -29,6 +29,7 @@ FRAMES = {
     'RUN1':   (188, 37, None),
     'RUN2':   (233, 37, None),
     'JUMP':   (360, 34, None),
+    'CROUCH': (113, 42, None),
 }
 # The Game Boy ball is a plain white dot at 7 px, so the ball is drawn here: a disc with a dark
 # seam that turns a step per frame, which reads as rolling. (The somersault is the JUMP frame

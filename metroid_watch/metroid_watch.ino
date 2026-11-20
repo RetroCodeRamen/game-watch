@@ -68,6 +68,7 @@ const fx SPIN_MIN = 160;     // running this fast when jumping → somersault
 const uint8_t COYOTE = 6, JUMP_BUF = 8;
 const int8_t BODY_HW = 4, BODY_H = 21;   // standing hitbox 8 × 21 (fits a 3-tile corridor)
 const int8_t BALL_HW = 3, BALL_H = 7;    // ball 6 × 7 (fits a 1-tile duct)
+const int8_t CROUCH_H = 15;              // crouching: low shots; no crouch-walking
 
 // ---- weapons ----
 const fx BEAM_V = 1024;      // 4 px/step
@@ -92,7 +93,7 @@ inline int8_t sgn(fx v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
 // =====================================================================
 // Samus — x is body centre, y is the feet (bottom edge, exclusive)
 fx sX, sY, sVX, sVY;
-bool ground, ball, spin, faceR = true, jumpHeld;
+bool ground, ball, crouch, spin, faceR = true, jumpHeld;
 uint8_t coyote, jumpBuf, fireCD, invul, hurtLock, runPhase, animT, spinPhase;
 uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
 uint32_t playFrames;
@@ -114,7 +115,8 @@ Spark sparks[MAX_SPARK];
 
 // input
 uint8_t prevHeld, inputLock;
-bool chord, downArmed, downUsed;
+bool chord;
+uint8_t downPrev, downHeldT;   // posture before the last DOWN press (0 stand 1 crouch 2 ball), frames held
 uint8_t chordT;
 
 // UI
@@ -198,11 +200,11 @@ bool boxSolid(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
 }
 
 inline int8_t bodyHW() { return ball ? BALL_HW : BODY_HW; }
-inline int8_t bodyH() { return ball ? BALL_H : BODY_H; }
-bool samusFitsAt(int16_t x, int16_t y, bool asBall) {
-  int8_t hw = asBall ? BALL_HW : BODY_HW, h = asBall ? BALL_H : BODY_H;
+inline int8_t bodyH() { return ball ? BALL_H : crouch ? CROUCH_H : BODY_H; }
+bool samusFitsAt(int16_t x, int16_t y, int8_t hw, int8_t h) {
   return !boxSolid(x - hw, y - h, x + hw, y);
 }
+bool canStand() { return samusFitsAt(toPx(sX), toPx(sY), BODY_HW, BODY_H); }
 
 void buildWorld() {
   doorN = 0; itemN = 0;
@@ -348,7 +350,7 @@ void enterRoomNow() {
 
 void placeAtPad() {
   sX = toFx(padTX * TILE + 4) + 128; sY = toFx(padTY * TILE);
-  sVX = sVY = 0; ground = true; ball = false; spin = false; faceR = true;
+  sVX = sVY = 0; ground = true; ball = false; crouch = false; spin = false; faceR = true;
   curRoom = roomAtTile(padTX, padTY);
   pendingRoom = curRoom; enterRoomNow();
 }
@@ -389,27 +391,40 @@ void hurt(int8_t fromDir, uint8_t dmg) {
   sVX = fromDir * 256; sVY = -360; ground = false;
 }
 
+// Leave the ball (Action): all the way up if there's room, else to a crouch (nudging a couple of px)
 void tryStand() {
   int16_t x = toPx(sX), y = toPx(sY);
   static const int8_t OFFS[5] = {0, -2, 2, -4, 4};
-  for (int8_t off : OFFS) {
-    if (samusFitsAt(x + off, y, false)) { sX += toFx(off); ball = false; beep(900, 10); return; }
-  }
+  for (uint8_t pass = 0; pass < 2; pass++)
+    for (int8_t off : OFFS) {
+      if (samusFitsAt(x + off, y, BODY_HW, pass ? CROUCH_H : BODY_H)) {
+        sX += toFx(off); ball = false; crouch = pass == 1; beep(900, 10); return;
+      }
+    }
   beep(120, 25);   // no headroom: stay rolled up
   showMsg("NEED ROOM", 30);
 }
 
+// DOWN acts the moment it's pressed: stand -> crouch -> ball (and saves on the ship's pad).
+// If FIRE joins it for the "mode" chord, handleInput puts the posture back.
 void doDown() {
-  if (onPad()) {
+  downPrev = ball ? 2 : crouch ? 1 : 0;
+  if (onPad() && !crouch) {
     energy = maxEnergy; missiles = maxMissiles;
     writeSave();
     watch::playTune(TUNE_SAVE, 4);
     showMsg("ENERGY RESTORED  SAVED", 70);
     return;
   }
+  if (ball) return;
+  if (ground && !crouch) { crouch = true; spin = false; beep(400, 6); return; }
   if (!(gear & G_MORPH)) { beep(140, 20); return; }
-  if (ball) tryStand();
-  else { ball = true; spin = false; beep(500, 12); }
+  ball = true; crouch = false; spin = false; beep(500, 12);
+}
+
+void undoDown() {
+  if (downPrev == 0) { if (canStand()) { ball = false; crouch = false; } }
+  else if (downPrev == 1) { if (ball && samusFitsAt(toPx(sX), toPx(sY), BODY_HW, CROUCH_H)) { ball = false; crouch = true; } }
 }
 
 void switchWeapon() {
@@ -430,7 +445,7 @@ void fire() {
   int8_t d = faceR ? 1 : -1;
   Shot &s = shots[slot];
   s.live = true; s.missile = mis;
-  s.x = sX + toFx(d * 8); s.y = sY - toFx(15);
+  s.x = sX + toFx(d * 8); s.y = sY - toFx(crouch ? 8 : 15);
   s.vx = d * (mis ? MISSILE_V0 : BEAM_V);
   s.life = mis ? MISSILE_LIFE : BEAM_LIFE;
   fireCD = mis ? 14 : 8;
@@ -458,6 +473,13 @@ bool moveAxis(bool horiz, fx dv) {
 void samusStep(int8_t dir, bool firstStep) {
   (void)firstStep;
   if (hurtLock) { hurtLock--; dir = 0; }
+  if (crouch) {
+    if (!ground && canStand()) crouch = false;          // knocked or dropped off a ledge: stand
+    else if (dir) {                                     // a direction stands her up and runs
+      if (canStand()) crouch = false;
+      else { faceR = dir > 0; dir = 0; }
+    }
+  }
   if (invul) invul--;
   if (fireCD) fireCD--;
 
@@ -485,6 +507,7 @@ void samusStep(int8_t dir, bool firstStep) {
   // jump (not in the ball — no Spring Ball yet)
   if (jumpBuf) jumpBuf--;
   if (ground) coyote = COYOTE; else if (coyote) coyote--;
+  if (jumpBuf && coyote && !ball && crouch) { if (canStand()) crouch = false; else jumpBuf = 0; }
   if (jumpBuf && coyote && !ball) {
     sVY = -JUMP_V; ground = false; coyote = 0; jumpBuf = 0;
     spin = (sVX > SPIN_MIN || sVX < -SPIN_MIN);
@@ -659,7 +682,7 @@ const char *itemName(char k) {
 }
 const char *itemHint(char k) {
   switch (k) {
-    case 'm': return "MODE: ROLL UP";
+    case 'm': return "MODE TWICE: ROLL UP";
     case 'l': return "MODE+OK: SWITCH";
     case 't': return "MISSILES +5";
     default: return "ENERGY +2";
@@ -701,13 +724,16 @@ void checkPickups() {
 void handleInput(uint8_t e) {
   uint8_t h = watch::held();
   if (inputLock) {
-    if (h == 0 || --inputLock == 0) { if (h == 0) inputLock = 0; }
-    prevHeld = h; chord = false; downArmed = false;
-    if (inputLock) return;
+    if (h == 0 || (inputLock != 255 && --inputLock == 0)) inputLock = 0;
+    prevHeld = h; chord = false;
+    return;
   }
+  if (h & B_DOWN) { if (downHeldT < 255) downHeldT++; } else downHeldT = 0;
   // DOWN + FIRE together: tap = beam/missile, hold = pause
   if ((h & B_DOWN) && (h & B_FIRE) && (e & (B_DOWN | B_FIRE)) && !chord) {
-    chord = true; chordT = 0; downUsed = true;
+    chord = true; chordT = 0;
+    if (e & B_FIRE) { if (downHeldT <= 8) undoDown(); }   // Down came first: put the posture back
+    e &= ~B_DOWN;                                         // Fire came first: Down doesn't act
   }
   if (chord) {
     if ((h & B_DOWN) && (h & B_FIRE)) {
@@ -718,15 +744,12 @@ void handleInput(uint8_t e) {
     } else {
       if (chordT < CHORD_HOLD) switchWeapon();
       chord = false;
+      inputLock = 255;                                    // wait for both to be let go
     }
-    e &= ~(B_DOWN | B_FIRE);
+    prevHeld = h;
+    return;
   }
-  // DOWN acts on release so it can still become the chord
-  if (e & B_DOWN) { downArmed = true; downUsed = false; }
-  if ((prevHeld & B_DOWN) && !(h & B_DOWN)) {
-    if (downArmed && !downUsed) doDown();
-    downArmed = false;
-  }
+  if (e & B_DOWN) doDown();
   if ((e & B_FIRE) && !(h & B_DOWN)) fire();
   if (e & B_UP) {
     if (ball) tryStand();
@@ -1014,7 +1037,8 @@ void drawSamus() {
   if (ball) { drawBall(x, feet); return; }
   if (spin) { drawSpin(x, feet - 11); return; }
   const SprFrame *f = &SPR_STAND;
-  if (!ground) f = &SPR_JUMP;
+  if (crouch) f = &SPR_CROUCH;
+  else if (!ground) f = &SPR_JUMP;
   else if (sVX > 64 || sVX < -64) f = SPR_RUN[runPhase % 3];
   drawFrame(*f, x, feet, !faceR);
 }
