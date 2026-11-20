@@ -18,7 +18,7 @@
 //   't' missile tank (+5)  'e' Energy Tank (+2)
 //   'z' Zoomer (crawls round surfaces)  'k' Skree (hangs from the ceiling, dives)
 //   'r' Ripper (flies a lane, beam-proof)  'u' turret (on the wall beside it)
-//   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid  'K' Kraid
+//   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid  'K' Kraid  'Y' Ridley
 // Doors sit in a room's edge column, 3 tiles tall; the room next door has its own door facing it.
 
 #include <Arduino.h>
@@ -224,9 +224,9 @@ static const char T_SB2[] =
 static const char T_SB3[] =
   "################"
   "#              #"
-  "#              #"
-  "#              #"
-  "#              #"
+  "#              D"
+  "#              D"
+  "#              D"
   "#              #"
   "#              #"
   "#              #"
@@ -234,6 +234,25 @@ static const char T_SB3[] =
   "D              #"
   "D#####         #"
   "D#####    K    #"
+  "################"
+  "################";
+
+// ---------------------------------------------------------------- SB4 Boss Test: Ridley 1×2 (hidden)
+// Through the high door on the right of Kraid's arena (Space Jump over him). A flat floor for
+// Ridley's swoops and landings; a small ledge under the door.
+static const char T_SB4[] =
+  "################"
+  "#              #"
+  "D              #"
+  "D              #"
+  "D              #"
+  "#==            #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#       Y      #"
   "################"
   "################";
 
@@ -247,5 +266,6 @@ static const RoomDef ROOMS[] = {
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},
+  {"SB4", "RIDLEY TEST",   16, 0, 1, 2, ZONE_TEST, T_SB4},
 };
 static const uint8_t ROOM_N = sizeof(ROOMS) / sizeof(ROOMS[0]);

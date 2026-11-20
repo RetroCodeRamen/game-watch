@@ -202,6 +202,11 @@ RP2040 has headroom, but keep watch games tiny:
     roaring head (beam 1, missile 2) makes him flinch shut. 6 hp; then he comes apart and grants Space Jump with
     the pickup ceremony. His arena (`SB3`) has a step at mouth height: shoot from it, or hop and shoot from the
     floor.
+  - Ridley (`Y`, sprite from the user's Super Metroid Ridley reference; flying frame = the same art without
+    legs): hovers high, screeches and flaps (tell), swoops across - alternating a high pass (stay low / run
+    under) and a low pass (jump it) - lands on the far side and is open to missiles for ~1 s (beam does
+    nothing), then takes off. 6 missile hits; grants Ice Missiles. Arena `SB4` via the high door in Kraid's;
+    the camera keeps the floor at the bottom so his hover height shows.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
   `@`; its red door leads to `SB2`, the enemy test room) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an

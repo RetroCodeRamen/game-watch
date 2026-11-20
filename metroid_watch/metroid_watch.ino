@@ -71,6 +71,8 @@ const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies
 const int8_t ORB_R = 7, ORB_LIFT = 4;   // Chozo orb radius; drawn this far above the item tile centre
 // Kraid: 6 hits in the roaring mouth (beam 1, missile 2); phases in physics steps
 const uint8_t KRAID_HP = 6, KRAID_IDLE = 70, KRAID_BRACE_T = 30, KRAID_VOLLEY = 48, KRAID_ROAR_T = 80, KRAID_FLINCH = 34, KRAID_DIE = 110;
+// Ridley: 6 missile hits while he's landed; phases in physics steps
+const uint8_t RIDLEY_HP = 6, RID_HOVER = 70, RID_TELL = 26, RID_LAND = 60, RID_RISE = 34, RID_DIE = 120;
 // Metroid timings (physics steps): pulse before a dive, dive length, energy drain while latched, stun
 const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 50, MET_STUN = 70;
 const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
@@ -101,7 +103,7 @@ const uint8_t MAX_SHOTS = 3;
 enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SPACE = 8, G_ICE = 16 };
 
 // ---- enemies ----
-enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID, EN_KRAID };
+enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID, EN_KRAID, EN_RIDLEY };
 inline bool isBoss(uint8_t k) { return k >= EN_KRAID; }
 // weapon that hit an enemy
 enum : uint8_t { HIT_BEAM, HIT_MISSILE, HIT_BOMB, HIT_SPIN };
@@ -338,7 +340,7 @@ void spawnEnemies(uint8_t r) {
   for (int16_t ty = 0; ty < h; ty++)
     for (int16_t tx = 0; tx < w; tx++) {
       char c = ROOMS[r].tiles[ty * w + tx];
-      if (n >= MAX_EN || !strchr("zkrupqnK", c)) continue;
+      if (n >= MAX_EN || !strchr("zkrupqnKY", c)) continue;
       Enemy &e = en[n++];
       memset(&e, 0, sizeof e);
       e.live = true;
@@ -356,6 +358,10 @@ void spawnEnemies(uint8_t r) {
         e.x = x - 1; e.y = y + 8 - 23; e.dx = (tx < w / 2) ? 1 : -1;
       }
       if (c == 'K') { e.kind = EN_KRAID; e.w = 24; e.h = 42; e.hp = KRAID_HP; e.x = x - 4; e.y = y + 8 - 42; e.dx = -1; }
+      if (c == 'Y') {             // Ridley: starts hovering; e.vy holds his arena's floor (px)
+        e.kind = EN_RIDLEY; e.w = 28; e.h = 26; e.hp = RIDLEY_HP; e.vy = y + 8;
+        e.y = (int16_t)e.vy - 54; e.x = x - 14; e.dx = -1;
+      }
       if (c == 'n') { e.kind = EN_METROID; e.w = 12; e.h = 10; e.hp = 1; e.x = x - 2; e.y = y; }
     }
 }
@@ -366,8 +372,12 @@ int16_t roomPx1(uint8_t r) { return (rTX(r) + rTW(r)) * TILE; }
 int16_t roomPy1(uint8_t r) { return (rTY(r) + rTH(r)) * TILE; }
 
 bool bossFloorView(int16_t &ty) {      // a boss in the room: hold the view on its floor
-  for (const auto &e : en)
-    if (e.live && isBoss(e.kind)) { ty = e.y + e.h + 8 - VIEW_H; return true; }
+  for (const auto &e : en) {
+    if (!e.live || !isBoss(e.kind)) continue;
+    if (e.kind == EN_RIDLEY) ty = (int16_t)e.vy + 2 - VIEW_H;   // floor at the bottom: room above for him
+    else ty = e.y + e.h + 8 - VIEW_H;
+    return true;
+  }
   return false;
 }
 void cameraTarget(int16_t &tx, int16_t &ty) {
@@ -844,9 +854,59 @@ void kraidStep(Enemy &e) {
 // Kraid's weak point while he roars, in world px
 void kraidMouth(const Enemy &e, int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) { x0 = e.x - 1; y0 = e.y + 2; x1 = e.x + 16; y1 = e.y + 20; }   // the roaring head: a plain shot from the step, or a hop from the floor
 
+// ---- Ridley: hovers high, screeches and flaps (the tell), then swoops across the arena - a high pass
+// (stay low, or run under it) or a low pass (jump it), alternating - lands on the far side and stays
+// exposed for a moment (only missiles hurt him, only then), and takes off again.
+int16_t ridleyPerchX(int8_t side) {      // body x for a landing on the left (-1) or right (+1)
+  int16_t x0 = roomPx0(curRoom), x1 = roomPx1(curRoom);
+  return side < 0 ? x0 + 16 : x1 - 44;
+}
+void ridleyStep(Enemy &e) {
+  int16_t floorY = (int16_t)e.vy, hoverY = floorY - 54;
+  e.t++;
+  switch (e.st) {
+    case 0: {                                   // hover over the side he'll start from
+      int16_t tx = ridleyPerchX(-e.dx);
+      if (e.x != tx && (e.t & 1)) e.x += sgn(tx - e.x);
+      if (e.y > hoverY) e.y--; else if ((e.t & 15) == 0) e.y += (e.t & 16) ? 1 : -1;
+      if (e.t >= RID_HOVER && abs(e.x - tx) < 3) { e.st = 1; e.t = 0; beep(1600, 60); }
+      break;
+    }
+    case 1: if (e.t >= RID_TELL) { e.st = 2; e.t = 0; e.acc = 0; } break;
+    case 2: {                                   // the swoop
+      bool low = e.lost & 1;
+      int16_t passY = low ? floorY - 28 : floorY - 50;
+      if (e.y < passY) e.y += min<int16_t>(2, passY - e.y);
+      e.acc += 640;                             // 2.5 px/step
+      while (e.acc >= 256) { e.acc -= 256; e.x += e.dx; }
+      int16_t goal = ridleyPerchX(e.dx);
+      if ((e.dx < 0 && e.x <= goal) || (e.dx > 0 && e.x >= goal)) {
+        e.x = goal; e.st = 3; e.t = 0; e.h = 40; e.y = floorY - 40; beep(70, 60);
+      }
+      break;
+    }
+    case 3: if (e.t >= RID_LAND) { e.st = 4; e.t = 0; e.h = 26; e.y = floorY - 36; e.dx = -e.dx; e.lost ^= 1; } break;
+    case 4: if (e.y > hoverY) e.y -= (e.t & 1) ? 2 : 1; if (e.t >= RID_RISE) { e.st = 0; e.t = 0; } break;
+    default:
+      if ((e.t & 5) == 0) burst(e.x + random(e.w), e.y + random(e.h), 6, 4), beep(80 + random(200), 20);
+      if (e.t >= RID_DIE) { e.live = false; burst(e.x + 14, e.y + 20, 16, 7); bossDefeated(EN_RIDLEY); }
+      break;
+  }
+}
+// facing: flying the way he goes; landed, back toward the middle
+bool ridleyFlip(const Enemy &e) { return (e.st == 3 || e.st == 5) ? e.dx < 0 : e.dx > 0; }
+int16_t ridleyArtX(const Enemy &e) { return e.x - 6; }
+// landed, his body (not the tail) is open to missiles - at standing-shot height
+void ridleyHead(const Enemy &e, int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) {
+  int16_t ax = ridleyArtX(e);
+  y0 = e.y + 4; y1 = e.y + 36;
+  if (ridleyFlip(e)) { x0 = ax + 10; x1 = ax + 40; } else { x0 = ax; x1 = ax + 30; }
+}
+
 // A boss is beaten: its reward, with the full pickup ceremony
 void bossDefeated(uint8_t kind) {
   if (kind == EN_KRAID) { gear |= G_SPACE; itemKind = 'j'; }
+  if (kind == EN_RIDLEY) { gear |= G_ICE; itemKind = 'i'; }
   for (auto &b : bul) b.live = false;
   itemT = 0; mode = M_ITEM; watch::playTune(TUNE_MAJOR, 9);
 }
@@ -910,6 +970,7 @@ void enemyStep(Enemy &e) {
     case EN_BOLT: boltStep(e, samX, samY); break;
     case EN_METROID: metroidStep(e, samX, samY); break;
     case EN_KRAID: kraidStep(e); break;
+    case EN_RIDLEY: ridleyStep(e); break;
   }
   // left the room (fell out / crawled through a door): gone
   if (e.x + e.w < roomPx0(curRoom) || e.x > roomPx1(curRoom) || e.y > roomPy1(curRoom)) e.live = false;
@@ -967,6 +1028,14 @@ void shotStep(Shot &s) {
         e.hp = e.hp > dmg ? e.hp - dmg : 0; e.flash = 10; burst(x, y, 10, 5);
         if (!e.hp) { e.st = 5; e.t = 0; for (auto &b : bul) b.live = false; watch::stopTune(); }
         else { e.st = 4; e.t = 0; beep(140, 60); }
+      } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); spark(x, y, -sgn(s.vx) * 3, 3, 5); }
+      return;
+    }
+    if (e.kind == EN_RIDLEY) {                     // missiles, while he's landed, anywhere on his body
+      int16_t a0, b0, a1, b1; ridleyHead(e, a0, b0, a1, b1);
+      if (e.st == 3 && s.missile && overlap(x - 2, y - 2, x + 2, y + 2, a0, b0, a1, b1)) {
+        e.hp = e.hp > 1 ? e.hp - 1 : 0; e.flash = 10; burst(x, y, 10, 5); beep(140, 60);
+        if (!e.hp) { e.st = 5; e.t = 0; e.h = 40; for (auto &b : bul) b.live = false; }
       } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); spark(x, y, -sgn(s.vx) * 3, 3, 5); }
       return;
     }
@@ -1221,7 +1290,7 @@ void playStep(uint8_t e) {
       int16_t a0, b0, a1, b1; swipeBox(en1, a0, b0, a1, b1);
       if (overlap(x0, y0, x1, y1, a0, b0, a1, b1)) { hurt(en1.dx, 2); continue; }
     }
-    if (en1.kind == EN_KRAID && en1.st == 5) continue;
+    if ((en1.kind == EN_KRAID || en1.kind == EN_RIDLEY) && en1.st == 5) continue;
     if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
       hurt(cx < en1.x + en1.w / 2 ? -1 : 1, isBoss(en1.kind) ? 2 : 1);
   }
@@ -1495,6 +1564,15 @@ void drawEnemies() {
       drawFrame(*f, x + shake, y + e.h + (e.st == 1 ? 2 : 0), false);   // bracing: he hunches down
       continue;
     }
+    if (e.kind == EN_RIDLEY) {
+      if (e.st == 5 && (frameN & 2)) continue;
+      bool landed = e.st == 3 || e.st == 5;
+      int16_t ax = scrX(ridleyArtX(e)), wob = e.st == 1 ? ((frameN & 2) ? -2 : 1) : 0;   // frantic flapping
+      bool fl = ridleyFlip(e);                  // mirrored art pivots on its anchor: pass its right edge
+      if (landed) drawFrame(SPR_RIDLEY, fl ? ax + SPR_RIDLEY.w - 1 : ax, y + 40, fl);
+      else drawFrame(SPR_RIDLEY_FLY, fl ? ax + SPR_RIDLEY_FLY.w - 1 : ax, y - 2 + 28 + wob, fl);
+      continue;
+    }
     if (e.kind == EN_METROID) {
       uint8_t ph = e.st == 1 ? (frameN & 1) : (e.st == 3 ? (frameN >> 1) & 1 : (frameN >> 3) & 1);
       drawFrame(*SPR_METROID[ph], x + 6, y + 10, false);
@@ -1643,7 +1721,7 @@ void drawHud() {
   }
   for (const auto &e : en) {                // a boss in the room: its health under the HUD centre
     if (!e.live || !isBoss(e.kind) || modeLabelT) continue;
-    uint8_t mx = KRAID_HP;
+    uint8_t mx = e.kind == EN_RIDLEY ? RIDLEY_HP : KRAID_HP;
     frameSafe(60, 1, 28, 5);
     fillBoxClipped(61, 2, (int16_t)26 * e.hp / mx, 3);
   }
