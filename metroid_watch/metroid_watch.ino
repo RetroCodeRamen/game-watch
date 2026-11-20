@@ -27,7 +27,7 @@ struct Enemy {
   uint16_t frozen;          // Ice Missiles: physics steps left frozen (solid, harmless)
 };
 struct Shot { bool live; bool missile, ice; fx x, y, vx; uint8_t life; };
-struct Bullet { bool live; fx x, y, vx, vy; uint8_t life, kind; };   // kind: 0 shard, 1 turret shot, 2 pirate bolt
+struct Bullet { bool live; fx x, y, vx, vy; uint8_t life, kind; };   // kind: 0 shard, 1 turret shot, 2 pirate bolt, 3 Kraid spike (falls, then skids)
 struct Drop { bool live; uint8_t kind; int16_t x, y; uint16_t life; };
 struct Spark { int16_t x, y; int8_t vx, vy; uint8_t life; };
 struct Bomb { bool live; int16_t x, y; uint8_t t; };   // t counts up: fuse, then the blast
@@ -69,6 +69,8 @@ const uint8_t AIR_JUMPS = 1;
 const fx SPACE_READY = -200;  // Space Jump: the next jump comes once the last one has nearly topped out
 const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies
 const int8_t ORB_R = 7, ORB_LIFT = 4;   // Chozo orb radius; drawn this far above the item tile centre
+// Kraid: 6 hits in the roaring mouth (beam 1, missile 2); phases in physics steps
+const uint8_t KRAID_HP = 6, KRAID_IDLE = 70, KRAID_BRACE_T = 30, KRAID_VOLLEY = 48, KRAID_ROAR_T = 80, KRAID_FLINCH = 34, KRAID_DIE = 110;
 // Metroid timings (physics steps): pulse before a dive, dive length, energy drain while latched, stun
 const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 50, MET_STUN = 70;
 const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
@@ -99,7 +101,8 @@ const uint8_t MAX_SHOTS = 3;
 enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SPACE = 8, G_ICE = 16 };
 
 // ---- enemies ----
-enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID };
+enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID, EN_KRAID };
+inline bool isBoss(uint8_t k) { return k >= EN_KRAID; }
 // weapon that hit an enemy
 enum : uint8_t { HIT_BEAM, HIT_MISSILE, HIT_BOMB, HIT_SPIN };
 const uint8_t MAX_EN = 12, MAX_BUL = 8, MAX_DROP = 6, MAX_SPARK = 32, MAX_DOOR = 24, MAX_ITEM = 16;
@@ -335,7 +338,7 @@ void spawnEnemies(uint8_t r) {
   for (int16_t ty = 0; ty < h; ty++)
     for (int16_t tx = 0; tx < w; tx++) {
       char c = ROOMS[r].tiles[ty * w + tx];
-      if (n >= MAX_EN || !strchr("zkrupqn", c)) continue;
+      if (n >= MAX_EN || !strchr("zkrupqnK", c)) continue;
       Enemy &e = en[n++];
       memset(&e, 0, sizeof e);
       e.live = true;
@@ -352,6 +355,7 @@ void spawnEnemies(uint8_t r) {
         e.kind = c == 'p' ? EN_SWIPE : EN_BOLT; e.w = 10; e.h = 23; e.hp = 6;
         e.x = x - 1; e.y = y + 8 - 23; e.dx = (tx < w / 2) ? 1 : -1;
       }
+      if (c == 'K') { e.kind = EN_KRAID; e.w = 24; e.h = 42; e.hp = KRAID_HP; e.x = x - 4; e.y = y + 8 - 42; e.dx = -1; }
       if (c == 'n') { e.kind = EN_METROID; e.w = 12; e.h = 10; e.hp = 1; e.x = x - 2; e.y = y; }
     }
 }
@@ -361,10 +365,16 @@ int16_t roomPy0(uint8_t r) { return rTY(r) * TILE; }
 int16_t roomPx1(uint8_t r) { return (rTX(r) + rTW(r)) * TILE; }
 int16_t roomPy1(uint8_t r) { return (rTY(r) + rTH(r)) * TILE; }
 
+bool bossFloorView(int16_t &ty) {      // a boss in the room: hold the view on its floor
+  for (const auto &e : en)
+    if (e.live && isBoss(e.kind)) { ty = e.y + e.h + 8 - VIEW_H; return true; }
+  return false;
+}
 void cameraTarget(int16_t &tx, int16_t &ty) {
   int16_t x = toPx(sX), feet = toPx(sY);
   tx = x - 64 + (faceR ? 14 : -14);
   ty = feet - 42;
+  bossFloorView(ty);
 }
 void clampCam() {
   int16_t x0 = roomPx0(curRoom), x1 = roomPx1(curRoom) - 128;
@@ -381,6 +391,8 @@ void updateCamera() {
   // vertical: follow with a dead zone so ordinary jumps don't drag the view
   int16_t feet = toPx(sY), head = feet - bodyH();
   int16_t fy = feet - camY;
+  int16_t by;
+  if (bossFloorView(by) && head - by > -12) { int16_t d = by - camY; camY += d / 4 + sgn(d); clampCam(); return; }
   if (fy > 50) camY += min<int16_t>(fy - 50, 6);
   else if (head - camY < 6) camY -= min<int16_t>(6 - (head - camY), 6);
   else if (ground) { int16_t dy = ty - camY; if (dy) camY += dy / 6 + sgn(dy); }
@@ -675,6 +687,7 @@ void killEnemy(Enemy &e);
 // Every weapon hit goes through here: Metroids only care about ice (then a shattering missile) and
 // bombs (which knock a latched one off); Rippers shrug off the beam.
 void damageEnemy(Enemy &e, uint8_t dmg, uint8_t how, int8_t fromDir) {
+  if (isBoss(e.kind)) { beep(2000, 6); return; }   // bosses take hits only where they're weak
   if (e.kind == EN_METROID) {
     if (how == HIT_BOMB) { e.st = 4; e.t = MET_STUN; e.y -= 10; e.x += fromDir * 8; beep(500, 30); }
     else if (how == HIT_MISSILE) { if (e.st != 3) { e.st = 4; e.t = 20; e.x += fromDir * 6; } beep(1600, 8); }
@@ -806,6 +819,38 @@ void metroidStep(Enemy &e, int16_t samX, int16_t samY) {
   }
 }
 
+// ---- Kraid: waits, braces, fires three belly spikes that arc to the floor and skid across it (jump
+// them), then roars with his mouth open at jump-shot height: one hit there makes him flinch and close
+// up. Six hits and he comes apart.
+void kraidStep(Enemy &e) {
+  e.t++;
+  switch (e.st) {
+    case 0: if (e.t >= KRAID_IDLE) { e.st = 1; e.t = 0; beep(120, 40); } break;
+    case 1: if (e.t >= KRAID_BRACE_T) { e.st = 2; e.t = 0; } break;
+    case 2:
+      // three spikes: low, a high lob (it comes down on the far side), low
+      if (e.t == 4 || e.t == 32) { enemyBullet(e.x + 2, e.y + 28, -480, 160, 255, 3); beep(260, 15); }
+      if (e.t == 18) { enemyBullet(e.x + 4, e.y + 14, -400, -700, 255, 3); beep(200, 20); }
+      if (e.t >= KRAID_VOLLEY) { e.st = 3; e.t = 0; beep(90, 80); }
+      break;
+    case 3: if (e.t >= KRAID_ROAR_T) { e.st = 0; e.t = 0; } break;
+    case 4: if (e.t >= KRAID_FLINCH) { e.st = 0; e.t = KRAID_IDLE / 2; } break;
+    default:                                    // coming apart
+      if ((e.t & 5) == 0) burst(e.x + random(e.w), e.y + random(e.h), 6, 4), beep(80 + random(200), 20);
+      if (e.t >= KRAID_DIE) { e.live = false; burst(e.x + 15, e.y + 20, 16, 7); bossDefeated(EN_KRAID); }
+      break;
+  }
+}
+// Kraid's weak point while he roars, in world px
+void kraidMouth(const Enemy &e, int16_t &x0, int16_t &y0, int16_t &x1, int16_t &y1) { x0 = e.x - 1; y0 = e.y + 2; x1 = e.x + 16; y1 = e.y + 20; }   // the roaring head: a plain shot from the step, or a hop from the floor
+
+// A boss is beaten: its reward, with the full pickup ceremony
+void bossDefeated(uint8_t kind) {
+  if (kind == EN_KRAID) { gear |= G_SPACE; itemKind = 'j'; }
+  for (auto &b : bul) b.live = false;
+  itemT = 0; mode = M_ITEM; watch::playTune(TUNE_MAJOR, 9);
+}
+
 void enemyStep(Enemy &e) {
   if (e.flash) e.flash--;
   if (e.frozen) { e.frozen--; return; }
@@ -864,6 +909,7 @@ void enemyStep(Enemy &e) {
     case EN_SWIPE: swipeStep(e, samX, samY); break;
     case EN_BOLT: boltStep(e, samX, samY); break;
     case EN_METROID: metroidStep(e, samX, samY); break;
+    case EN_KRAID: kraidStep(e); break;
   }
   // left the room (fell out / crawled through a door): gone
   if (e.x + e.w < roomPx0(curRoom) || e.x > roomPx1(curRoom) || e.y > roomPy1(curRoom)) e.live = false;
@@ -914,6 +960,16 @@ void shotStep(Shot &s) {
     if (!e.live) continue;
     if (!overlap(x - 2, y - 2, x + 2, y + 2, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
     s.live = false;
+    if (e.kind == EN_KRAID) {                      // only the open mouth counts; the hide is armour
+      int16_t a0, b0, a1, b1; kraidMouth(e, a0, b0, a1, b1);
+      if (e.st == 3 && overlap(x - 2, y - 2, x + 2, y + 2, a0, b0, a1, b1)) {
+        uint8_t dmg = s.missile ? 2 : 1;
+        e.hp = e.hp > dmg ? e.hp - dmg : 0; e.flash = 10; burst(x, y, 10, 5);
+        if (!e.hp) { e.st = 5; e.t = 0; for (auto &b : bul) b.live = false; watch::stopTune(); }
+        else { e.st = 4; e.t = 0; beep(140, 60); }
+      } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); spark(x, y, -sgn(s.vx) * 3, 3, 5); }
+      return;
+    }
     if (e.frozen) {                                // frozen: a missile shatters it, the beam glances off
       if (s.missile) { burst(e.x + e.w / 2, e.y + e.h / 2, 14, 5); killEnemy(e); }
       else { beep(2200, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
@@ -1115,6 +1171,15 @@ void playStep(uint8_t e) {
     for (auto &s : shots) if (s.live) shotStep(s);
     for (auto &en1 : en) if (en1.live) enemyStep(en1);
     for (auto &b : bul) if (b.live) {
+      if (b.kind == 3) {                        // Kraid's spike: falls, then skids along the floor
+        b.vy += 24; if (b.vy > 700) b.vy = 700;
+        b.x += b.vx;
+        if (!--b.life || solidTile(toPx(b.x) >> 3, toPx(b.y) >> 3)) { b.live = false; continue; }
+        fx ny = b.y + b.vy;
+        if (solidTile(toPx(b.x) >> 3, (toPx(ny) + 2) >> 3)) { b.vy = 0; b.y = toFx(((toPx(ny) + 2) & ~7) - 3); }
+        else b.y = ny;
+        continue;
+      }
       b.x += b.vx; b.y += b.vy;
       if (!--b.life || solidTile(toPx(b.x) >> 3, toPx(b.y) >> 3)) b.live = false;
     }
@@ -1136,7 +1201,7 @@ void playStep(uint8_t e) {
   for (auto &en1 : en) {
     if (!en1.live) continue;
     if (en1.frozen && !spinAttack) continue;      // frozen: harmless, and solid to stand on
-    if (spinAttack && overlap(x0 - 1, y0 - 1, x1 + 1, y1 + 1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
+    if (spinAttack && !isBoss(en1.kind) && overlap(x0 - 1, y0 - 1, x1 + 1, y1 + 1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h)) {
       if (en1.flash) continue;                // one hit per pass
       if (en1.kind == EN_METROID) { if (en1.st != 3) { en1.st = 4; en1.t = 30; en1.y -= 6; } continue; }
       burst(en1.x + en1.w / 2, en1.y + en1.h / 2, 6, 4);
@@ -1156,8 +1221,9 @@ void playStep(uint8_t e) {
       int16_t a0, b0, a1, b1; swipeBox(en1, a0, b0, a1, b1);
       if (overlap(x0, y0, x1, y1, a0, b0, a1, b1)) { hurt(en1.dx, 2); continue; }
     }
+    if (en1.kind == EN_KRAID && en1.st == 5) continue;
     if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
-      hurt(cx < en1.x + en1.w / 2 ? -1 : 1, 1);
+      hurt(cx < en1.x + en1.w / 2 ? -1 : 1, isBoss(en1.kind) ? 2 : 1);
   }
   for (auto &b : bul) {
     if (!b.live || invul) continue;
@@ -1422,6 +1488,13 @@ void drawEnemies() {
       }
       continue;
     }
+    if (e.kind == EN_KRAID) {
+      if (e.st == 5 && (frameN & 2)) continue;  // coming apart: flickers
+      const SprFrame *f = e.st == 3 ? &SPR_KRAID_ROAR : &SPR_KRAID;
+      int16_t shake = (e.st == 4 || e.st == 5) ? ((frameN & 1) ? 1 : -1) : 0;
+      drawFrame(*f, x + shake, y + e.h + (e.st == 1 ? 2 : 0), false);   // bracing: he hunches down
+      continue;
+    }
     if (e.kind == EN_METROID) {
       uint8_t ph = e.st == 1 ? (frameN & 1) : (e.st == 3 ? (frameN >> 1) & 1 : (frameN >> 3) & 1);
       drawFrame(*SPR_METROID[ph], x + 6, y + 10, false);
@@ -1454,7 +1527,9 @@ void drawEnemies() {
   for (const auto &b : bul) {
     if (!b.live) continue;
     int16_t x = scrX(toPx(b.x)), y = scrY(toPx(b.y));
-    if (b.kind == 2) {                       // pirate bolt: a crackling dash
+    if (b.kind == 3) {                       // Kraid's spike: a claw pointing the way it flies
+      hLineSafe(x - 2, y, 5); plot(x - 1, y - 1); plot(x - 1, y + 1); plot(x + 2, y - 1);
+    } else if (b.kind == 2) {                // pirate bolt: a crackling dash
       hLineSafe(x - 3, y, 7); plot(x + ((frameN & 2) ? -2 : 2), y - 1); plot(x + ((frameN & 2) ? 1 : -1), y + 1);
     } else if (b.kind == 1) {                // turret shot: a small diamond
       plot(x, y - 1); hLineSafe(x - 1, y, 3); plot(x, y + 1);
@@ -1565,6 +1640,12 @@ void drawHud() {
     hLineSafe(x + 1, 3, 6); plot(x + 7, 3); plot(x, 2); plot(x, 4); plot(x + 2, 2); plot(x + 2, 4);
     u8g2.setCursor(x + 11, 6); print3(missiles);
     u8g2.setDrawColor(1);
+  }
+  for (const auto &e : en) {                // a boss in the room: its health under the HUD centre
+    if (!e.live || !isBoss(e.kind) || modeLabelT) continue;
+    uint8_t mx = KRAID_HP;
+    frameSafe(60, 1, 28, 5);
+    fillBoxClipped(61, 2, (int16_t)26 * e.hp / mx, 3);
   }
   if (modeLabelT) {
     u8g2.setCursor(64, 6); u8g2.print(!weapon ? F("BEAM") : (eg() & G_ICE) ? F("ICE") : F("MISSILE"));

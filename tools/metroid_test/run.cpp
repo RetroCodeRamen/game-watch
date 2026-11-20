@@ -22,7 +22,7 @@ bool god = false;
 void frame(uint8_t held, uint8_t prev) {
   watch::g_held = held; g_ms += 33;
   if (watch::g_tune > 0) watch::g_tune -= 33;
-  if (god) { invul = 2; energy = maxEnergy; }
+  if (god) { invul = 250; energy = maxEnergy; }
   gameUpdate(held & ~prev);
   u8g2.clearBuffer(); gameDraw();
 }
@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     if (tok.rfind("gear:", 0) == 0) { gear = atoi(tok.c_str() + 5); if (gear & G_MISSILE) { maxMissiles = missiles = 10; } continue; }
     if (tok.rfind("warp:", 0) == 0) { int r, tx, ty; sscanf(tok.c_str(), "warp:%d:%d:%d", &r, &tx, &ty);
       sX = toFx((rTX(r) + tx) * 8 + 4) + 128; sY = toFx((rTY(r) + ty + 1) * 8); sVX = sVY = 0; pendingRoom = r; enterRoomNow(); continue; }
-    if (tok == "enemies") { int n = 0, f = 0; for (auto &e : en) { n += e.live; f += e.live && e.frozen; } printf("t=%d live enemies %d frozen %d\n", fcount, n, f); continue; }
+    if (tok == "enemies") { int n = 0, f = 0; for (auto &e : en) { n += e.live; f += e.live && e.frozen; } printf("t=%d live enemies %d frozen %d", fcount, n, f); for (auto &e : en) if (e.live && isBoss(e.kind)) printf(" boss hp=%d st=%d t=%d x=%d y=%d", e.hp, e.st, e.t, e.x, e.y); printf("\n"); continue; }
     if (tok == "state") { printf("t=%d mode=%d room=%s x=%d y=%d vx=%d vy=%d gnd=%d ball=%d spin=%d crouch=%d wpn=%d en=%d/%d ms=%d gear=%d orb=%x\n", fcount, mode,
         ROOMS[curRoom].id, toPx(sX), toPx(sY), sVX, sVY, ground, ball, spin, crouch, weapon, energy, maxEnergy, missiles, gear, orbOpen); continue; }
     int n = atoi(tok.c_str()); auto c = tok.find(':'); std::string b = c == std::string::npos ? "." : tok.substr(c + 1);

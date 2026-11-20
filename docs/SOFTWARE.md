@@ -195,6 +195,13 @@ RP2040 has headroom, but keep watch games tiny:
   - Metroid (`n`): drifts toward Samus, pulses (tell), dives; on contact it latches onto her head and drains 1
     energy every ~0.8 s. Only a bomb blast knocks it off. Beam, missiles and the flip don't hurt it (missiles
     shove it); Ice freezes it, then any missile shatters it.
+- **Bosses:** `isBoss()` kinds take hits only on their weak point (bombs and the flip do nothing; touching
+  them costs 2); a health bar shows under the HUD; while one is alive the camera holds on its floor.
+  - Kraid (`K`, sprite from the Super Metroid Mini-Kraid sheet): waits, hunches (tell), fires three belly spikes
+    (low, a high lob, low; they fall and skid along the floor), then roars with his jaw open. A hit in the
+    roaring head (beam 1, missile 2) makes him flinch shut. 6 hp; then he comes apart and grants Space Jump with
+    the pickup ceremony. His arena (`SB3`) has a step at mouth height: shoot from it, or hop and shoot from the
+    floor.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
   `@`; its red door leads to `SB2`, the enemy test room) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an
