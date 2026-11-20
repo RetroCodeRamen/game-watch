@@ -158,8 +158,13 @@ RP2040 has headroom, but keep watch games tiny:
   Rooms touch edge to edge, so leaving a room's edge puts Samus in whichever room is there (fade, camera
   snaps to the new room's bounds). Doors are 3-tile columns on room edges: blue opens to any shot, red needs a
   missile and then stays open. Tile/object legend is at the top of the file.
-- **Current build:** Brinstar B01–B06 (ship → Morph Ball → low duct → Missile Launcher → junction). The
-  junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Current build:** Brinstar B01–B06 (ship → Morph Ball shrine → Missile Launcher → junction; B04 was
+  folded into the 2-screen shrine). The junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Items:** each kind has its own 8×8 icon (`ICON_*`). Major items (Morph Ball, Missiles) sit in a seated
+  Chozo statue's hands inside an orb that must be shot open; taking one flashes the screen, pulls rings of
+  light in to Samus, plays the long fanfare and opens a panel with the icon at 3×. Energy tanks get the panel
+  only; missile tanks just a toast and a jingle. Design rule: each major item is the key to its own escape —
+  the shrine is a one-way drop and the only exit is a ball tunnel.
 - **Sprites:** Samus comes from the Metroid II (Game Boy) sheet in `metroid_watch/`, converted by `python3 scripts/gen_metroid_sprites.py` (writes `metroid_gb_sprites.h`; `--preview` writes `assets/metroid_gb_preview.png`): stand, 3-frame run, knees-up jump (turned in quarter steps for the running somersault); the 7 px morph ball is hand-drawn in the script. `assets/metroid_sprite_compare.png` is the GB vs SNES comparison.
 - **Physics (60 Hz):** run 1.5 px/step, jump peak ≈ 36 px (clears a 4-tile ledge), release to cut the jump,
   jump buffer and ledge grace; running jumps somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
@@ -169,5 +174,6 @@ RP2040 has headroom, but keep watch games tiny:
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
 - Host tests: `tools/metroid_test/build.sh`, then `out/check` (room sizes, overlaps, openings line up,
-  door shape) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  door shape, no 2-tile pinch points, Morph Ball reachable standing, and every major item needed to escape
+  from itself) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
   see the header of `run.cpp`).

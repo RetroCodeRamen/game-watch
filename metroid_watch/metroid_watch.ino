@@ -103,6 +103,7 @@ Door doors[MAX_DOOR]; uint8_t doorN;
 Item items[MAX_ITEM]; uint8_t itemN;
 uint64_t itemsGot, visited;
 uint32_t redOpen;
+uint16_t orbOpen;                 // major items: the Chozo orb has been shot open (not saved)
 int8_t curRoom = 0;
 int16_t padTX = 0, padTY = 0;     // the ship's save pad
 int16_t camX, camY;
@@ -254,6 +255,10 @@ void showMsg(const char *t, uint8_t frames) { msgText = t; msgT = frames; }
 
 static const watch::Note TUNE_ITEM[] = {
   {523, 120}, {659, 120}, {784, 120}, {1047, 260}, {0, 60}, {988, 120}, {1047, 360}};
+static const watch::Note TUNE_MAJOR[] = {     // the big one: slow rise, pause, resolve
+  {392, 160}, {523, 160}, {659, 160}, {784, 320}, {0, 90}, {659, 130}, {784, 130}, {988, 130}, {1047, 600}};
+static const watch::Note TUNE_TANK[] = {{1047, 60}, {1319, 60}, {1568, 140}};
+static const watch::Note TUNE_ORB[] = {{1568, 40}, {1175, 40}, {784, 90}};
 static const watch::Note TUNE_SAVE[] = {{784, 90}, {988, 90}, {1175, 90}, {1568, 240}};
 static const watch::Note TUNE_TITLE[] = {
   {330, 300}, {0, 60}, {294, 300}, {0, 60}, {262, 300}, {0, 60}, {247, 600}};
@@ -269,7 +274,7 @@ uint16_t saveSum(const SaveData &s) {
 }
 void captureSave(SaveData &s) {
   memset(&s, 0, sizeof s);
-  s.magic = SAVE_MAGIC; s.ver = 1; s.gear = gear; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.magic = SAVE_MAGIC; s.ver = 2; s.gear = gear; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
   s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
   s.sum = saveSum(s);
 }
@@ -280,7 +285,7 @@ void writeSave() {
 }
 bool readSave() {
   SaveData s; EEPROM.get(0, s);
-  if (s.magic != SAVE_MAGIC || s.ver != 1 || s.sum != saveSum(s)) return false;
+  if (s.magic != SAVE_MAGIC || s.ver != 2 || s.sum != saveSum(s)) return false;
   lastSave = s; return true;
 }
 
@@ -360,6 +365,7 @@ void loadFrom(const SaveData &s) {
   itemsGot = s.items; visited = s.visited; redOpen = s.redDoors; playFrames = s.frames;
   energy = maxEnergy; missiles = maxMissiles; weapon = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
+  orbOpen = 0;
   invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
   placeAtPad();
 }
@@ -659,6 +665,15 @@ void shotStep(Shot &s) {
     spark(x - sgn(s.vx) * 2, y, -sgn(s.vx) * 3, -2, 5); spark(x - sgn(s.vx) * 2, y, -sgn(s.vx) * 3, 2, 5);
     s.live = false; return;
   }
+  for (uint8_t i = 0; i < itemN; i++) {       // a shot cracks a Chozo orb open
+    if (((itemsGot >> i) & 1) || !orbClosed(i)) continue;
+    int16_t ox = items[i].tx * TILE + 4, oy = items[i].ty * TILE + 4;
+    if (!overlap(x - 2, y - 2, x + 2, y + 2, ox - 5, oy - 5, ox + 5, oy + 5)) continue;
+    orbOpen |= 1 << i; s.live = false;
+    burst(ox, oy, 14, 6); burst(ox, oy, 8, 3);
+    watch::playTune(TUNE_ORB, 3);
+    return;
+  }
   for (auto &e : en) {
     if (!e.live) continue;
     if (!overlap(x - 2, y - 2, x + 2, y + 2, e.x, e.y, e.x + e.w, e.y + e.h)) continue;
@@ -677,6 +692,11 @@ void shotStep(Shot &s) {
 // =====================================================================
 // Pickups
 // =====================================================================
+// Major items (new abilities) sit in a Chozo statue's hands inside an orb that has to be shot
+// open, and get the full ceremony. Tanks just float there; missile tanks only get a toast.
+bool majorItem(char k) { return k == 'm' || k == 'l'; }
+bool orbClosed(uint8_t i) { return majorItem(items[i].kind) && !((orbOpen >> i) & 1); }
+
 const char *itemName(char k) {
   switch (k) { case 'm': return "MORPH BALL"; case 'l': return "MISSILES"; case 't': return "MISSILE TANK"; default: return "ENERGY TANK"; }
 }
@@ -688,6 +708,13 @@ const char *itemHint(char k) {
     default: return "ENERGY +2";
   }
 }
+const char *itemHint2(char k) {
+  switch (k) {
+    case 'm': return "ROLL INTO TUNNELS";
+    case 'l': return "OPENS RED DOORS";
+    default: return "";
+  }
+}
 
 void collectItem(uint8_t i) {
   itemsGot |= 1ULL << i;
@@ -696,8 +723,16 @@ void collectItem(uint8_t i) {
   if (k == 'l') { gear |= G_MISSILE; maxMissiles += 5; missiles = maxMissiles; }
   if (k == 't') { maxMissiles += 5; missiles += 5; }
   if (k == 'e') { maxEnergy += 2; energy = maxEnergy; }
+  if (k == 't') {                     // small stuff: no stopping the game
+    int16_t x = items[i].tx * TILE + 4, y = items[i].ty * TILE + 4;
+    burst(x, y, 8, 4);
+    showMsg("MISSILE TANK  +5", 50);
+    watch::playTune(TUNE_TANK, 3);
+    return;
+  }
   itemKind = k; itemT = 0; mode = M_ITEM;
-  watch::playTune(TUNE_ITEM, 7);
+  if (majorItem(k)) watch::playTune(TUNE_MAJOR, 9);
+  else watch::playTune(TUNE_ITEM, 7);
 }
 
 void checkPickups() {
@@ -705,7 +740,9 @@ void checkPickups() {
   for (uint8_t i = 0; i < itemN; i++) {
     if ((itemsGot >> i) & 1) continue;
     int16_t ix = items[i].tx * TILE, iy = items[i].ty * TILE;
-    if (overlap(x0, y0, x1, y1, ix + 1, iy + 1, ix + 7, iy + 7)) { collectItem(i); return; }
+    if (!overlap(x0, y0, x1, y1, ix + 1, iy + 1, ix + 7, iy + 7)) continue;
+    if (orbClosed(i)) { if (!msgT) showMsg("SHOOT THE ORB", 40); continue; }
+    collectItem(i); return;
   }
   for (auto &d : drops) {
     if (!d.live) continue;
@@ -914,15 +951,97 @@ void drawWorld() {
   drawShip();
 }
 
+// 8×8 item icons, drawn at 1× in the world and blown up on the pickup screen
+static const uint8_t ICON_MORPH[8] = {      // ball with a glowing band
+  0b00111100, 0b01111110, 0b11000011, 0b10111101, 0b10111101, 0b11000011, 0b01111110, 0b00111100};
+static const uint8_t ICON_MISSILE[8] = {    // missile, nose up
+  0b00011000, 0b00111100, 0b00100100, 0b00111100, 0b00111100, 0b01111110, 0b11011011, 0b10011001};
+static const uint8_t ICON_MTANK[8] = {      // capsule with a little missile
+  0b01111110, 0b10000001, 0b10011001, 0b10111101, 0b10011001, 0b10100101, 0b10000001, 0b01111110};
+static const uint8_t ICON_ETANK[8] = {      // four-cell energy tank
+  0b11111111, 0b10011001, 0b10011001, 0b11111111, 0b11111111, 0b10011001, 0b10011001, 0b11111111};
+const uint8_t *itemIcon(char k) {
+  switch (k) { case 'm': return ICON_MORPH; case 'l': return ICON_MISSILE; case 't': return ICON_MTANK; default: return ICON_ETANK; }
+}
+// icon centred on (cx, cy), each bit drawn as an s×s block
+void drawIcon(char k, int16_t cx, int16_t cy, uint8_t s) {
+  const uint8_t *b = itemIcon(k);
+  int16_t x0 = cx - 4 * s, y0 = cy - 4 * s;
+  for (uint8_t r = 0; r < 8; r++)
+    for (uint8_t c = 0; c < 8; c++)
+      if (b[r] & (0x80 >> c)) {
+        if (s == 1) plot(x0 + c, y0 + r);
+        else fillBoxClipped(x0 + c * s, y0 + r * s, s, s);
+      }
+}
+
+// Seated Chozo statue holding an orb at (ox, oy); dir +1 = statue sits left of the orb, facing right.
+// Its pedestal stands on the floor 12 px below the orb centre.
+void drawChozo(int16_t ox, int16_t oy, int8_t dir) {
+  int16_t F = oy + 12;
+  auto X = [&](int16_t d) { return (int16_t)(ox - dir * d); };   // d = distance behind the orb
+  auto span = [&](int16_t d0, int16_t d1, int16_t y) { int16_t a = X(d0), b = X(d1); hLineSafe(min(a, b), y, abs(a - b) + 1); };
+  // pedestal with carved dots
+  frameSafe(min(X(15), X(2)), F - 4, 14, 4);
+  for (int16_t d = 13; d >= 4; d -= 3) plot(X(d), F - 2);
+  // thigh and knee
+  span(13, 3, F - 7); span(13, 3, F - 6);
+  // torso: outline with a dithered fill
+  frameSafe(min(X(13), X(8)), F - 22, 6, 16);
+  for (int16_t y = F - 20; y < F - 8; y += 2) plot(X(10 + ((y >> 1) & 1)), y);
+  // head, eye and beak pointing at the orb
+  circleSafe(X(10), F - 25, 3);
+  plot(X(9), F - 26);
+  lineSafe(X(7), F - 26, X(4), F - 24); lineSafe(X(7), F - 24, X(4), F - 24);
+  // crest
+  lineSafe(X(12), F - 28, X(15), F - 30);
+  // arm: shoulder, elbow, cupped hands under the orb
+  lineSafe(X(8), F - 19, X(5), F - 12); lineSafe(X(5), F - 12, X(3), F - 7);
+  span(2, -5, F - 6); plot(X(-5), F - 7); plot(X(-6), F - 8);
+}
+
 void drawItems() {
   for (uint8_t i = 0; i < itemN; i++) {
-    if ((itemsGot >> i) & 1) continue;
-    int16_t x = scrX(items[i].tx * 8 + 4), y = scrY(items[i].ty * 8 + 4);
-    if (x < -8 || x > 136 || y < 0 || y > 72) continue;
-    circleSafe(x, y, 4);
-    if (frameN & 4) circleSafe(x, y, 2);
-    else plot(x, y);
-    plot(x, y - 6 - ((frameN >> 2) & 1));   // glint
+    char k = items[i].kind;
+    int16_t wx = items[i].tx * 8 + 4;
+    int16_t x = scrX(wx), y = scrY(items[i].ty * 8 + 4);
+    if (x < -24 || x > 152 || y < -8 || y > 80) continue;
+    bool got = (itemsGot >> i) & 1;
+    if (majorItem(k)) {
+      // the statue faces the middle of its room, and stays once its gift is taken
+      int8_t r = roomAtTile(items[i].tx, items[i].ty);
+      int16_t mid = (rTX(r) + rTW(r) / 2) * 8;
+      drawChozo(x, y, wx < mid ? 1 : -1);
+    }
+    if (got) continue;
+    if (majorItem(k)) {
+      if (orbClosed(i)) {
+        // Chozo orb: ring with a dithered core and a turning glint
+        circleSafe(x, y, 5);
+        for (int8_t dy = -3; dy <= 3; dy++)
+          for (int8_t dx = -3; dx <= 3; dx++)
+            if (dx * dx + dy * dy <= 10 && ((dx + dy + (frameN >> 3)) & 1)) plot(x + dx, y + dy);
+        uint8_t g = (frameN >> 2) & 7;
+        static const int8_t GX[8] = {0, 2, 3, 2, 0, -2, -3, -2}, GY[8] = {-3, -2, 0, 2, 3, 2, 0, -2};
+        u8g2.setDrawColor(0); plot(x + GX[g], y + GY[g]); u8g2.setDrawColor(1);
+      } else {
+        // revealed: the item hovers and shines
+        int16_t by = y - ((frameN >> 3) & 1);
+        drawIcon(k, x, by, 1);
+        uint8_t p = (frameN >> 1) & 7;
+        if (p < 4) {
+          int8_t L = 6 + p;
+          plot(x, by - L); plot(x, by + L); plot(x - L, by); plot(x + L, by);
+          plot(x - L + 2, by - L + 2); plot(x + L - 2, by - L + 2);
+        }
+      }
+    } else {
+      // tanks: bob, with an energy tank blinking its frame
+      int16_t by = y - ((frameN >> 3) & 1);
+      drawIcon(k, x, by, 1);
+      if (k == 'e' && (frameN & 8)) frameSafe(x - 5, by - 5, 10, 10);
+      if (k == 't' && ((frameN >> 2) & 7) == 0) plot(x + 4, by - 5);
+    }
   }
   for (auto &d : drops) {
     if (!d.live || (d.life < 60 && (frameN & 2))) continue;
@@ -1100,17 +1219,56 @@ void drawPlay() {
 }
 
 // ---------------------------------------------------------------- item fanfare
+// Major items: the screen flashes, light pulls in to Samus, then a panel with the item drawn big.
+// Energy tanks skip straight to the panel.
+const uint8_t CEREMONY_T = 28;
 void itemStep(uint8_t e) {
-  itemT++;
-  if (itemT > 30 && (e & (B_UP | B_FIRE | B_DOWN)) && !watch::tunePlaying()) { mode = M_PLAY; inputLock = 4; }
-  if (itemT > 150) { mode = M_PLAY; inputLock = 4; }
+  if (itemT < 255) itemT++;
+  bool major = majorItem(itemKind);
+  uint8_t minT = major ? CEREMONY_T + 30 : 30;
+  if (itemT > minT && (e & (B_UP | B_FIRE | B_DOWN)) && !watch::tunePlaying()) { mode = M_PLAY; inputLock = 4; }
+  if (itemT > (major ? 220 : 150)) { mode = M_PLAY; inputLock = 4; }
 }
 void drawItemScreen() {
+  bool major = majorItem(itemKind);
+  int16_t sx = scrX(toPx(sX)), sy = scrY(toPx(sY)) - (ball ? 4 : 11);
+  if (major && itemT < CEREMONY_T) {
+    // three white flashes with Samus in black, then rings of light closing in on her
+    if (itemT < 12 && (itemT & 3) < 2) {
+      u8g2.setDrawColor(1); u8g2.drawBox(0, 0, 128, 64);
+      u8g2.setDrawColor(0); drawSamus(); u8g2.setDrawColor(1);
+      return;
+    }
+    drawPlay();
+    int16_t R = (CEREMONY_T - itemT) * 5;
+    for (uint8_t a = 0; a < 12; a++) {
+      float ang = a * 0.5236f + itemT * 0.08f;
+      int16_t c = (int16_t)(cosf(ang) * 64), s = (int16_t)(sinf(ang) * 64);
+      lineSafe(sx + c * R / 64, sy + s * R / 64, sx + c * (R + 8) / 64, sy + s * (R + 8) / 64);
+    }
+    if (R > 4) circleSafe(sx, sy, R);
+    return;
+  }
   drawPlay();
-  u8g2.setDrawColor(0); u8g2.drawBox(8, 18, 112, 32); u8g2.setDrawColor(1);
-  frameSafe(8, 18, 112, 32); frameSafe(10, 20, 108, 28);
-  u8g2.setFont(u8g2_font_6x10_tr); drawCenteredText(itemName(itemKind), 32);
-  u8g2.setFont(u8g2_font_4x6_tr); drawCenteredText(itemHint(itemKind), 43);
+  uint8_t t = major ? itemT - CEREMONY_T : itemT;
+  // the panel opens from the middle
+  int16_t h = t < 8 ? 6 + t * 5 : 46;
+  int16_t top = 36 - h / 2;
+  u8g2.setDrawColor(0); u8g2.drawBox(4, top, 120, h); u8g2.setDrawColor(1);
+  frameSafe(4, top, 120, h); frameSafe(6, top + 2, 116, h - 4);
+  if (t < 8) return;
+  // big icon in a frame on the left, with a glint running round it
+  frameSafe(9, 21, 30, 30);
+  drawIcon(itemKind, 24, 36, 3);
+  uint8_t g = (t >> 1) % 28;
+  int16_t gx = g < 7 ? 10 + g * 4 : g < 14 ? 38 : g < 21 ? 38 - (g - 14) * 4 : 10;
+  int16_t gy = g < 7 ? 21 : g < 14 ? 22 + (g - 7) * 4 : g < 21 ? 50 : 50 - (g - 21) * 4;
+  u8g2.setDrawColor(0); plot(gx, gy); u8g2.setDrawColor(1);
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(44, 30); u8g2.print(itemName(itemKind));
+  u8g2.setFont(u8g2_font_4x6_tr);
+  if (t > 14) { u8g2.setCursor(44, 41); u8g2.print(itemHint(itemKind)); }
+  if (t > 20) { u8g2.setCursor(44, 49); u8g2.print(itemHint2(itemKind)); }
 }
 
 // ---------------------------------------------------------------- death

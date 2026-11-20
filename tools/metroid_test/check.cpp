@@ -92,31 +92,40 @@ int main() {
       for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { char c = ROOMS[r].tiles[y * w + x];
         if (c == 'S') { padX = ROOMS[r].mx * 16 + x; padY = ROOMS[r].my * 7 + y; }
         if (c == 'm') { mX = ROOMS[r].mx * 16 + x; mY = ROOMS[r].my * 7 + y; } } }
-    static bool seen[200][120]; int qx[24000], qy[24000], qh = 0, qt = 0;
-    auto push = [&](int x, int y) { if (x < 0 || y < 0 || x >= 200 || y >= 120 || seen[x][y]) return; seen[x][y] = true; qx[qt] = x; qy[qt] = y; qt++; };
-    push(padX, padY);
+    static bool seen[200][120]; static int qx[24000], qy[24000];
+    bool redShut = false;   // red doors count as rock (no missiles yet)
+    auto S2 = [&](int x, int y) { char c = T(x, y); return S(x, y) || (redShut && c == 'R'); };
+    auto body2 = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S2(x, y - i)) return false; return true; };
     bool gotMorph = false;
-    while (qh < qt) {
-      int x = qx[qh], y = qy[qh]; qh++;
-      if (mX >= 0 && abs(x - mX) <= 1 && mY <= y - 1 && mY >= y - 5 && body(mX == x ? x : x, y, y - mY)) gotMorph = true;
-      for (int d = -1; d <= 1; d += 2) {
-        int nx = x + d;
-        if (body(nx, y, 3)) {
-          if (S(nx, y)) push(nx, y);
-          else { int yy = y; while (yy < 119 && !S(nx, yy)) yy++; push(nx, yy); }   // step off and fall
-        }
-        for (int up = 1; up <= 4; up++) {                       // jump up onto a ledge
-          if (!body(x, y, 3 + up)) break;
-          for (int k = 1; k <= 2; k++) { int tx = x + d * k; bool ok = true;
-            for (int j = 1; j <= k; j++) if (!body(x + d * j, y - up, 3)) ok = false;
-            if (ok && S(tx, y - up)) push(tx, y - up); }
-        }
-        if (body(x, y, 4)) for (int k = 2; k <= 4; k++) {        // jump a gap at the same height
-          bool ok = true; for (int j = 1; j <= k; j++) if (!body(x + d * j, y, 4) && !(j == k && body(x + d * j, y, 3))) ok = false;
-          if (ok && S(x + d * k, y)) push(x + d * k, y);
+    // flood fill of where standing Samus can stand, from (sx, sy) = feet on that tile
+    auto flood = [&](int sx, int sy) {
+      memset(seen, 0, sizeof seen); int qh = 0, qt = 0;
+      auto push = [&](int x, int y) { if (x < 0 || y < 0 || x >= 200 || y >= 120 || seen[x][y]) return; seen[x][y] = true; qx[qt] = x; qy[qt] = y; qt++; };
+      push(sx, sy);
+      while (qh < qt) {
+        int x = qx[qh], y = qy[qh]; qh++;
+        if (mX >= 0 && abs(x - mX) <= 1 && mY <= y - 1 && mY >= y - 5 && body2(x, y, y - mY)) gotMorph = true;
+        for (int d = -1; d <= 1; d += 2) {
+          int nx = x + d;
+          if (body2(nx, y, 3)) {
+            if (S2(nx, y)) push(nx, y);
+            else { int yy = y; while (yy < 119 && !S2(nx, yy)) yy++; push(nx, yy); }   // step off and fall
+          }
+          for (int up = 1; up <= 4; up++) {                       // jump up onto a ledge
+            if (!body2(x, y, 3 + up)) break;
+            for (int k = 1; k <= 2; k++) { int tx = x + d * k; bool ok = true;
+              for (int j = 1; j <= k; j++) if (!body2(x + d * j, y - up, 3)) ok = false;
+              if (ok && S2(tx, y - up)) push(tx, y - up); }
+          }
+          if (body2(x, y, 4)) for (int k = 2; k <= 4; k++) {        // jump a gap at the same height
+            bool ok = true; for (int j = 1; j <= k; j++) if (!body2(x + d * j, y, 4) && !(j == k && body2(x + d * j, y, 3))) ok = false;
+            if (ok && S2(x + d * k, y)) push(x + d * k, y);
+          }
         }
       }
-    }
+    };
+    redShut = true;
+    flood(padX, padY);
     if (!gotMorph) { printf("Morph Ball is NOT reachable at full height from the ship\n"); bad++; }
     else printf("\nMorph Ball reachable at full height from the ship\n");
     // every door in a room standing Samus reaches must itself be reachable standing
@@ -135,6 +144,19 @@ int main() {
           printf("%s: door at %d,%d can't be reached at full height before the Morph Ball\n", ROOMS[r].id, x, y); bad++; }
       }
     }
+    // Each major item is the key to its own escape: starting at the item WITHOUT its power
+    // (standing only for the Morph Ball; red doors shut for the Missiles), Samus must not be
+    // able to get back to the ship.
+    for (int r = 0; r < ROOM_N; r++) { int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7;
+      for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { char c = ROOMS[r].tiles[y * w + x];
+        if (c != 'm' && c != 'l') continue;
+        int gx = ROOMS[r].mx * 16 + x, gy = ROOMS[r].my * 7 + y;
+        while (gy < 119 && !S(gx, gy)) gy++;           // feet on the floor below the item
+        redShut = true;                                // no missiles yet either way
+        flood(gx, gy);
+        if (seen[padX][padY]) { printf("%s: from the %s Samus can walk home without using it\n", ROOMS[r].id, c == 'm' ? "Morph Ball" : "Missiles"); bad++; }
+        else printf("  %s: %s is needed to escape\n", ROOMS[r].id, c == 'm' ? "Morph Ball" : "Missiles");
+      } }
   }
   printf(bad ? "\n%d problems\n" : "\nall checks passed\n", bad);
   return bad ? 1 : 0;

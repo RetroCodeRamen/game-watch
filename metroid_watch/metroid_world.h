@@ -59,30 +59,28 @@ static const char T_B02[] =
   "D          z        ###   z    D"
   "##############BB################";
 
-// ---------------------------------------------------------------- B03 Morph Ball Chamber 1×1
-// Pedestal pickup; the low outlet on the right only fits the ball, then drops to B04.
+// ---------------------------------------------------------------- B03 Morph Ball Shrine 1×2
+// One way in: the door ledge drops into a pit too deep to jump back out of. The Chozo statue
+// holds the Morph Ball in an orb (shoot it open). The only way out is the ball-sized tunnel
+// low on the left, which drops into B05 — the item is the key to its own escape.
 static const char T_B03[] =
   "################"
-  "####       #####"
-  "##          ####"
-  "D     m     ####"
-  "D    ###    ####"
-  "D    ###       #"
-  "#############  #";
-
-// ---------------------------------------------------------------- B04 Low Duct 1×1
-// Standing pockets at both ends, a ball-only duct between them, drop to B05 on the left.
-static const char T_B04[] =
-  "#############  #"
-  "#############  #"
-  "#  ########    #"
-  "#  ########    #"
-  "#  ########    #"
-  "#              #"
+  "#####      #####"
+  "###          ###"
+  "D             ##"
+  "D             ##"
+  "D             ##"
+  "####          ##"
+  "####          ##"
+  "####          ##"
+  "####          ##"
+  "####  m       ##"
+  "#             ##"
+  "#  #############"
   "#  #############";
 
 // ---------------------------------------------------------------- B05 Missile Landing 1×2
-// Land on the left ledge; the launcher (with tank #1) sits on the right shelf.
+// Land on the left ledge; the launcher sits in a Chozo statue's hands on the right shelf.
 static const char T_B05[] =
   "#  #############"
   "#  ######  #####"
@@ -90,8 +88,8 @@ static const char T_B05[] =
   "#      r       #"
   "#              #"
   "####           #"
-  "#              #"
   "#         l    #"
+  "#              #"
   "#       ########"
   "#         k    #"
   "#              #"
@@ -120,8 +118,7 @@ static const char T_B06[] =
 static const RoomDef ROOMS[] = {
   {"B01", "LANDING SITE",   0, 0, 2, 2, 0, T_B01},
   {"B02", "SURFACE PATH",   2, 1, 2, 1, 0, T_B02},
-  {"B03", "MORPH CHAMBER",  4, 1, 1, 1, 0, T_B03},
-  {"B04", "LOW DUCT",       4, 2, 1, 1, 0, T_B04},
+  {"B03", "MORPH SHRINE",   4, 1, 1, 2, 0, T_B03},
   {"B05", "MISSILE LANDING",4, 3, 1, 2, 0, T_B05},
   {"B06", "JUNCTION SHAFT", 4, 5, 2, 2, 0, T_B06},
 };
