@@ -207,6 +207,11 @@ RP2040 has headroom, but keep watch games tiny:
     under) and a low pass (jump it) - lands on the far side and is open to missiles for ~1 s (beam does
     nothing), then takes off. 6 missile hits; grants Ice Missiles. Arena `SB4` via the high door in Kraid's;
     the camera keeps the floor at the bottom so his hover height shows.
+  - Mother Brain (`W`, own art: a brain with one eye in a glass tank): the cannon in the tank's base flashes
+    and fires along the floor (jump it). Missiles crack the glass (6, with visible cracks and a segmented bar;
+    beam glances off); then she's exposed - her eye opens and closes and, open, fires slow rings at Samus.
+    8 beam hits (missiles 2) finish her. The escape comes with Tourian; for now a message. Arena `SB5` via
+    the right-hand door in Ridley's.
 - **Test room:** hold Left + Right on the title for ~1.5 s. A hidden 4×3 room (`SB`, zone `ZONE_TEST`, start
   `@`; its red door leads to `SB2`, the enemy test room) with every item (Morph Ball, Missiles, Ice, Bombs, Space Jump), 10 energy and 30 missiles; nothing is saved, dying restarts it, and it never shows on the
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an

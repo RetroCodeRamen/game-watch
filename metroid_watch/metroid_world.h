@@ -18,7 +18,7 @@
 //   't' missile tank (+5)  'e' Energy Tank (+2)
 //   'z' Zoomer (crawls round surfaces)  'k' Skree (hangs from the ceiling, dives)
 //   'r' Ripper (flies a lane, beam-proof)  'u' turret (on the wall beside it)
-//   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid  'K' Kraid  'Y' Ridley
+//   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid  'K' Kraid  'Y' Ridley  'W' Mother Brain
 // Doors sit in a room's edge column, 3 tiles tall; the room next door has its own door facing it.
 
 #include <Arduino.h>
@@ -239,7 +239,7 @@ static const char T_SB3[] =
 
 // ---------------------------------------------------------------- SB4 Boss Test: Ridley 1×2 (hidden)
 // Through the high door on the right of Kraid's arena (Space Jump over him). A flat floor for
-// Ridley's swoops and landings; a small ledge under the door.
+// Ridley's swoops and landings; a small ledge under the door; a door on the right to Mother Brain.
 static const char T_SB4[] =
   "################"
   "#              #"
@@ -250,9 +250,27 @@ static const char T_SB4[] =
   "#              #"
   "#              #"
   "#              #"
+  "#              D"
+  "#              D"
+  "#       Y      D"
+  "################"
+  "################";
+
+// ---------------------------------------------------------------- SB5 Boss Test: Mother Brain 1×2 (hidden)
+// Through the door on the right of Ridley's arena. Her tank stands on the right.
+static const char T_SB5[] =
+  "################"
   "#              #"
   "#              #"
-  "#       Y      #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "D              #"
+  "D              #"
+  "D         W    #"
   "################"
   "################";
 
@@ -267,5 +285,6 @@ static const RoomDef ROOMS[] = {
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},
   {"SB4", "RIDLEY TEST",   16, 0, 1, 2, ZONE_TEST, T_SB4},
+  {"SB5", "BRAIN TEST",    17, 0, 1, 2, ZONE_TEST, T_SB5},
 };
 static const uint8_t ROOM_N = sizeof(ROOMS) / sizeof(ROOMS[0]);

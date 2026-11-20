@@ -73,6 +73,8 @@ const int8_t ORB_R = 7, ORB_LIFT = 4;   // Chozo orb radius; drawn this far abov
 const uint8_t KRAID_HP = 6, KRAID_IDLE = 70, KRAID_BRACE_T = 30, KRAID_VOLLEY = 48, KRAID_ROAR_T = 80, KRAID_FLINCH = 34, KRAID_DIE = 110;
 // Ridley: 6 missile hits while he's landed; phases in physics steps
 const uint8_t RIDLEY_HP = 6, RID_HOVER = 70, RID_TELL = 26, RID_LAND = 60, RID_RISE = 34, RID_DIE = 120;
+// Mother Brain: 6 missiles crack the glass, then 8 beam hits (missiles 2) on the brain
+const uint8_t MB_GLASS = 6, MB_HP = 8, MB_CANNON = 140, MB_CANNON_TELL = 26, MB_EYE = 150, MB_RING = 46, MB_DIE = 140;
 // Metroid timings (physics steps): pulse before a dive, dive length, energy drain while latched, stun
 const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 50, MET_STUN = 70;
 const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
@@ -103,7 +105,7 @@ const uint8_t MAX_SHOTS = 3;
 enum : uint8_t { G_MORPH = 1, G_MISSILE = 2, G_BOMB = 4, G_SPACE = 8, G_ICE = 16 };
 
 // ---- enemies ----
-enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID, EN_KRAID, EN_RIDLEY };
+enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, EN_BOLT, EN_METROID, EN_KRAID, EN_RIDLEY, EN_MBRAIN };
 inline bool isBoss(uint8_t k) { return k >= EN_KRAID; }
 // weapon that hit an enemy
 enum : uint8_t { HIT_BEAM, HIT_MISSILE, HIT_BOMB, HIT_SPIN };
@@ -340,7 +342,7 @@ void spawnEnemies(uint8_t r) {
   for (int16_t ty = 0; ty < h; ty++)
     for (int16_t tx = 0; tx < w; tx++) {
       char c = ROOMS[r].tiles[ty * w + tx];
-      if (n >= MAX_EN || !strchr("zkrupqnKY", c)) continue;
+      if (n >= MAX_EN || !strchr("zkrupqnKYW", c)) continue;
       Enemy &e = en[n++];
       memset(&e, 0, sizeof e);
       e.live = true;
@@ -361,6 +363,9 @@ void spawnEnemies(uint8_t r) {
       if (c == 'Y') {             // Ridley: starts hovering; e.vy holds his arena's floor (px)
         e.kind = EN_RIDLEY; e.w = 28; e.h = 26; e.hp = RIDLEY_HP; e.vy = y + 8;
         e.y = (int16_t)e.vy - 54; e.x = x - 14; e.dx = -1;
+      }
+      if (c == 'W') {             // Mother Brain's tank stands on the floor, glass facing left
+        e.kind = EN_MBRAIN; e.w = 34; e.h = 40; e.hp = MB_HP; e.lost = 0; e.x = x - 8; e.y = y + 8 - 40; e.dx = -1;
       }
       if (c == 'n') { e.kind = EN_METROID; e.w = 12; e.h = 10; e.hp = 1; e.x = x - 2; e.y = y; }
     }
@@ -903,10 +908,41 @@ void ridleyHead(const Enemy &e, int16_t &x0, int16_t &y0, int16_t &x1, int16_t &
   if (ridleyFlip(e)) { x0 = ax + 10; x1 = ax + 40; } else { x0 = ax; x1 = ax + 30; }
 }
 
+// ---- Mother Brain: sits in a glass tank. The cannon in the tank's base flashes (tell) and fires along
+// the floor - jump it. Missiles crack the glass (beam glances off); when it shatters she's exposed: her
+// eye opens and closes, and while it's open she fires slow rings at Samus. Beam shots finish her.
+void mbrainStep(Enemy &e, int16_t samX, int16_t samY) {
+  e.t++;
+  if (e.st == 5) {
+    if ((e.t & 3) == 0) burst(e.x + random(e.w), e.y + random(e.h), 6, 4), beep(80 + random(300), 20);
+    if (e.t >= MB_DIE) { e.live = false; burst(e.x + 17, e.y + 20, 20, 8); bossDefeated(EN_MBRAIN); }
+    return;
+  }
+  // the floor cannon
+  e.acc++;
+  if (e.acc == MB_CANNON) beep(1100, 30);
+  if (e.acc >= MB_CANNON + MB_CANNON_TELL) { e.acc = 0; enemyBullet(e.x - 3, e.y + e.h - 5, -420, 0, 255, 1); beep(1500, 12); }
+  // exposed: the eye cycles; open, it fires rings
+  if (e.st == 1) {
+    uint16_t ph = e.t % MB_EYE;
+    bool open = ph < MB_EYE * 3 / 5;
+    if (open && ph % MB_RING == MB_RING / 2) {
+      int16_t cx = e.x + 8, cy = e.y + 18, dx = samX - cx, dy = (samY - 12) - cy;
+      int16_t m = max(abs(dx), abs(dy)); if (m < 1) m = 1;
+      enemyBullet(cx, cy, (fx)dx * 320 / m, (fx)dy * 320 / m, 255, 4); beep(600, 20);
+    }
+  }
+}
+bool mbrainEyeOpen(const Enemy &e) { return e.st == 1 && (e.t % MB_EYE) < MB_EYE * 3 / 5; }
+
 // A boss is beaten: its reward, with the full pickup ceremony
 void bossDefeated(uint8_t kind) {
   if (kind == EN_KRAID) { gear |= G_SPACE; itemKind = 'j'; }
   if (kind == EN_RIDLEY) { gear |= G_ICE; itemKind = 'i'; }
+  if (kind == EN_MBRAIN) {                  // the escape comes with Tourian; for now, the news
+    for (auto &b : bul) b.live = false;
+    showMsg("MOTHER BRAIN DESTROYED", 150); watch::playTune(TUNE_MAJOR, 9); return;
+  }
   for (auto &b : bul) b.live = false;
   itemT = 0; mode = M_ITEM; watch::playTune(TUNE_MAJOR, 9);
 }
@@ -971,6 +1007,7 @@ void enemyStep(Enemy &e) {
     case EN_METROID: metroidStep(e, samX, samY); break;
     case EN_KRAID: kraidStep(e); break;
     case EN_RIDLEY: ridleyStep(e); break;
+    case EN_MBRAIN: mbrainStep(e, samX, samY); break;
   }
   // left the room (fell out / crawled through a door): gone
   if (e.x + e.w < roomPx0(curRoom) || e.x > roomPx1(curRoom) || e.y > roomPy1(curRoom)) e.live = false;
@@ -1029,6 +1066,21 @@ void shotStep(Shot &s) {
         if (!e.hp) { e.st = 5; e.t = 0; for (auto &b : bul) b.live = false; watch::stopTune(); }
         else { e.st = 4; e.t = 0; beep(140, 60); }
       } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); spark(x, y, -sgn(s.vx) * 3, 3, 5); }
+      return;
+    }
+    if (e.kind == EN_MBRAIN) {
+      if (e.st == 0) {                             // the glass: missiles crack it
+        if (s.missile) {
+          e.lost++; e.flash = 8; burst(x, y, 8, 4); beep(1800, 25);
+          if (e.lost >= MB_GLASS) { e.st = 1; e.t = 0; for (int8_t k = 0; k < 4; k++) burst(e.x + 2, e.y + 6 + k * 8, 8, 6); beep(2400, 80); }
+        } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
+      } else if (e.st == 1 && !overlap(x - 2, y - 2, x + 2, y + 2, e.x + 4, e.y + 6, e.x + 32, e.y + 30) && y < e.y + 32) {
+        s.live = true; continue;                   // the glass is gone: fly on in to the brain
+      } else if (e.st == 1 && overlap(x - 2, y - 2, x + 2, y + 2, e.x + 4, e.y + 6, e.x + 32, e.y + 30)) {
+        uint8_t dmg = s.missile ? 2 : 1;
+        e.hp = e.hp > dmg ? e.hp - dmg : 0; e.flash = 8; burst(x, y, 8, 4); beep(300, 30);
+        if (!e.hp) { e.st = 5; e.t = 0; for (auto &b : bul) b.live = false; }
+      } else { beep(2000, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
       return;
     }
     if (e.kind == EN_RIDLEY) {                     // missiles, while he's landed, anywhere on his body
@@ -1290,7 +1342,7 @@ void playStep(uint8_t e) {
       int16_t a0, b0, a1, b1; swipeBox(en1, a0, b0, a1, b1);
       if (overlap(x0, y0, x1, y1, a0, b0, a1, b1)) { hurt(en1.dx, 2); continue; }
     }
-    if ((en1.kind == EN_KRAID || en1.kind == EN_RIDLEY) && en1.st == 5) continue;
+    if ((en1.kind == EN_KRAID || en1.kind == EN_RIDLEY || en1.kind == EN_MBRAIN) && en1.st == 5) continue;
     if (overlap(x0 + 1, y0 + 1, x1 - 1, y1, en1.x, en1.y, en1.x + en1.w, en1.y + en1.h))
       hurt(cx < en1.x + en1.w / 2 ? -1 : 1, isBoss(en1.kind) ? 2 : 1);
   }
@@ -1523,6 +1575,24 @@ void drawFrozenShell(int16_t x, int16_t y, uint8_t w, uint8_t h) {
   plot(x + w / 2, y - 3); plot(x + w / 2, y + h + 2); plot(x - 3, y + h / 2); plot(x + w + 2, y + h / 2);
 }
 
+// Mother Brain's tank: a base with the floor cannon, the brain, and the glass front (cracking)
+void drawMBrain(const Enemy &e, int16_t x, int16_t y) {
+  int16_t base = y + 32;
+  fillBoxClipped(x + 2, base, 32, 8);                         // base
+  u8g2.setDrawColor(0); hLineSafe(x + 4, base + 2, 28); hLineSafe(x + 4, base + 5, 28); u8g2.setDrawColor(1);
+  bool tell = e.acc >= MB_CANNON && (frameN & 1);             // the cannon flashes before it fires
+  fillBoxClipped(x - 2, base + 3, 5, tell ? 4 : 3);
+  frameSafe(x + 2, y, 32, 33);                                 // the tank's frame
+  hLineSafe(x + 4, y - 1, 28);
+  drawFrame(mbrainEyeOpen(e) ? SPR_MBRAIN_EYE : SPR_MBRAIN, x + 6, y + 32, false);
+  if (e.st == 0) {                                             // glass: reflections, then cracks
+    for (int16_t k = 0; k < 3; k++) lineSafe(x + 5 + k * 3, y + 3, x + 3 + k * 3, y + 9);
+    static const int8_t CR[6][4] = {{0,14,6,10},{0,14,5,20},{5,10,9,4},{5,20,10,25},{6,10,11,14},{9,4,13,2}};
+    for (uint8_t k = 0; k < e.lost && k < 6; k++) lineSafe(x + 2 + CR[k][0], y + CR[k][1], x + 2 + CR[k][2], y + CR[k][3]);
+    vLineSafe(x + 1, y + 1, 31);                               // the glass front
+  }
+}
+
 void drawEnemies() {
   for (const auto &e : en) {
     if (!e.live) continue;
@@ -1562,6 +1632,12 @@ void drawEnemies() {
       const SprFrame *f = e.st == 3 ? &SPR_KRAID_ROAR : &SPR_KRAID;
       int16_t shake = (e.st == 4 || e.st == 5) ? ((frameN & 1) ? 1 : -1) : 0;
       drawFrame(*f, x + shake, y + e.h + (e.st == 1 ? 2 : 0), false);   // bracing: he hunches down
+      continue;
+    }
+    if (e.kind == EN_MBRAIN) {
+      if (e.st == 5 && (frameN & 2)) continue;
+      int16_t shake = e.st == 5 ? ((frameN & 1) ? 1 : -1) : 0;
+      drawMBrain(e, x + shake, y);
       continue;
     }
     if (e.kind == EN_RIDLEY) {
@@ -1605,7 +1681,9 @@ void drawEnemies() {
   for (const auto &b : bul) {
     if (!b.live) continue;
     int16_t x = scrX(toPx(b.x)), y = scrY(toPx(b.y));
-    if (b.kind == 3) {                       // Kraid's spike: a claw pointing the way it flies
+    if (b.kind == 4) {                       // Mother Brain's ring
+      circleSafe(x, y, 2 + ((frameN >> 2) & 1));
+    } else if (b.kind == 3) {                // Kraid's spike: a claw pointing the way it flies
       hLineSafe(x - 2, y, 5); plot(x - 1, y - 1); plot(x - 1, y + 1); plot(x + 2, y - 1);
     } else if (b.kind == 2) {                // pirate bolt: a crackling dash
       hLineSafe(x - 3, y, 7); plot(x + ((frameN & 2) ? -2 : 2), y - 1); plot(x + ((frameN & 2) ? 1 : -1), y + 1);
@@ -1721,7 +1799,11 @@ void drawHud() {
   }
   for (const auto &e : en) {                // a boss in the room: its health under the HUD centre
     if (!e.live || !isBoss(e.kind) || modeLabelT) continue;
-    uint8_t mx = e.kind == EN_RIDLEY ? RIDLEY_HP : KRAID_HP;
+    uint8_t mx = e.kind == EN_RIDLEY ? RIDLEY_HP : e.kind == EN_MBRAIN ? MB_HP : KRAID_HP;
+    if (e.kind == EN_MBRAIN && e.st == 0) {   // the glass first: its own bar
+      frameSafe(60, 1, 28, 5); for (int16_t k = 0; k < MB_GLASS - e.lost; k++) fillBoxClipped(61 + k * 4 + 1, 2, 3, 3);
+      continue;
+    }
     frameSafe(60, 1, 28, 5);
     fillBoxClipped(61, 2, (int16_t)26 * e.hp / mx, 3);
   }

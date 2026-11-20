@@ -37,7 +37,7 @@ int main() {
     for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
       char c = R.tiles[y * w + x];
       if (strchr("mlteojMLOJ", c)) items++;
-      if (strchr("zkrupqnKY", c)) enemies++;
+      if (strchr("zkrupqnKYW", c)) enemies++;
       if (door(c)) {
         if (x != 0 && x != w - 1) { printf("%s: door not on an edge at %d,%d\n", R.id, x, y); bad++; }
         if (y == 0 || R.tiles[(y - 1) * w + x] != c) {
