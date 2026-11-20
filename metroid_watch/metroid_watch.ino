@@ -1004,13 +1004,16 @@ void drawBall(int16_t cx, int16_t feet) {
 }
 
 void drawSpin(int16_t cx, int16_t cy) {
-  // somersault: a curled Samus tumbling (helmet and boots swap round the circle)
-  float a = (spinPhase >> 1) * 0.785f * (faceR ? 1 : -1);
-  float ca = cosf(a), sa = sinf(a);
-  circleSafe(cx, cy, 6);
-  discSafe(cx + (int16_t)(ca * 3.5f), cy + (int16_t)(sa * 3.5f), 2);           // helmet
-  lineSafe(cx, cy, cx - (int16_t)(ca * 6), cy - (int16_t)(sa * 6));            // legs
-  lineSafe(cx, cy, cx + (int16_t)(-sa * 6), cy + (int16_t)(ca * 6));           // arm cannon
+  // somersault: the tucked pose turned a quarter every 4 steps — a forward flip
+  uint8_t q = (spinPhase >> 2) & 3;
+  for (uint8_t r = 0; r < 16; r++)
+    for (uint8_t c = 0; c < 16; c++) {
+      if (SAMUS_TUCK[r][c] != '#') continue;
+      int8_t x = c, y = r, t;
+      for (uint8_t i = 0; i < q; i++) { t = x; x = 15 - y; y = t; }   // rotate 90° clockwise
+      if (!faceR) x = 15 - x;                                         // mirror: flips the other way
+      plot(cx - 8 + x, cy - 8 + y);
+    }
 }
 
 void drawSamus() {

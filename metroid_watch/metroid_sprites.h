@@ -122,3 +122,24 @@ static const uint8_t SAMUS_BALL[] = {
   0b01111100,
   0b00111000,
 };
+
+// Somersault (running jump): Samus tucked — knees to chest, helmet up, arm cannon forward.
+// 16×16, facing RIGHT; drawn turned a quarter at a time (forward flip). '#' = lit.
+static const char *const SAMUS_TUCK[16] = {
+  "................",
+  "......#####.....",
+  ".....#######....",
+  ".....####..##...",
+  ".....####..##...",
+  "......#####.....",
+  "....########....",
+  "...#####.#######",
+  "..######.#######",
+  "..#####.........",
+  "..####.######...",
+  "..####.#######..",
+  "...###.....###..",
+  "....####...###..",
+  ".....###...####.",
+  "................",
+};
