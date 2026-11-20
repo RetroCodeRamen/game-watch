@@ -10,7 +10,8 @@
 //   ' ' empty       '#' rock          '=' rock ledge       'B' bomb block (cracked seam)
 //   'D' blue door (any shot)   'R' red door (missile, then stays open)   'G' locked hatch
 //   'h' ship hull (solid, drawn as the ship)   'S' save pad on the ship (solid)
-//   '@' test-room start (empty)
+//   '@' test-room start (empty)   'P' save station (solid)   '^' spikes (solid; 1 energy and back
+//   to safe footing)
 // Objects (the tile itself is empty):
 //   'm' Morph Ball  'l' Missile Launcher (+5)  'o' Bombs  'j' Space Jump  — major items: 3 tiles above the floor, in an orb on a
 //       Chozo statue's palm. Lower case: statue sits left of the orb, facing right; upper case
@@ -58,12 +59,12 @@ static const char T_B01[] =
 // The cracked seam shows the way down to tank #2 (B08) before Samus has Bombs.
 static const char T_B02[] =
   "################################"
-  "#####    #######         #######"
-  "##         ###           #######"
+  "#####          #         #######"
+  "##                       #######"
   "D           k                  D"
   "D                   ###        D"
   "D          z        ###   z    D"
-  "##############BB################";
+  "##########BB####################";
 
 // ---------------------------------------------------------------- B03 Brinstar Shaft 1×4
 // The spine of Brinstar and the road home. Open air above the top ledges (room to jump across).
@@ -166,7 +167,170 @@ static const char T_B06[] =
   "R         #####                R"
   "R         #####                R"
   "R         #####  z      z      R"
-  "##############GG################";
+  "################  ##############";
+
+// ---------------------------------------------------------------- B07 Tourian Approach 2×2
+// Below the junction: drop in through its floor, climb back on the ledges. The chute from
+// Kraid's Lair (K09) comes in low on the west. The hatch in the floor to Tourian needs both bosses.
+static const char T_B07[] =
+  "################  ##############"
+  "#                              #"
+  "#                              #"
+  "#                              #"
+  "#              ####            #"
+  "#                              #"
+  "#                              #"
+  "#                              #"
+  "#          ###                 #"
+  "                               #"
+  "                               #"
+  "                               #"
+  "########################GG######"
+  "########################GG######";
+
+// ---------------------------------------------------------------- B08 Buried Alcove 1×1
+// Missile tank #2 under the cracked seam on the Surface Path (bomb through it). From the low step
+// under the hole a double jump takes Samus back up.
+static const char T_B08[] =
+  "##########  ####"
+  "####        ####"
+  "####        ####"
+  "#           ####"
+  "#         ######"
+  "#    t    ######"
+  "################";
+
+// ---------------------------------------------------------------- K01 Lair Entrance 1×1
+// Through the junction's west red door. West to the Spike Hall.
+static const char T_K01[] =
+  "################"
+  "#####    #######"
+  "###          ###"
+  "D              R"
+  "D              R"
+  "D     z        R"
+  "################";
+
+// ---------------------------------------------------------------- K02 Spike Hall 2×1
+// Westbound gallery: strips of spikes in the floor, a Swipe Pirate patrolling the flat middle, a
+// Zoomer. The west door is high, on a platform, and leads to the Bombs shrine.
+static const char T_K02[] =
+  "################################"
+  "D       ####        ######     #"
+  "D                              #"
+  "D                              D"
+  "####                           D"
+  "####       p              z    D"
+  "######^^########^^######^^######";
+
+// ---------------------------------------------------------------- K03 Bombs Shrine 1×2
+// The door ledge drops 9 tiles into the statue's chamber - more than a double jump. The way on is
+// to bomb through the cracked floor into the descent.
+static const char T_K03[] =
+  "################"
+  "#####          D"
+  "###            D"
+  "##             D"
+  "##          ####"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#     o        #"
+  "#              #"
+  "#              #"
+  "##########BB####";
+
+// ---------------------------------------------------------------- K04 Cracked Descent 1×2
+// Down from the shrine's bombed floor on staggered ledges (climbable back up). Missile tank #3 on
+// the floor; the way on is east at the bottom.
+static const char T_K04[] =
+  "##########  ####"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#       #####  #"
+  "#              #"
+  "#              #"
+  "#  ####        #"
+  "#              #"
+  "#              #"
+  "###             "
+  "###             "
+  "###     t       "
+  "################";
+
+// ---------------------------------------------------------------- K06 Lower Tunnels 1×2
+// In from the descent at the bottom; climb the step and ledges (each clear of the jump onto it)
+// up through the hole into the save room. Energy Tank #1 sits on the step.
+static const char T_K06[] =
+  "#####  #########"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "# ####         #"
+  "#              #"
+  "#              #"
+  "#     ####     #"
+  "#            e #"
+  "           #####"
+  "           #####"
+  "      z    #####"
+  "################";
+
+// ---------------------------------------------------------------- K07 Kraid Save 1×1
+// Save station; Kraid is through the east door. The hole in the floor goes down to the tunnels.
+static const char T_K07[] =
+  "################"
+  "#######   ######"
+  "####          ##"
+  "#              D"
+  "#              D"
+  "#              D"
+  "#####  ###P#####";
+
+// ---------------------------------------------------------------- K08 Kraid 1×2
+// Kraid holds the east end; the step at mouth height is on the west. The east door (behind him)
+// leads on to the chute. A ledge under the west door to come back up.
+static const char T_K08[] =
+  "################"
+  "#              #"
+  "#              #"
+  "D              #"
+  "D              #"
+  "D              #"
+  "####           #"
+  "#              #"
+  "#              #"
+  "#              D"
+  "######         D"
+  "######    K    D"
+  "################"
+  "################";
+
+// ---------------------------------------------------------------- K09 Service Chute 1×1
+// Slashed rock (Space Jump) both ways: east into B07 below the junction, and up into the cache.
+static const char T_K09[] =
+  "######XX########"
+  "#              #"
+  "D              X"
+  "D              X"
+  "D              X"
+  "################"
+  "################";
+
+// ---------------------------------------------------------------- K10 Space Jump Cache 1×1
+// Missile tank #4, above the chute's slashed ceiling; drop back down the hole.
+static const char T_K10[] =
+  "################"
+  "####      ######"
+  "###         ####"
+  "##            ##"
+  "##            ##"
+  "##        t   ##"
+  "######  ########";
 
 // ---------------------------------------------------------------- SB Test Room 4×3 (hidden)
 // Not part of the world: reached from the title (hold Left + Right). Samus starts at '@' with
@@ -281,6 +445,17 @@ static const RoomDef ROOMS[] = {
   {"B04", "MORPH SHRINE",   5, 1, 1, 3, 0, T_B04},
   {"B05", "MISSILE ROOM",   2, 3, 2, 2, 0, T_B05},
   {"B06", "JUNCTION",       4, 4, 2, 2, 0, T_B06},
+  {"B07", "TOURIAN GATE",   4, 6, 2, 2, 0, T_B07},
+  {"B08", "BURIED ALCOVE",  2, 2, 1, 1, 0, T_B08},
+  {"K01", "LAIR ENTRANCE",  3, 5, 1, 1, 1, T_K01},
+  {"K02", "SPIKE HALL",     1, 5, 2, 1, 1, T_K02},
+  {"K03", "BOMB SHRINE",    0, 5, 1, 2, 1, T_K03},
+  {"K04", "CRACKED DESCENT",0, 7, 1, 2, 1, T_K04},
+  {"K06", "LOWER TUNNELS",  1, 7, 1, 2, 1, T_K06},
+  {"K07", "KRAID SAVE",     1, 6, 1, 1, 1, T_K07},
+  {"K08", "KRAID",          2, 6, 1, 2, 1, T_K08},
+  {"K09", "SERVICE CHUTE",  3, 7, 1, 1, 1, T_K09},
+  {"K10", "CHUTE CACHE",    3, 6, 1, 1, 1, T_K10},
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},

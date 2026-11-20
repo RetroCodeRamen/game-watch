@@ -169,35 +169,19 @@ flowchart TD
 
 ## Kraid’s Lair
 
-The upper passage heads west to Bombs. The lower route turns back east toward the boss. The post-boss chute reconnects to Brinstar above the Tourian hatch.
-
-```mermaid
-flowchart TD
-    K01 --- K02
-    K02 --- K03
-    K03 ---|"Bombs"| K04
-    K04 --- K05
-    K05 --- K06
-    K06 --- K07
-    K07 --- K08
-    K08 ---|"Kraid defeated"| K09
-    K09 ---|"Space Jump"| K10
-```
-
-Footprints are width × height in play windows. Cross-zone links appear in the room descriptions.
+West through the junction's red door. The upper passage heads west to Bombs; the shrine's cracked floor drops to the lower route, which climbs back east to the save and Kraid. Beyond Kraid, Space Jump opens the chute into B07 under the junction.
 
 | **ID** | **Room** | **W × H** | **Shape and traversal** |
 | -------- | -------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| K01 | Lair Entrance | 1×1 | Entrance from Brinstar’s west missile door. Continue west to K02 and keep the east door back to B06 open. |
-| K02 | Spike Hall | 2×1 | Westbound gallery to K03. Use low spike gaps and a Zoomer. Give the first Swipe Pirate a flat patrol lane. |
-| K03 | Bomb Chamber | 1×1 | Safe standing alcove at the west end of the upper loop. Pick up Bombs above the first cracked floor to K04. |
-| K04 | Cracked Descent | 1×2 | Bomb the floor before the descent. Use staggered steps to make the shaft climbable back to K03 with a normal jump. |
-| K05 | Lower Cache | 2×1 | Automatic tank #3 on the main path. The lower gallery turns east toward K06. |
-| K06 | Lower Tunnels | 2×2 | Low ducts alternate with standing pockets on the reversible climb. Energy Tank #1 sits on a side ledge before K07. West to K05. |
-| K07 | Kraid Save | 1×1 | Save and refill at the top of the lower climb. Enter Kraid to the east. |
-| K08 | Kraid | 2×2 | Arena east of the save. Beam-accessible weak point. Victory gives Space Jump and opens the east door to K09. |
-| K09 | Service Chute | 1×1 | Space Jump opens a one-way outlet into B07. Keep the west route through cleared K08 for returning to the cache. |
-| K10 | Space Jump Cache | 1×1 | Tank #4 behind a separate Space Jump block below K09. Provide a return ledge to the chute without taking its one-way exit. |
+| K01 | Lair Entrance | 1×1 | Red door east to B06 (stays open once shot), west to K02. A Zoomer. |
+| K02 | Spike Hall | 2×1 | Westbound gallery with spike strips in the floor, a Swipe Pirate on the flat middle, a Zoomer. The west door is high, on a platform. |
+| K03 | Bombs Shrine | 1×2 | One way in: a 9-tile drop (more than a double jump) into the statue's chamber. Take Bombs, bomb the cracked floor. |
+| K04 | Cracked Descent | 1×2 | Staggered ledges down (and back up) from the bombed floor. Missile tank #3 on the floor (K05's job). Exit east at the bottom. |
+| K06 | Lower Tunnels | 1×2 | Step and ledges, each clear of the jump onto it, up through a hole into K07. Energy Tank #1 on the step. |
+| K07 | Kraid Save | 1×1 | Save station. Kraid through the east door. |
+| K08 | Kraid | 1×2 | One screen wide so he's always in view. A mouth-height step on the west; the east door, behind him, to K09. |
+| K09 | Service Chute | 1×1 | Slashed rock (Space Jump): east into B07, up into K10. |
+| K10 | Chute Cache | 1×1 | Missile tank #4; drop back into the chute. |
 
 ## Norfair
 

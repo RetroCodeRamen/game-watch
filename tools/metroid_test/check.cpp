@@ -6,6 +6,8 @@
 //  - doors are 3 tiles tall and sit in an edge column
 #include <cstdio>
 #include <cstring>
+#include <vector>
+#include <cstdlib>
 #include "metroid_world.h"
 
 int bad = 0;
@@ -21,7 +23,7 @@ char tileAt(int tx, int ty) {
   int w = ROOMS[r].sw * 16;
   return ROOMS[r].tiles[(ty - ROOMS[r].my * 7) * w + tx - ROOMS[r].mx * 16];
 }
-bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'X' || c == 'G' || c == 'h' || c == 'S'; }
+bool solid(char c) { return c == '#' || c == '=' || c == 'B' || c == 'X' || c == 'G' || c == 'h' || c == 'S' || c == 'P' || c == '^'; }
 bool door(char c) { return c == 'D' || c == 'R'; }
 
 int main() {
@@ -61,7 +63,7 @@ int main() {
           else { printf("%s: opening at %d,%d leads out of the world\n", R.id, x, y); bad++; }
           continue;
         }
-        if (solid(n)) { printf("%s: opening at %d,%d meets rock in %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
+        if (solid(n) && n != 'B' && n != 'X') { printf("%s: opening at %d,%d meets rock in %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
         else if (door(c) != door(n)) { printf("%s: door/opening mismatch at %d,%d with %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
       }
     }
@@ -80,110 +82,158 @@ int main() {
     printf("%s %-16s %dx%d at (%d,%d)  items %d  enemies %d\n", R.id, R.name, R.sw, R.sh, R.mx, R.my, items, enemies);
   }
   // ---- reachability ----
-  // Samus's moves on the tile grid (feet on a solid tile): standing she walks, steps off ledges,
-  // jumps up to 4 tiles (45 px peak), or 7 with the double jump (67 px) with up to 2 tiles of sideways travel, and jumps gaps up to 4
-  // tiles. With the Morph Ball she can roll through 1-tile ducts and drop, but not climb, and stand
-  // again where there's room. Blue doors count as open; red doors are rock until she has missiles.
+  // Samus's moves on the tile grid (feet on a solid tile). Standing she walks, steps off ledges,
+  // jumps up to 4 tiles (45 px), 7 with the double jump, any height with Space Jump (sideways
+  // travel up to 2 tiles), and jumps gaps up to 4 tiles. In the Morph Ball she rolls through
+  // 1-tile ducts and drops, stands again where there's room, and with Bombs hops up to 2 tiles.
+  // Blue doors are open; red doors need Missiles, cracked rock ('B') Bombs, slashed rock ('X')
+  // Space Jump. She never stands on spikes. Save points: the ship's pad and 'P' stations.
   {
-    static char G[300][120];
-    for (int x = 0; x < 300; x++) for (int y = 0; y < 120; y++) G[x][y] = tileAt(x, y);
-    bool hasBall = false, redShut = true;
-    auto S = [&](int x, int y) { if (x < 0 || y < 0 || x >= 300 || y >= 120) return true; char c = G[x][y]; return !c || solid(c) || (redShut && c == 'R'); };
+    const int GW = 320, GH = 120;
+    static char G[GW][GH];
+    for (int x = 0; x < GW; x++) for (int y = 0; y < GH; y++) G[x][y] = tileAt(x, y);
+    struct Gear { const char *name; bool ball, missiles, bombs, space; };
+    Gear gr = {"", false, false, false, false};
+    auto S = [&](int x, int y) {
+      if (x < 0 || y < 0 || x >= GW || y >= GH) return true;
+      char c = G[x][y];
+      if (!c) return true;
+      if (c == 'R') return !gr.missiles;
+      if (c == 'B') return !gr.bombs;
+      if (c == 'X') return !gr.space;
+      return solid(c) || c == 'P' || c == '^';
+    };
     auto body = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S(x, y - i)) return false; return true; };
-    int padX = 0, padY = 0;
-    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) if (G[x][y] == 'S') { padX = x; padY = y; }
-    static bool seen[2][200][120]; static int qx[48000], qy[48000], qb[48000];
-    auto flood = [&](int sx, int sy, int sb) {
-      memset(seen, 0, sizeof seen); int qh = 0, qt = 0;
-      auto push = [&](int x, int y, int b) { if (x < 0 || y < 0 || x >= 200 || y >= 120 || seen[b][x][y]) return; seen[b][x][y] = true; qx[qt] = x; qy[qt] = y; qb[qt] = b; qt++; };
-      push(sx, sy, sb);
-      while (qh < qt) {
-        int x = qx[qh], y = qy[qh], b = qb[qh]; qh++;
-        if (b) {                                                   // Morph Ball
-          if (body(x, y, 3)) push(x, y, 0);
-          for (int d = -1; d <= 1; d += 2) { int nx = x + d;
-            if (S(nx, y - 1)) continue;
-            int yy = y; while (yy < 119 && !S(nx, yy)) yy++; push(nx, yy, 1); }
-          continue;
+    auto idx = [&](int x, int y, int b) { return (b * GW + x) * GH + y; };
+    static bool seen[2 * GW * GH];
+    static int q[2 * GW * GH];
+    // all moves from a node; f(x, y, b) for each landing node
+    auto moves = [&](int x, int y, int b, auto &&f) {
+      auto land = [&](int nx, int ny, int nb) { if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && G[nx][ny] != '^') f(nx, ny, nb); };
+      auto fall = [&](int nx, int yy, int nb) { while (yy < GH - 1 && !S(nx, yy)) yy++; land(nx, yy, nb); };
+      if (b) {
+        if (body(x, y, 3)) land(x, y, 0);
+        for (int d = -1; d <= 1; d += 2) if (!S(x + d, y - 1)) fall(x + d, y, 1);
+        if (gr.bombs) for (int up = 1; up <= 2; up++) {           // bomb hop
+          if (!body(x, y, 1 + up)) break;
+          for (int k = 0; k <= 1; k++) for (int d = -1; d <= 1; d += 2) {
+            int nx = x + d * k;
+            if (S(nx, y - up) && !S(nx, y - up - 1)) land(nx, y - up, 1);
+          }
         }
-        if (hasBall) push(x, y, 1);
-        for (int d = -1; d <= 1; d += 2) {
-          int nx = x + d;
-          if (body(nx, y, 3)) { int yy = y; while (yy < 119 && !S(nx, yy)) yy++; push(nx, yy, 0); }   // walk / step off
-          for (int up = 1; up <= 7; up++) {                       // jump up onto a ledge (4 tiles; 7 with the double jump)
-            if (!body(x, y, 3 + up)) break;
-            for (int k = 1; k <= 2; k++) { bool ok = true;
-              for (int j = 1; j <= k; j++) if (!body(x + d * j, y - up, 3)) ok = false;
-              if (ok && S(x + d * k, y - up)) push(x + d * k, y - up, 0); }
-          }
-          if (body(x, y, 4)) for (int k = 2; k <= 4; k++) {        // jump a gap at the same height
-            bool ok = true; for (int j = 1; j <= k; j++) if (!body(x + d * j, y, 4) && !(j == k && body(x + d * j, y, 3))) ok = false;
-            if (ok && S(x + d * k, y)) push(x + d * k, y, 0);
-          }
+        return;
+      }
+      if (gr.ball) land(x, y, 1);
+      int maxUp = gr.space ? 14 : 7;
+      for (int d = -1; d <= 1; d += 2) {
+        if (body(x + d, y, 3)) fall(x + d, y, 0);
+        for (int up = 1; up <= maxUp; up++) {
+          if (!body(x, y, 3 + up)) break;
+          for (int k = 1; k <= 2; k++) { bool ok = true;
+            for (int j = 1; j <= k; j++) if (!body(x + d * j, y - up, 3)) ok = false;
+            if (ok && S(x + d * k, y - up)) land(x + d * k, y - up, 0); }
+        }
+        if (body(x, y, 4)) for (int k = 2; k <= 4; k++) {
+          bool ok = true; for (int j = 1; j <= k; j++) if (!body(x + d * j, y, 4) && !(j == k && body(x + d * j, y, 3))) ok = false;
+          if (ok && S(x + d * k, y)) land(x + d * k, y, 0);
         }
       }
-      return qt;
     };
-    // can standing Samus touch the item at tile (ix, iy)? (orbs float above the floor)
-    auto touches = [&](int ix, int iy) {
-      for (int x = ix - 1; x <= ix + 1; x++) for (int y = iy + 1; y <= iy + 3; y++) if (seen[0][x][y] && body(x, y, y - iy)) return true;
-      return false;
+    auto flood = [&](int sx, int sy, int sb) {
+      memset(seen, 0, sizeof seen); int qh = 0, qt = 0;
+      auto push = [&](int x, int y, int b) { int i = idx(x, y, b); if (seen[i]) return; seen[i] = true; q[qt++] = i; };
+      push(sx, sy, sb);
+      while (qh < qt) { int i = q[qh++]; int b = i / (GW * GH), x = (i / GH) % GW, y = i % GH; moves(x, y, b, push); }
     };
-    int mX = -1, mY = -1, lX = -1, lY = -1;
-    for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) { if (G[x][y] == 'm' || G[x][y] == 'M') { mX = x; mY = y; } if (G[x][y] == 'l' || G[x][y] == 'L') { lX = x; lY = y; } }
+    int padX = 0, padY = 0;
+    std::vector<std::pair<int,int>> saves;
+    for (int x = 0; x < GW; x++) for (int y = 0; y < GH; y++) {
+      if (G[x][y] == 'S') { padX = x; padY = y; saves.push_back({x, y}); }
+      if (G[x][y] == 'P') saves.push_back({x, y});
+    }
     auto roomsSeen = [&](const char *label) {
       printf("  %s:", label);
-      for (int r = 0; r < ROOM_N; r++) { int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7, x0 = ROOMS[r].mx * 16, y0 = ROOMS[r].my * 7; bool v = false;
-        for (int y = 0; y < h && !v; y++) for (int x = 0; x < w; x++) if (seen[0][x0 + x][y0 + y] || seen[1][x0 + x][y0 + y]) { v = true; break; }
+      for (int r = 0; r < ROOM_N; r++) { if (ROOMS[r].zone == ZONE_TEST) continue;
+        int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7, x0 = ROOMS[r].mx * 16, y0 = ROOMS[r].my * 7; bool v = false;
+        for (int y = 0; y < h && !v; y++) for (int x = 0; x < w && !v; x++) if (seen[idx(x0 + x, y0 + y, 0)] || seen[idx(x0 + x, y0 + y, 1)]) v = true;
         if (v) printf(" %s", ROOMS[r].id); }
       printf("\n");
     };
-
-    // 1. before the Morph Ball: everything is done at full height
+    // can standing Samus touch the item at tile (ix, iy)? (orbs float 3 tiles above the floor)
+    auto touches = [&](int ix, int iy) {
+      for (int x = ix - 1; x <= ix + 1; x++) for (int y = iy + 1; y <= iy + 3; y++) if (x >= 0 && seen[idx(x, y, 0)] && body(x, y, y - iy)) return true;
+      return false;
+    };
+    auto find = [&](const char *cs, int &fx, int &fy) {
+      for (int x = 0; x < GW; x++) for (int y = 0; y < GH; y++) if (G[x][y] && strchr(cs, G[x][y])) {
+        int r = roomAt(x, y); if (r >= 0 && ROOMS[r].zone == ZONE_TEST) continue; fx = x; fy = y; return true; }
+      return false;
+    };
+    Gear stages[] = {{"no items", false, false, false, false}, {"Morph Ball", true, false, false, false},
+                     {"Missiles", true, true, false, false}, {"Bombs", true, true, true, false}, {"Space Jump", true, true, true, true}};
+    // each major item must be reachable with the gear from before it
+    struct Need { const char *cs, *name; int stage; } needs[] = {{"mM", "Morph Ball", 0}, {"lL", "Missiles", 1}, {"oO", "Bombs", 2}};
     printf("\n");
-    flood(padX, padY, 0);
-    roomsSeen("before Morph Ball, standing reaches");
-    if (mX < 0 || !touches(mX, mY)) { printf("Morph Ball is NOT reachable at full height from the ship\n"); bad++; }
-    for (int r = 0; r < ROOM_N; r++) {                     // every door of a room she reaches, at full height
+    for (auto &n : needs) {
+      int ix, iy; if (!find(n.cs, ix, iy)) continue;
+      gr = stages[n.stage]; flood(padX, padY, 0);
+      if (!touches(ix, iy)) { printf("%s is NOT reachable with %s\n", n.name, stages[n.stage].name); bad++; }
+      else printf("  %s reachable with %s\n", n.name, stages[n.stage].name);
+    }
+    int kx, ky;
+    if (find("K", kx, ky)) { gr = stages[3]; flood(padX, padY, 0); bool ok = false;
+      for (int x = kx - 8; x <= kx; x++) if (seen[idx(x, ky + 1, 0)]) ok = true;
+      if (!ok) { printf("Kraid is NOT reachable with Bombs\n"); bad++; } else printf("  Kraid reachable with Bombs\n"); }
+    // before the Morph Ball everything is done at full height: every door of a room she reaches
+    gr = stages[0]; flood(padX, padY, 0);
+    roomsSeen("with no items, Samus reaches");
+    for (int r = 0; r < ROOM_N; r++) {
       int w = ROOMS[r].sw * 16, h = ROOMS[r].sh * 7, x0 = ROOMS[r].mx * 16, y0 = ROOMS[r].my * 7;
       bool visited = false;
-      for (int y = 0; y < h && !visited; y++) for (int x = 0; x < w; x++) if (seen[0][x0 + x][y0 + y]) { visited = true; break; }
+      for (int y = 0; y < h && !visited; y++) for (int x = 0; x < w; x++) if (seen[idx(x0 + x, y0 + y, 0)]) { visited = true; break; }
       if (!visited) continue;
       for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
         char c = ROOMS[r].tiles[y * w + x];
         if (!door(c) || (y > 0 && ROOMS[r].tiles[(y - 1) * w + x] == c)) continue;
         int gx = x0 + x, fy = y0 + y + 3;
-        bool ok = seen[0][gx][fy] || seen[0][gx + 1][fy] || seen[0][gx - 1][fy];
-        if (!ok && roomAt(gx + (x == 0 ? -1 : 1), y0 + y) >= 0) {
+        bool ok = seen[idx(gx, fy, 0)] || seen[idx(gx + 1, fy, 0)] || (gx > 0 && seen[idx(gx - 1, fy, 0)]);
+        if (!ok && roomAt(gx + (x == 0 ? -1 : 1), y0 + y) >= 0 && c == 'D') {
           printf("%s: door at %d,%d can't be reached at full height before the Morph Ball\n", ROOMS[r].id, x, y); bad++; }
       }
     }
-    // 2. the Morph Ball shrine is a trap without the ball: from the item, standing only, no way home
-    if (mX >= 0) {
-      int fy = mY; while (fy < 119 && !S(mX, fy)) fy++;
-      flood(mX, fy, 0);
-      if (seen[0][padX][padY]) { printf("from the Morph Ball Samus can walk home without rolling\n"); bad++; }
-      else printf("  Morph Ball shrine: the only way out is to roll\n");
+    // the item is the key to its own escape: from it, without it, no way back to a save
+    struct Trap { const char *cs, *name; int stage; } traps[] = {{"mM", "Morph Ball", 0}, {"oO", "Bombs", 2}};
+    for (auto &t : traps) {
+      int ix, iy; if (!find(t.cs, ix, iy)) continue;
+      int fy = iy; while (fy < GH - 1 && !S(ix, fy)) fy++;
+      gr = stages[t.stage]; flood(ix, fy, 0);
+      bool home = false; for (auto &sv : saves) if (seen[idx(sv.first, sv.second, 0)]) home = true;
+      if (home) { printf("from the %s Samus can get back to a save without using it\n", t.name); bad++; }
+      else printf("  %s room: the only way out is to use it\n", t.name);
     }
-    // 3. backtracking: at each gear stage, from everywhere Samus can get to, she can get back to the ship
-    struct Stage { const char *name; bool ball, missiles; } stages[] = {{"with Morph Ball", true, false}, {"with Morph Ball + Missiles", true, true}};
-    for (auto &st : stages) {
-      hasBall = st.ball; redShut = !st.missiles;
+    // backtracking: at each stage, from everywhere Samus can get to, a save point is reachable
+    for (int si = 1; si < 5; si++) {
+      gr = stages[si];
       flood(padX, padY, 0);
-      if (st.ball && !st.missiles && lX >= 0 && !touches(lX, lY)) { printf("Missile Launcher is NOT reachable with the Morph Ball\n"); bad++; }
-      char label[64]; snprintf(label, 64, "%s, Samus reaches", st.name); roomsSeen(label);
-      static int fx[48000], fyy[48000], fb[48000]; int n = 0;
-      for (int b = 0; b < 2; b++) for (int x = 0; x < 200; x++) for (int y = 0; y < 120; y++) if (seen[b][x][y]) { fx[n] = x; fyy[n] = y; fb[n] = b; n++; }
-      int stuck[32] = {0}, sx[32], sy[32];
-      for (int i = 0; i < n; i++) {
-        flood(fx[i], fyy[i], fb[i]);
-        if (seen[0][padX][padY] || seen[1][padX][padY]) continue;
-        int r = roomAt(fx[i], fyy[i] - 1); if (r < 0) r = roomAt(fx[i], fyy[i]); if (r < 0) continue;
-        if (!stuck[r]) { sx[r] = fx[i] - ROOMS[r].mx * 16; sy[r] = fyy[i] - ROOMS[r].my * 7; }
-        stuck[r]++;
-      }
+      char label[64]; snprintf(label, 64, "with %s, Samus reaches", gr.name); roomsSeen(label);
+      std::vector<int> nodes; for (int i = 0; i < 2 * GW * GH; i++) if (seen[i]) nodes.push_back(i);
+      // reverse edges among reached nodes, then search back from the save points
+      std::vector<std::vector<int>> radj(2 * GW * GH);
+      for (int u : nodes) { int b = u / (GW * GH), x = (u / GH) % GW, y = u % GH;
+        moves(x, y, b, [&](int nx, int ny, int nb) { int v = idx(nx, ny, nb); if (seen[v]) radj[v].push_back(u); }); }
+      std::vector<char> ok(2 * GW * GH, 0); std::vector<int> st;
+      for (auto &sv : saves) for (int b = 0; b < 2; b++) { int i = idx(sv.first, sv.second, b); if (seen[i]) { ok[i] = 1; st.push_back(i); } }
+      while (!st.empty()) { int v = st.back(); st.pop_back(); for (int u : radj[v]) if (!ok[u]) { ok[u] = 1; st.push_back(u); } }
+      int stuck[64] = {0}, sx[64], sy[64];
+      for (int u : nodes) if (!ok[u]) { int x = (u / GH) % GW, y = u % GH;
+        int r = roomAt(x, y - 1); if (r < 0) r = roomAt(x, y); if (r < 0 || r >= 64) continue;
+        if (!stuck[r]) { sx[r] = x - ROOMS[r].mx * 16; sy[r] = y - ROOMS[r].my * 7; } stuck[r]++; }
       for (int r = 0; r < ROOM_N; r++) if (stuck[r]) {
-        printf("%s: %d spots %s can't get back to the ship (e.g. feet on %d,%d)\n", ROOMS[r].id, stuck[r], st.name, sx[r], sy[r]); bad++; }
+        // a shrine whose item opens its own way out is a dead end until Samus has that item
+        bool shrine = false; int n = ROOMS[r].sw * 16 * ROOMS[r].sh * 7;
+        for (int i = 0; i < n; i++) { char c = ROOMS[r].tiles[i]; if ((c == 'o' || c == 'O') && si < 3) shrine = true; }
+        if (shrine) continue;
+        printf("%s: %d spots with %s can't get back to a save (e.g. feet on %d,%d)\n", ROOMS[r].id, stuck[r], gr.name, sx[r], sy[r]); bad++; }
     }
   }
   printf(bad ? "\n%d problems\n" : "\nall checks passed\n", bad);

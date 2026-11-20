@@ -33,7 +33,9 @@ struct Spark { int16_t x, y; int8_t vx, vy; uint8_t life; };
 struct Bomb { bool live; int16_t x, y; uint8_t t; };   // t counts up: fuse, then the blast
 struct SaveData {
   uint32_t magic; uint8_t ver, gear, maxEn, maxMs, gearOff;
-  uint64_t items, visited; uint32_t redDoors, frames;
+  uint64_t items, visited, redDoors; uint32_t frames;
+  int16_t saveTX, saveTY;          // the station saved at (feet on that tile)
+  uint8_t bosses;                  // bosses beaten: 1 Kraid, 2 Ridley, 4 Mother Brain
   uint16_t sum;
 };
 
@@ -109,7 +111,7 @@ enum : uint8_t { EN_NONE, EN_ZOOMER, EN_SKREE, EN_RIPPER, EN_TURRET, EN_SWIPE, E
 inline bool isBoss(uint8_t k) { return k >= EN_KRAID; }
 // weapon that hit an enemy
 enum : uint8_t { HIT_BEAM, HIT_MISSILE, HIT_BOMB, HIT_SPIN };
-const uint8_t MAX_EN = 12, MAX_BUL = 8, MAX_DROP = 6, MAX_SPARK = 32, MAX_DOOR = 24, MAX_ITEM = 16;
+const uint8_t MAX_EN = 12, MAX_BUL = 8, MAX_DROP = 6, MAX_SPARK = 32, MAX_DOOR = 48, MAX_ITEM = 16;
 
 inline int16_t toPx(fx v) { return (int16_t)(v >> 8); }
 inline fx toFx(int16_t p) { return (fx)p << 8; }
@@ -132,10 +134,14 @@ uint32_t playFrames;
 Door doors[MAX_DOOR]; uint8_t doorN;
 Item items[MAX_ITEM]; uint8_t itemN;
 uint64_t itemsGot, visited;
-uint32_t redOpen;
+uint64_t redOpen;
 uint16_t orbOpen;                 // major items: the Chozo orb has been shot open (not saved)
 int8_t curRoom = 0;
 int16_t padTX = 0, padTY = 0;     // the ship's save pad
+int16_t saveTX = -1, saveTY = -1;  // where Samus last saved (-1: the ship)
+uint8_t bossesBeaten;
+fx safeX, safeY;                   // last safe footing (sub-pixel): where spikes send her back to
+int8_t lastZone = -1;
 int16_t sbTX = 0, sbTY = 0;       // test-room start
 uint8_t titleHoldT;               // Left + Right held on the title -> test room
 int16_t camX, camY;
@@ -146,7 +152,7 @@ Bullet bul[MAX_BUL];
 Drop drops[MAX_DROP];
 Spark sparks[MAX_SPARK];
 Bomb bombs[MAX_BOMB];
-int16_t brokenX[MAX_BROKEN], brokenY[MAX_BROKEN]; uint8_t brokenN;   // bombed blocks (re-form on room entry)
+int16_t brokenX[MAX_BROKEN], brokenY[MAX_BROKEN]; uint8_t brokenN;   // broken blocks: stay open until death/reload (oldest first if full)
 bool sandbox;                     // the hidden test room: everything unlocked, nothing saved
 
 // input
@@ -178,6 +184,10 @@ void transitionTo(void (*action)(), uint8_t steps = 10) {
   if (trState == TR_OUT) return;
   trState = TR_OUT; trAction = action; trSteps = steps;
   if (trLevel > trSteps) trLevel = trSteps;
+}
+
+const char *zoneName(uint8_t z) {
+  switch (z) { case 0: return "BRINSTAR"; case 1: return "KRAID'S LAIR"; case 2: return "NORFAIR"; case 3: return "TOURIAN"; default: return "TEST ROOM"; }
 }
 
 // =====================================================================
@@ -222,7 +232,7 @@ bool solidTile(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   switch (c) {
     case 'B': case 'X': return !isBroken(tx, ty);
-    case '#': case '=': case 'G': case 'h': case 'S': return true;
+    case '#': case '=': case 'G': case 'h': case 'S': case 'P': case '^': return true;
     case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
     default: return false;
   }
@@ -272,12 +282,12 @@ void buildWorld() {
 
 // Open a door (and the one facing it across the room boundary)
 void openDoor(uint8_t i, bool permanent) {
-  if (permanent) redOpen |= 1UL << i;
+  if (permanent) redOpen |= 1ULL << i;
   doors[i].timer = 200;
   for (uint8_t j = 0; j < doorN; j++)
     if (j != i && (doors[j].tx == doors[i].tx + 1 || doors[j].tx == doors[i].tx - 1) &&
         doors[j].ty < doors[i].ty + doors[i].h && doors[i].ty < doors[j].ty + doors[j].h) {
-      if (permanent && doors[j].kind == 'R') redOpen |= 1UL << j;
+      if (permanent && doors[j].kind == 'R') redOpen |= 1ULL << j;
       doors[j].timer = 200;
     }
 }
@@ -318,7 +328,7 @@ uint16_t saveSum(const SaveData &s) {
 }
 void captureSave(SaveData &s) {
   memset(&s, 0, sizeof s);
-  s.magic = SAVE_MAGIC; s.ver = 3; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.magic = SAVE_MAGIC; s.ver = 4; s.saveTX = saveTX; s.saveTY = saveTY; s.bosses = bossesBeaten; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
   s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
   s.sum = saveSum(s);
 }
@@ -329,7 +339,7 @@ void writeSave() {
 }
 bool readSave() {
   SaveData s; EEPROM.get(0, s);
-  if (s.magic != SAVE_MAGIC || s.ver != 3 || s.sum != saveSum(s)) return false;
+  if (s.magic != SAVE_MAGIC || s.ver != 4 || s.sum != saveSum(s)) return false;
   lastSave = s; return true;
 }
 
@@ -359,6 +369,7 @@ void spawnEnemies(uint8_t r) {
         e.kind = c == 'p' ? EN_SWIPE : EN_BOLT; e.w = 10; e.h = 23; e.hp = 6;
         e.x = x - 1; e.y = y + 8 - 23; e.dx = (tx < w / 2) ? 1 : -1;
       }
+      if ((c == 'K' && (bossesBeaten & 1)) || (c == 'Y' && (bossesBeaten & 2)) || (c == 'W' && (bossesBeaten & 4))) { n--; e.live = false; continue; }
       if (c == 'K') { e.kind = EN_KRAID; e.w = 24; e.h = 42; e.hp = KRAID_HP; e.x = x - 4; e.y = y + 8 - 42; e.dx = -1; }
       if (c == 'Y') {             // Ridley: starts hovering; e.vy holds his arena's floor (px)
         e.kind = EN_RIDLEY; e.w = 28; e.h = 26; e.hp = RIDLEY_HP; e.vy = y + 8;
@@ -418,29 +429,33 @@ void enterRoomNow() {
   if (pendingRoom < 0) return;
   curRoom = pendingRoom; pendingRoom = -1;
   visited |= 1ULL << curRoom;
+  if (ROOMS[curRoom].zone != lastZone) { if (lastZone >= 0 && ROOMS[curRoom].zone != ZONE_TEST) cardT = 70; lastZone = ROOMS[curRoom].zone; }
   for (auto &s : shots) s.live = false;
   for (auto &b : bul) b.live = false;
   for (auto &d : drops) d.live = false;
   for (auto &s : sparks) s.life = 0;
   for (auto &b : bombs) b.live = false;
-  brokenN = 0;
   spawnEnemies(curRoom);
   snapCamera();
 }
 
+// back to the last station saved at (the ship's pad if none yet)
 void placeAtPad() {
-  sX = toFx(padTX * TILE + 4) + 128; sY = toFx(padTY * TILE);
+  int16_t tx = saveTX >= 0 ? saveTX : padTX, ty = saveTX >= 0 ? saveTY : padTY;
+  sX = toFx(tx * TILE + 4) + 128; sY = toFx(ty * TILE);
   sVX = sVY = 0; ground = true; ball = false; crouch = false; spin = false; faceR = true;
-  curRoom = roomAtTile(padTX, padTY);
+  safeX = sX; safeY = sY;
+  curRoom = roomAtTile(tx, ty);
   pendingRoom = curRoom; enterRoomNow();
 }
 
 void loadFrom(const SaveData &s) {
   gear = s.gear; gearOff = s.gearOff; maxEnergy = s.maxEn; maxMissiles = s.maxMs;
   itemsGot = s.items; visited = s.visited; redOpen = s.redDoors; playFrames = s.frames;
+  saveTX = s.saveTX; saveTY = s.saveTY; bossesBeaten = s.bosses;
   energy = maxEnergy; missiles = maxMissiles; weapon = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
-  orbOpen = 0;
+  orbOpen = 0; brokenN = 0;
   invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
   placeAtPad();
 }
@@ -448,6 +463,7 @@ void loadFrom(const SaveData &s) {
 void newGame() {
   sandbox = false;
   gear = 0; gearOff = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
+  saveTX = saveTY = -1; bossesBeaten = 0;
   captureSave(lastSave);
   loadFrom(lastSave);
   writeSave();          // automatic ship checkpoint
@@ -460,11 +476,12 @@ void startSandbox() {
   sandbox = true;
   gear = G_MORPH | G_MISSILE | G_BOMB | G_SPACE | G_ICE; gearOff = 0;
   maxEnergy = energy = 10; maxMissiles = missiles = 30; weapon = 0;
-  itemsGot = 0; orbOpen = 0; redOpen = 0;
+  itemsGot = 0; orbOpen = 0; redOpen = 0; bossesBeaten = 0; brokenN = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
   invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
   sX = toFx(sbTX * TILE + 4) + 128; sY = toFx((sbTY + 1) * TILE);
   sVX = sVY = 0; ground = true; ball = false; crouch = false; spin = false; faceR = true;
+  safeX = sX; safeY = sY;
   curRoom = roomAtTile(sbTX, sbTY); pendingRoom = curRoom; enterRoomNow();
   mode = M_PLAY; cardT = 70; inputLock = 6;
 }
@@ -476,9 +493,10 @@ void respawn() {
 // =====================================================================
 // Samus
 // =====================================================================
-bool onPad() {
+bool onPad() {                      // standing on the ship's pad or a save station
   if (!ground || ball) return false;
-  return rawTile(toPx(sX) >> 3, toPx(sY) >> 3) == 'S';
+  char c = rawTile(toPx(sX) >> 3, toPx(sY) >> 3);
+  return c == 'S' || c == 'P';
 }
 
 void hurt(int8_t fromDir, uint8_t dmg) {
@@ -518,6 +536,7 @@ void doDown() {
   downPrev = ball ? 2 : crouch ? 1 : 0;
   if (onPad() && !crouch) {
     energy = maxEnergy; missiles = maxMissiles;
+    saveTX = toPx(sX) >> 3; saveTY = toPx(sY) >> 3;
     writeSave();
     watch::playTune(TUNE_SAVE, 4);
     showMsg("ENERGY RESTORED  SAVED", 70);
@@ -658,6 +677,23 @@ void samusStep(int8_t dir, bool firstStep) {
     if (ground && sVY > 0) sVY = 0;
   }
   if (ground) { spin = false; airJumps = AIR_JUMPS; }
+  {                                                // spikes: 1 energy, and back to the last safe footing
+    int16_t x = toPx(sX), y = toPx(sY), hw = bodyHW(), h = bodyH();
+    // touching: spikes in her body box, or under the middle of her feet (an edge foot doesn't count)
+    bool spike = rawTile(x >> 3, y >> 3) == '^' && ground;
+    for (int16_t ty = (y - h) >> 3; ty <= (y - 1) >> 3 && !spike; ty++)
+      for (int16_t tx = (x - hw) >> 3; tx <= (x + hw - 1) >> 3; tx++)
+        if (rawTile(tx, ty) == '^') { spike = true; break; }
+    if (spike) {
+      if (!invul) { energy = energy > 1 ? energy - 1 : 0; beep(180, 60); invul = 60; if (!energy) { mode = M_DEAD; deadT = 0; watch::playTune(TUNE_DEAD, 4); } }
+      sX = safeX; sY = safeY; sVX = sVY = 0; ball = false; crouch = false; spin = false;
+      burst(toPx(sX), toPx(sY) - 10, 8, 4);
+    } else if (ground && !ball) {
+      bool nearSpike = false;
+      for (int16_t tx = (x - 12) >> 3; tx <= (x + 12) >> 3; tx++) if (rawTile(tx, (y + 1) >> 3) == '^') nearSpike = true;
+      if (!nearSpike) { safeX = sX; safeY = sY; }
+    }
+  }
   if (spin) spinPhase++;
   if (spin && (eg() & G_SPACE)) {           // the Space Jump somersault cuts through slashed rock
     int16_t x = toPx(sX), y = toPx(sY);
@@ -742,11 +778,11 @@ void turretStep(Enemy &e, int16_t samX, int16_t samY) {
 }
 
 // ---- Space Pirates (23 px). Both walk on floors and turn at walls and ledges.
-bool pirateCanStep(const Enemy &e, int8_t d) {
+bool pirateCanStep(const Enemy &e, int8_t d) {   // walls, ledges and spikes turn a pirate round
   int16_t nx = e.x + d;
   if (enemySolidAt(e, nx, e.y)) return false;
   int16_t fx = d > 0 ? nx + e.w - 1 : nx;
-  return solidTile(fx >> 3, (e.y + e.h) >> 3);
+  return solidTile(fx >> 3, (e.y + e.h) >> 3) && rawTile(fx >> 3, (e.y + e.h) >> 3) != '^';
 }
 bool samusNear(const Enemy &e, int16_t samX, int16_t samY, int16_t rx, int16_t ry) {
   int16_t cx = e.x + e.w / 2, feet = e.y + e.h;
@@ -937,6 +973,7 @@ bool mbrainEyeOpen(const Enemy &e) { return e.st == 1 && (e.t % MB_EYE) < MB_EYE
 
 // A boss is beaten: its reward, with the full pickup ceremony
 void bossDefeated(uint8_t kind) {
+  bossesBeaten |= kind == EN_KRAID ? 1 : kind == EN_RIDLEY ? 2 : 4;
   if (kind == EN_KRAID) { gear |= G_SPACE; itemKind = 'j'; }
   if (kind == EN_RIDLEY) { gear |= G_ICE; itemKind = 'i'; }
   if (kind == EN_MBRAIN) {                  // the escape comes with Tourian; for now, the news
@@ -1199,7 +1236,11 @@ void dropBomb() {
 }
 
 void breakBlock(int16_t tx, int16_t ty, char kind) {
-  if (rawTile(tx, ty) != kind || isBroken(tx, ty) || brokenN >= MAX_BROKEN) return;
+  if (rawTile(tx, ty) != kind || isBroken(tx, ty)) return;
+  if (brokenN >= MAX_BROKEN) {                 // full: the oldest re-forms
+    memmove(brokenX, brokenX + 1, sizeof(brokenX[0]) * (MAX_BROKEN - 1)); memmove(brokenY, brokenY + 1, sizeof(brokenY[0]) * (MAX_BROKEN - 1));
+    brokenN = MAX_BROKEN - 1;
+  }
   brokenX[brokenN] = tx; brokenY[brokenN] = ty; brokenN++;
   int16_t x = tx * 8 + 4, y = ty * 8 + 4;
   spark(x, y, -3, -4, 9); spark(x, y, 3, -4, 9); spark(x, y, -2, 2, 7); spark(x, y, 2, 2, 7);
@@ -1459,6 +1500,14 @@ void drawWorld() {
       char c = rawTile(tx, ty);
       int16_t x = scrX(tx * 8), y = scrY(ty * 8);
       if (c == '#' || c == '=' || c == 'G' || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
+      else if (c == '^') {                      // spikes: a row of teeth on a base
+        for (int8_t i = 0; i < 8; i += 2) { plot(x + i, y + 7); plot(x + i + 1, y + 5); plot(x + i + 1, y + 6); plot(x + i + 1, y + 7); }
+        hLineSafe(x, y + 7, 8);
+      } else if (c == 'P') {                    // save station: a pad with lights
+        hLineSafe(x, y, 8); fillBoxClipped(x + 1, y + 2, 6, 6);
+        bool near = onPad() && (toPx(sX) >> 3) == tx;
+        u8g2.setDrawColor(0); if (!near || (frameN & 4)) { plot(x + 2, y + 4); plot(x + 5, y + 4); } u8g2.setDrawColor(1);
+      }
     }
   for (uint8_t i = 0; i < doorN; i++) drawDoor(i);
   drawShip();
@@ -1836,7 +1885,7 @@ void drawPlay() {
   if (cardT) {      // zone card slides in from the right and off to the left
     int16_t off = cardT > 60 ? (cardT - 60) * 13 : cardT < 12 ? -(12 - cardT) * 11 : 0;
     u8g2.setFont(u8g2_font_6x10_tr);
-    const char *zone = sandbox ? "TEST ROOM" : "BRINSTAR";
+    const char *zone = sandbox ? "TEST ROOM" : zoneName(ROOMS[curRoom].zone);
     int16_t w = u8g2.getStrWidth(zone);
     int16_t x = (128 - w) / 2 + off;
     u8g2.setDrawColor(0); u8g2.drawBox(x - 6, 22, w + 12, 14); u8g2.setDrawColor(1);
@@ -1986,21 +2035,32 @@ void drawPauseItems() {
   if (pauseMsgT) { u8g2.setDrawColor(0); u8g2.drawBox(36, 55, 56, 9); u8g2.setDrawColor(1); drawCenteredText("NEED ROOM", 62); }
 }
 
+bool roomHasStation(uint8_t r) {
+  int16_t n = rTW(r) * rTH(r);
+  for (int16_t i = 0; i < n; i++) if (ROOMS[r].tiles[i] == 'S' || ROOMS[r].tiles[i] == 'P') return true;
+  return false;
+}
+
 void drawPause() {
   u8g2.setFont(u8g2_font_4x6_tr);
   frameN++;
   drawPauseTabs();
   if (pauseTab == 1) { drawPauseItems(); return; }
-  u8g2.setCursor(2, 6); u8g2.print(sandbox ? F("TEST ROOM") : F("BRINSTAR"));
+  u8g2.setCursor(2, 6); u8g2.print(sandbox ? "TEST ROOM" : zoneName(ROOMS[curRoom].zone));
   // map: one cell per screen, 7×5 px
-  const int16_t ox = 4, oy = 10, cw = 7, chh = 5;
+  // one zone at a time, shifted so its explored rooms start at the top-left of the map area
+  const int16_t cw = 7, chh = 5;
+  uint8_t z = ROOMS[curRoom].zone; int8_t mx0 = 127, my0 = 127;
+  for (uint8_t r = 0; r < ROOM_N; r++)
+    if (((visited >> r) & 1) && ROOMS[r].zone == z) { mx0 = min(mx0, ROOMS[r].mx); my0 = min(my0, ROOMS[r].my); }
+  const int16_t ox = 4 - mx0 * cw, oy = 10 - my0 * chh;
   for (uint8_t r = 0; r < ROOM_N; r++) {
-    if (!((visited >> r) & 1) || ROOMS[r].zone == ZONE_TEST) continue;
+    if (!((visited >> r) & 1) || ROOMS[r].zone != z || z == ZONE_TEST) continue;
     int16_t x = ox + ROOMS[r].mx * cw, y = oy + ROOMS[r].my * chh;
     int16_t w = ROOMS[r].sw * cw + 1, h = ROOMS[r].sh * chh + 1;
     if (r == curRoom && (frameN & 8)) fillBoxClipped(x, y, w, h);
     else frameSafe(x, y, w, h);
-    if (r == roomAtTile(padTX, padTY)) { u8g2.setCursor(x + 2, y + h - 1); if (r != curRoom || !(frameN & 8)) u8g2.print('S'); }
+    if (roomHasStation(r)) { u8g2.setCursor(x + 2, y + h - 1); if (r != curRoom || !(frameN & 8)) u8g2.print('S'); }
   }
   // status
   u8g2.setCursor(56, 16); u8g2.print(ROOMS[curRoom].name);
@@ -2129,8 +2189,10 @@ void gameStart() {
   watch::playTune(TUNE_TITLE, 7);
 }
 
+uint8_t fadeEdges;    // presses made while a room fade froze play: they still count (a double jump)
 void gameUpdate(uint8_t e) {
   if (trState == TR_OUT) {
+    if (mode == M_PLAY) fadeEdges |= e;
     if (++trLevel >= trSteps) {
       trLevel = trSteps; trState = TR_IN;
       if (trAction) { void (*a)() = trAction; trAction = nullptr; a(); }
@@ -2140,8 +2202,10 @@ void gameUpdate(uint8_t e) {
   if (trState == TR_IN) {
     if (trLevel) trLevel--;
     if (!trLevel) trState = TR_NONE;
-    e = 0;
+    if (mode == M_PLAY) { e |= fadeEdges; fadeEdges = 0; }
+    else e = 0;
   }
+  if (mode != M_PLAY) fadeEdges = 0;
   switch (mode) {
     case M_TITLE: titleStep(e); break;
     case M_STORY: storyStep(e); break;

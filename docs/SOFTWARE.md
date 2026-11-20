@@ -158,9 +158,17 @@ RP2040 has headroom, but keep watch games tiny:
   Rooms touch edge to edge, so leaving a room's edge puts Samus in whichever room is there (fade, camera
   snaps to the new room's bounds). Doors are 3-tile columns on room edges: blue opens to any shot, red needs a
   missile and then stays open. Tile/object legend is at the top of the file.
-- **Current build:** Brinstar B01–B06: ship → surface → Brinstar Shaft (1×4) → Morph Ball shrine (1×3, one-way
-  drop) → ball tunnel back into the shaft → Missile Room (2×2) → Junction (2×2), with a climbable way home from every
-  room. The junction's red doors lead to Kraid / Norfair, not built yet ("NEXT BUILD").
+- **Current build:** Brinstar B01–B08 and Kraid's Lair K01–K10 (no K05: its missile tank sits at the bottom of
+  K04). Ship → surface → shaft → Morph Ball shrine → Missile Room → junction (B06) → west red door → Lair:
+  spike hall (Swipe Pirate) → Bombs shrine (9-tile drop; bomb the floor) → cracked descent (tank #3) → lower
+  tunnels (Energy Tank) → Kraid save station (K07) → Kraid (K08) → chute (K09; slashed rock opens with Space
+  Jump) → B07 under the junction (Tourian hatch in its floor) and the K10 cache (tank #4). B08 under the surface
+  path's cracked seam holds tank #2. The junction's east red door (Norfair) is unbuilt.
+- **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
+  Beaten bosses are saved (`bosses` bits) and don't come back. Save version 4.
+- **Hazards:** spikes (`^`, solid): 1 energy and back to the last safe footing (updated whenever Samus stands
+  clear of spikes). Broken `B`/`X` blocks stay open until death or a reload (oldest first if 32 are open).
+- **Zones:** crossing into another zone shows its name card; the pause map shows the current zone only.
 - **Items:** each kind has its own 8×8 icon (`ICON_*`). Major items (Morph Ball, Missiles) sit in a seated
   Chozo statue's hands inside an orb that must be shot open; taking one flashes the screen, pulls rings of
   light in to Samus, plays the long fanfare and opens a panel with the icon at 3×. Energy tanks get the panel
@@ -172,12 +180,11 @@ RP2040 has headroom, but keep watch games tiny:
   mid-air ≈ 28 px more (always somersaults); release to cut the jump, jump buffer and ledge grace; running jumps
   somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
 - **Bombs:** in the ball, Select/OK drops a bomb (up to 3 live, ~0.6 s fuse). The blast (11 px) breaks cracked
-  rock (`B`, re-forms when you re-enter the room), hurts enemies (2), and pops the ball ~23 px if it's caught in
+  rock (`B`; stays open until death/reload), hurts enemies (2), and pops the ball ~23 px if it's caught in
   it: a bomb jump reaches a ball hole 2 tiles up. Bombs dropped in mid-air stay where they're dropped.
 - **Space Jump:** while somersaulting, Up again once the last jump has nearly topped out gives another
   (unlimited); a ring of sparks turns round the flip. The flip hurts enemies it touches (4 damage, including the
-  one it lands on) and Samus takes no contact damage while flipping. It breaks slashed rock (`X`, re-forms on
-  room entry). Firing ends the flip.
+  one it lands on) and Samus takes no contact damage while flipping. It breaks slashed rock (`X`). Firing ends the flip.
 - **Ice Missiles:** with Ice on, a missile freezes an enemy for ~5 s instead of hurting it (it shivers for the
   last 1.5 s). Frozen enemies are harmless and solid (stand on them; one frozen against Samus doesn't trap her);
   any missile shatters one, the beam glances off. Ice missiles still open red doors. HUD label reads ICE.
@@ -222,6 +229,8 @@ RP2040 has headroom, but keep watch games tiny:
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
 - Host tests: `tools/metroid_test/build.sh`, then `out/check` (room sizes, overlaps, openings line up,
-  door shape, no 2-tile pinch points, Morph Ball reachable standing, the shrine only left by rolling, and the
-  ship reachable again from everywhere at each gear stage — climbs up to 4 tiles, 7 with the double jump) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  door shape, no 2-tile pinch points; each major item reachable with the gear before it; the Morph Ball and Bombs
+  shrines only left by using the item; and from everywhere Samus can reach at each gear stage, a save station
+  is reachable again. Moves: 4-tile jumps, 7 with the double jump, any height with Space Jump; ball ducts,
+  bomb hops of 2; red doors need Missiles, `B` Bombs, `X` Space Jump; never standing on spikes) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
   see the header of `run.cpp`).
