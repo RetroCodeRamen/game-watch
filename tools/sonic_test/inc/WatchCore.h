@@ -19,8 +19,8 @@ inline bool inApp() { return true; }
 inline uint8_t held() { return g_held; }
 inline uint32_t frameCount() { return 0; }
 inline uint8_t hours() { return 10; } inline uint8_t minutes() { return 10; } inline uint8_t seconds() { return 0; }
-inline uint8_t month() { return 1; } inline uint8_t day() { return 1; }
+inline uint8_t month() { return 12; } inline uint8_t day() { return 25; }   // screenshots: Christmas morning
 inline bool alarmOn() { return false; } inline uint8_t alarmHours() { return 0; } inline uint8_t alarmMinutes() { return 0; }
 inline uint8_t setPage() { return 0; } inline uint8_t setField() { return 0; }
-inline void print2(uint8_t) {} inline void printMonth(uint8_t) {}
+inline void print2(uint8_t v) { char b[4]; snprintf(b, 4, "%02d", v); u8g2.print(b); } inline void printMonth(uint8_t) {}
 }

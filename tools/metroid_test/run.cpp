@@ -3,6 +3,8 @@
 // script tokens: <frames>:<buttons>  buttons from L R U(action) D(mode/down) F(fire/ok) . = none
 //   e.g. "40:. 1:U 60:R 1:D"  ·  "shot" dumps the current frame  ·  "every:N" dumps every N frames
 //   "warp:<room>:<tx>:<ty>" puts Samus on a tile  ·  "gear:<bits>"  ·  "god" makes her immune
+//   "visit:<hex>" marks rooms explored · "playtime:<s>" sets the play clock
+//   "face:<frames>" animates and dumps the clock face
 //   "frz:<tx>" freezes the room's Rippers at column tx  ·  "keep:<kind>" removes every enemy but that kind (4 turret, 5 Swipe, 6 Bolt, 7 Metroid)
 #include "pp.cpp"
 #include <stdio.h>
@@ -13,7 +15,7 @@ EEPROMClass EEPROM;
 void watch::print2(uint8_t v) { char b[4]; snprintf(b, 4, "%02d", v); u8g2.print(b); }
 static int shotN = 0; static std::string prefix = "f";
 void dump() {
-  char fn[64]; snprintf(fn, 64, "%s_%03d.pbm", prefix.c_str(), shotN++);
+  char fn[512]; snprintf(fn, sizeof fn, "%s_%03d.pbm", prefix.c_str(), shotN++);
   FILE *f = fopen(fn, "w"); fprintf(f, "P1\n128 64\n");
   for (int y = 0; y < 64; y++) { for (int x = 0; x < 128; x++) fputc((u8g2.buf[(y>>3)*128+x] >> (y&7)) & 1 ? '1' : '0', f); fputc('\n', f); }
   fclose(f);
@@ -33,8 +35,11 @@ int main(int argc, char **argv) {
   std::string tok; uint8_t prev = 0; int every = 0, fcount = 0;
   while (ss >> tok) {
     if (tok == "shot") { dump(); continue; }
+    if (tok.rfind("face:", 0) == 0) { for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); u8g2.clearBuffer(); drawView(); dump(); continue; }   // the clock face
     if (tok.rfind("en:", 0) == 0) { energy = atoi(tok.c_str() + 3); continue; }
     if (tok == "god") { god = true; continue; }
+    if (tok.rfind("visit:", 0) == 0) { visited |= strtoull(tok.c_str() + 6, nullptr, 16); continue; }   // mark rooms explored (hex bit mask by room index)
+    if (tok.rfind("playtime:", 0) == 0) { playFrames = (uint32_t)atoi(tok.c_str() + 9) * 30; continue; }   // seconds on the play clock
     if (tok == "corrupt") { SaveData a2, b2; EEPROM.get(EE_SLOT_A, a2); EEPROM.get(EE_SLOT_B, b2); int at = a2.seq > b2.seq ? EE_SLOT_A : EE_SLOT_B; EEPROM.d[at + 9] ^= 0xFF; continue; }   // a power cut mid-save: damage the newer slot
     if (tok == "reboot") { gameStart(); continue; }   // the watch restarted: back to the title, flash kept
     if (tok == "havesave") { haveSave = true; continue; }   // pretend a save exists (title shows CONTINUE / NEW GAME)

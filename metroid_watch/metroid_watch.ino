@@ -56,7 +56,7 @@ static_assert(sizeof(SuspendData) <= 128, "the suspend snapshot gets 128 bytes")
 // Buttons. The prototype has five: Mode, Left, Action, Right, Select/OK.
 //   Left/Right move · Action = UP (jump; stand up from the ball) · Mode = DOWN (morph / save)
 //   Select/OK = FIRE (bomb in the ball) · DOWN + FIRE together = "mode": tap switches
-//   beam/missiles, hold opens the pause menu.
+//   beam/missiles, hold opens the pause menu · holding Mode (DOWN) alone also opens it.
 // When the 6th button is fitted it becomes DOWN and Mode goes back to cancel/exit:
 // change B_DOWN here (and add the pin to WatchCore) — nothing else needs to move.
 // =====================================================================
@@ -64,6 +64,7 @@ const uint8_t B_UP = B_MID;     // Action
 const uint8_t B_DOWN = B_MODE;  // Mode (for now)
 const uint8_t B_FIRE = B_GAME;  // Select/OK
 const uint8_t CHORD_HOLD = 12;  // frames of DOWN+FIRE that open the pause menu (~0.4 s)
+const uint8_t MODE_HOLD = 20;   // frames of Mode (DOWN) alone that open the pause menu (~0.7 s)
 
 // ---- modes ----
 enum : uint8_t { M_TITLE, M_STORY, M_PLAY, M_ITEM, M_PAUSE, M_DEAD, M_END };
@@ -1381,6 +1382,12 @@ void handleInput(uint8_t e) {
     }
     prevHeld = h;
     return;
+  }
+  // hold Mode (Down) on its own: pause. The press already crouched/morphed, so put that back.
+  if (h == B_DOWN && downHeldT == MODE_HOLD) {
+    undoDown();
+    pauseSel = 0; pauseTab = 0; gearSel = 0; mode = M_PAUSE; beep(400, 30);
+    inputLock = 255; prevHeld = h; return;
   }
   if (e & B_DOWN) doDown();
   if ((e & B_FIRE) && !(h & B_DOWN)) fire();

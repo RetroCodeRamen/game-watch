@@ -151,7 +151,8 @@ RP2040 has headroom, but keep watch games tiny:
 - **Buttons (prototype, 5):** Left/Right move · Action = Up (jump; from the ball: stand, or crouch if
   that's all the room) · Mode = Down, acting on press: stand → crouch → Morph Ball (save on the ship pad).
   Crouching fires low (floor enemies); a direction stands her up and runs, Action jumps from the crouch · Select/OK = fire (bombs in the ball) · **Down + Select/OK** = "mode":
-  tap switches beam/missiles (and undoes the crouch/morph Down just made), hold ~0.4 s opens the pause screen (map, status, Resume / Clock).
+  tap switches beam/missiles (and undoes the crouch/morph Down just made), hold ~0.4 s opens the pause screen (map, status, Resume / Clock). Holding Mode (Down) alone
+  for ~0.7 s also opens it (the crouch/morph that press made is put back).
   When the 6th button is fitted it becomes Down and Mode goes back to cancel/exit — the aliases at the top
   of `metroid_watch.ino` are the only place to change.
 - **World:** `metroid_world.h` holds ASCII tile rooms (8 px tiles, 16×7 per screen) placed on one map grid.
