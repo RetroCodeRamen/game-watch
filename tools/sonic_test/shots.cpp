@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
   if (argc > 2) prefix = argv[2];
   std::stringstream ss(argc > 1 ? argv[1] : ""); std::string tok;
   while (ss >> tok) {
-    if (tok == "shot") { dump(); continue; }
+    if (tok == "shot") { uint8_t iv = invul; invul = 0; dump(); invul = iv; continue; }   // never catch him mid-blink
     if (tok.rfind("face:", 0) == 0) { faceView = true; for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); dump(); faceView = false; continue; }
     if (tok == "title") { gameStart(); for (int i = 0; i < 40; i++) frame(0); continue; }
     if (tok.rfind("act:", 0) == 0) { int z, a; sscanf(tok.c_str(), "act:%d:%d", &z, &a); gameStart(); startGame(); startAct(z, a); trState = TR_NONE; trLevel = 0; continue; }

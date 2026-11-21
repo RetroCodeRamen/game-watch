@@ -14,8 +14,8 @@ shot() { # name, runner, script, which frame
 echo "Sonic Watch"
 shot sonic_clock   "$S" "face:40" 0
 shot sonic_title   "$S" "title 30:. shot" 0
-shot sonic_green_hill "$S" "act:0:0 40:. run:1700 25:. shot" 0
-shot sonic_chemical   "$S" "act:1:0 40:. run:1700 25:. shot" 0
+shot sonic_green_hill "$S" "act:0:0 40:. run:2600 30:. shot" 0
+shot sonic_chemical   "$S" "act:1:0 40:. run:900 30:. shot" 0
 shot sonic_casino     "$S" "act:2:0 40:. run:900 25:. shot" 0
 shot sonic_scrap      "$S" "act:3:0 40:. run:2500 25:. shot" 0
 shot sonic_boss    "$S" "act:0:1 toboss 50:. shot" 0

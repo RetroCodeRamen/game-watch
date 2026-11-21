@@ -79,7 +79,7 @@ void drawSplash() {
 }
 
 void stepWatchFace() {
-  const int16_t ground = 50;   // Sonic centre: feet land on the dashed line at y 56
+  const int16_t ground = 49;   // Sonic centre: feet (RAD_STAND = 7 below) land on the dashed line at y 56
   const int16_t ringX = 118;
   const int16_t ringY = 20;
   wfAnim++;
@@ -96,14 +96,14 @@ void stepWatchFace() {
     wfX += 2;
     if (wfRingLive && wfX >= 100 && wfX <= 106) {
       wfAir = true;
-      wfVy = -8;  // high enough to reach the clock-side ring
+      wfVy = -7;  // up to the ring beside the time, head still on screen
     }
   } else {
-    // Keep sprite fully clear of the right edge (12px wide, center=wfX)
+    // Keep the sprite clear of the right edge (24 px wide, centre = wfX)
     if (wfX < 114) wfX += 2;
     wfY += wfVy;
     wfVy += 1;
-    int16_t by = wfY - 6;
+    int16_t by = wfY - 12;     // his hands / head
     if (wfRingLive && abs(wfX - ringX) < 14 && abs(by - ringY) < 12) {
       wfRingLive = false;
       wfRingCD = 100;
@@ -118,7 +118,7 @@ void stepWatchFace() {
 
   // After the jump, leave before the sprite can kiss column 128 (wraps to col 0-2)
   if (!wfAir && wfX > 118) {
-    wfX = -16;
+    wfX = -14;
     wfY = ground;
     wfVy = 0;
     wfPause = 90;
@@ -131,11 +131,11 @@ void drawView() {
   u8g2.setDrawColor(1);
   for (uint8_t i = 0; i < 128; i += 8) hLineSafe(i, 56, 4);
 
-  // Left deco / center time / right ring — sized so they don't collide
+  // Time across the top; the 29-px Sonic runs underneath it (his head clears the digits)
   drawSunflower(10, 54);
 
   u8g2.setFont(u8g2_font_logisoso24_tn);
-  u8g2.setCursor(30, 36); print2(hours()); u8g2.print(':'); print2(minutes());
+  u8g2.setCursor(30, 26); print2(hours()); u8g2.print(':'); print2(minutes());
 
   if (wfRingLive) drawRingGlyph(118, 20);
   else if ((wfRingCD > 70) && ((wfAnim >> 1) & 1)) {
@@ -146,9 +146,10 @@ void drawView() {
 
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setCursor(2, 63); printMonth(month()); u8g2.print(' '); print2(day());
-  u8g2.setCursor(100, 63); print2(seconds());
-  if (alarmOn()) {
-    u8g2.setCursor(40, 9); u8g2.print(F("ALM "));
+  u8g2.setCursor(112, 63); print2(seconds());
+  if (alarmOn()) {                 // bottom row, between the date and the seconds
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.setCursor(56, 63); u8g2.print(F("A "));
     print2(alarmHours()); u8g2.print(':'); print2(alarmMinutes());
   }
 }
@@ -2208,10 +2209,6 @@ void blitSonic(int16_t left, int16_t top, const uint8_t *src, uint8_t w, uint8_t
 void drawSonicFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
   blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 1 + RAD_STAND, sonicFrames[id], SONIC_W, SONIC_H, SONIC_ROWBYTES, faceRight);
 }
-// The small Sonic (clock face). Feet on row y + 6, as before the big sprite.
-void drawMiniFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
-  blitSonic(x - (int16_t)MINI_W / 2, y - (int16_t)MINI_H + 1 + 6, sonicMini[id], MINI_W, MINI_H, MINI_ROWBYTES, faceRight);
-}
 
 // Simple version for the watch face: run cycle / spin-ball / idle blink by frame count
 void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, bool moving) {
@@ -2219,7 +2216,7 @@ void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, b
   if (roll) id = SPR_ROLL0 + ((frame >> 1) & 3);
   else if (moving) id = SPR_RUN0 + ((frame >> 1) & 3);
   else id = ((frame & 63) < 3) ? SPR_BLINK : SPR_STAND;
-  drawMiniFrame(x, y, id, faceRight);
+  drawSonicFrame(x, y, id, faceRight);
 }
 
 // In-game Sonic: animation follows his speed (walk → run → figure-8 legs at top speed),

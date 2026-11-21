@@ -130,7 +130,7 @@ RP2040 has headroom, but keep watch games tiny:
   Running speed and acceleration were kept at their old (5/4) values on purpose, so the game is no faster on
   screen; jump, springs, gravity and Sonic's body scale with the world (`VS()`, ×1.3 over the old values) so
   every ledge is still in reach and jumps take the same time. Loops keep their old pixel size (a bigger loop
-  would need more speed). The clock face keeps the small 20×22 Sonic (`sonicMini`).
+  would need more speed). The clock face uses the same Sonic, running under the time.
 - Physics follows Sonic 1 proportions: jump ≈ 38 design px (48 on screen, ~2.2× Sonic's height), yellow spring ≈ 62 (77 on screen), slope pull 0.125·sin, Sonic sticks to the ground over crests and down slopes, side contact with walls/spikes just stops him (no knock-back).
 - Sprite art lives in `assets/sonic_sprite/sonic.txt` (20×22 ASCII frames); `python3 scripts/gen_sonic_sprite.py` regenerates `sonic_sprites.h`.
 - Host tests (no watch needed): `tools/sonic_test/build.sh`, then `out/check` (level-data rules: slopes, cliffs, spike clearance, bridges, capacity) and `out/stops` (reports every place Sonic gets stopped with no wall, spike, enemy or real cliff nearby, via the sketch's `STOP_HOOK`) and `out/bot` (a bot plays the real game code through every act; `GOD=1` makes hazards harmless so it only tests "can you get through").
