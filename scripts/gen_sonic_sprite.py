@@ -3,6 +3,8 @@
 
   sonic_big.txt  Sonic, in game and on the clock face (from the reference sheet
                  reference_29.webp; see build_big_from_reference.py for how the frames were made)
+  egg_mobile.txt the Egg Wrecker boss ship with Robotnik, facing right (44x26); the generator
+                 also derives its outline (drawn while it flashes after a hit)
 
 The file is plain text: a "= name" line starts each frame, then the rows ('#' lit, '.' dark),
 Sonic facing right with his feet on the bottom row. Every frame has the same size; the order is
@@ -44,6 +46,13 @@ out = ['#pragma once', '#include <Arduino.h>', '',
        '// rerun. Facing right (mirrored for left), XBM bit order (LSB = leftmost pixel). Feet sit on',
        '// the bottom row; the spin-ball sits one row up (rolling radius is one smaller).']
 emit(out, 'SONIC', 'sonicFrames', big, BW, BH)
+egg, EW, EH = load('egg_mobile.txt')
+rows = egg[0][1]
+lit = lambda x, y: 0 <= x < EW and 0 <= y < EH and rows[y][x] == '#'
+outline = [''.join('#' if lit(x, y) and not (lit(x-1, y) and lit(x+1, y) and lit(x, y-1) and lit(x, y+1)) else '.'
+                   for x in range(EW)) for y in range(EH)]
+out.append('// Egg Wrecker ship (egg_mobile.txt), facing right; row 0 is the dome top:')
+emit(out, 'EGG', 'eggShip', [('ship', rows), ('outline', outline)], EW, EH)
 out.append('enum : uint8_t {\n  ' + ', '.join('SPR_%s = %d' % (n.upper(), i) for i, (n, _) in enumerate(big)) + ',\n  SPR_COUNT = %d\n};' % len(big))
 open(OUT, 'w').write('\n'.join(out) + '\n')
 print('wrote %s (%d frames, %dx%d)' % (OUT, len(big), BW, BH))

@@ -34,6 +34,24 @@ int main(int argc, char **argv) {
     if (tok == "special") { startSpecial(); trState = TR_NONE; trLevel = 0; continue; }
     if (tok.rfind("at:", 0) == 0) { int x = atoi(tok.c_str() + 3); setPlayerPos(x, groundAt(x) - RAD_STAND); fvx = fvy = 0; cam = x - 64; continue; }   // put Sonic on the ground at world x
     if (tok.rfind("rings:", 0) == 0) { rings = atoi(tok.c_str() + 6); continue; }
+    if (tok == "fight") {                    // boss bot: wait on the side away from the ball, jump at the ship
+      int t = 0, jumpT = 0, hits = 0, hp = bossHP, hurtN = 0;
+      for (; t < 30 * 90 && bossOn && mode == GAME; t++) {
+        int16_t side = ballWX < eggX ? 1 : -1;
+        int16_t target = eggX + side * 16;
+        uint8_t h = 0;
+        if (jumpT) { jumpT--; h |= B_MID; }
+        if (px < target - 3) h |= B_RIGHT; else if (px > target + 3) h |= B_LEFT;
+        if (!jumpT && onGround && abs(px - target) < 8 && abs(ballWX - px) > 20 && bossPhase == EGG_FIGHT) { jumpT = 14; h |= B_MID; }
+        uint8_t inv0 = invul;
+        rings = 50;                            // measure hits and hurts, don't let a hurt end the run
+        frame(h);
+        if (invul > inv0 + 10) hurtN++;
+        if (bossHP < hp) { hits++; hp = bossHP; }
+      }
+      printf("  fight: %d hits, %d hurts, boss %s after %.1f s\n", hits, hurtN, bossOn ? "still up" : "beaten", t / 30.0);
+      continue;
+    }
     if (tok == "toboss") { for (int t = 0; t < 30 * 240 && !bossOn && mode == GAME; t++) { frame(B_RIGHT | ((t % 40) < 10 ? B_MID : 0)); invul = 2; } continue; }
     if (tok.rfind("run:", 0) == 0) {          // hold right, hop when stalled (like bot.cpp)
       int goal = atoi(tok.c_str() + 4), best = px, bestT = 0;

@@ -332,6 +332,7 @@ float chainLen;                  // grows from 0 when the ball is let down
 float ballAng;                   // current chain angle (0 = straight down, + = to the right)
 uint8_t eggT, eggPause, eggLaugh;
 int16_t arenaOrigin;             // world X where boss arena starts
+static const int16_t EGG_CAM_Y = -10;   // boss camera at rest (arena floor at screen y 62)
 
 // Special stage
 
@@ -736,7 +737,7 @@ void startEggWrecker() {
   setPlayerVel(0, 0);
   inLoop = false;
   cam = arenaOrigin;
-  camY = 0;
+  camY = EGG_CAM_Y;
   clearWorld();
   // Flat arena, like the original: the ship flies in from the top right
   eggFX = arenaOrigin + 160;
@@ -1489,12 +1490,15 @@ void handleDoubleTapRoll(uint8_t e) {
 }
 
 // ---- Egg Wrecker ----
-static const int16_t EGG_HOVER = 10;          // ship centre height while fighting
+// Sized against the 29-px Sonic (like the Genesis boss: the ship is wider than Sonic and as
+// tall, the ball a little taller than him). Arena floor is world y 52; the boss camera sits
+// 10 px up, so the ship rides just under the HUD and the ball swings through Sonic's height.
+static const int16_t EGG_HOVER = 12;          // ship centre (world y) while fighting
 static const int16_t EGG_LEFT = 26, EGG_RIGHT = 102;   // patrol ends (from arenaOrigin)
-static const float CHAIN_LEN = 24.0f;          // pivot → ball centre
-static const int16_t BALL_R = 6;
+static const float CHAIN_LEN = 15.0f;          // pivot → ball centre
+static const int16_t BALL_R = 11;
 
-int16_t eggPivotY() { return eggY + 11; }
+int16_t eggPivotY() { return eggY + 13; }
 
 void eggPlaceBall() {
   ballAng = pendAmp * sinf(pendPhase);
@@ -1551,7 +1555,7 @@ void eggStep(int16_t rad) {
   if (bossPhase >= EGG_BLOWUP) return;            // can't hurt or be hurt any more
 
   // Touch the ship: always bounce off; spinning into it scores a hit
-  if (touches(eggX, eggY, 9, 8)) {
+  if (touches(eggX, eggY, 20, 11)) {
     bool attack = rolling && bossCool == 0;
     setPlayerVel((px < eggX) ? ZV(-2) : ZV(2),
                  (py <= eggY + 2) ? -BOSS_BOUNCE : BOSS_BOUNCE / 2);
@@ -2026,8 +2030,8 @@ void gameStepInner(uint8_t e) {
   if (bossOn) {
     cam = arenaOrigin;
     // Floor stays at the bottom; the view rises to keep Sonic in sight above the Egg Mobile
-    int16_t want = py - 26;
-    if (want > 0) want = 0;
+    int16_t want = py - 36;
+    if (want > EGG_CAM_Y) want = EGG_CAM_Y;
     if (camY > want) camY -= (camY - want + 1) / 2;
     else if (camY < want) camY += (want - camY + 3) / 4;
   } else {
@@ -2601,20 +2605,42 @@ void drawBee(int16_t x, int16_t y, uint8_t frame, uint8_t state) {
   if (state == 1) discSafe(x - 7, y + 3, 1);
 }
 
+// The ship bitmap (sonic_sprites.h): 44x26, facing right, mirrored to face its way of travel.
+// A dark halo keeps it readable over the chain and Sonic.
+void blitEgg(int16_t left, int16_t top, uint8_t which, bool faceRight) {
+  const uint8_t *src = eggShip[which];
+  for (uint8_t pass = 0; pass < 2; pass++) {
+    u8g2.setDrawColor(pass);
+    for (uint8_t row = 0; row < EGG_H; row++)
+      for (uint8_t col = 0; col < EGG_W; col++) {
+        if (!(pgm_read_byte(&src[row * EGG_ROWBYTES + (col >> 3)]) & (1 << (col & 7)))) continue;
+        int16_t x = left + (faceRight ? col : (EGG_W - 1 - col)), y = top + row;
+        if (pass) plot(x, y);
+        else { plot(x - 1, y); plot(x + 1, y); plot(x, y - 1); }
+      }
+  }
+  u8g2.setDrawColor(1);
+}
+
 void drawEggWrecker() {
   int16_t ex = sx(eggX), ey = sy(eggY);
   bool flash = bossCool && (bossCool & 2);
   if (bossPhase == EGG_BLOWUP) { ex += (eggT & 2) ? 1 : -1; }   // shudder
+  bool faceR = eggDir > 0;
+  int16_t left = ex - EGG_W / 2, top = ey - 13;
+  auto artX = [&](int16_t c) { return faceR ? left + c : left + EGG_W - 1 - c; };
 
-  // Chain: a link every 4 px from the belly to the ball, then the checkered ball
+  // Chain of ring links from the hook to the ball, then the checkered ball
   if (chainLen > 1) {
     int16_t pxv = ex, pyv = sy(eggPivotY());
     int16_t bx = sx(ballWX), by = sy(ballWY);
     float sa = sinf(ballAng), ca = cosf(ballAng);
-    for (float d = 2; d < chainLen - BALL_R + 1; d += 4) {
+    for (float d = 3; d < chainLen - BALL_R + 2; d += 5) {
       int16_t lx = pxv + (int16_t)lroundf(d * sa), ly = pyv + (int16_t)lroundf(d * ca);
-      frameSafe(lx - 1, ly - 1, 3, 3);
+      circleSafe(lx, ly, 2);
     }
+    // dark rim first so the ball stands out against Sonic and the ground
+    u8g2.setDrawColor(0); discSafe(bx, by, BALL_R + 1); u8g2.setDrawColor(1);
     // checker quarters turn with the chain
     for (int16_t yy = -BALL_R; yy <= BALL_R; yy++)
       for (int16_t xx = -BALL_R; xx <= BALL_R; xx++) {
@@ -2626,39 +2652,36 @@ void drawEggWrecker() {
       }
   }
 
-  // Ship: round cockpit hull, skirt with vents, pilot dome
-  if (!flash) {
-    discSafe(ex, ey + 5, 8);
-    fillBoxClipped(ex - 7, ey + 10, 14, 4);
-    u8g2.setDrawColor(0);
-    for (int16_t i = -5; i <= 5; i += 4) vLineSafe(ex + i, ey + 10, 4);
+  // Thruster flame behind the ship while it flies (flickers)
+  bool flying = bossPhase == EGG_ENTER || bossPhase == EGG_FLEE || (bossPhase == EGG_FIGHT && !eggPause);
+  if (flying && !flash) {
+    int16_t len = 3 + (eggT & 2);
+    for (int16_t i = 1; i <= len; i++) {
+      int16_t fx = faceR ? left - i : left + EGG_W - 1 + i;
+      plot(fx, top + 15); if (i < len - 1) { plot(fx, top + 14); plot(fx, top + 16); }
+    }
+  }
+  blitEgg(left, top, flash ? 1 : 0, faceR);
+  if (!flash && (bossCool || bossPhase == EGG_BLOWUP)) {   // ouch: goggles squeezed shut
     u8g2.setDrawColor(1);
-  } else {
-    circleSafe(ex, ey + 5, 8);
-    frameSafe(ex - 7, ey + 10, 14, 4);
+    for (int16_t c = 21; c <= 26; c++) plot(artX(c), top + 4);
+    u8g2.setDrawColor(0);
+    for (int16_t c = 21; c <= 26; c++) plot(artX(c), top + 5);
+    u8g2.setDrawColor(1);
+  } else if (!flash && eggLaugh && (eggLaugh & 4)) {        // laughing: moustache bounces
+    u8g2.setDrawColor(0);
+    for (int16_t c = 25; c <= 31; c++) plot(artX(c), top + 7);
+    u8g2.setDrawColor(1);
   }
-  discSafe(ex, ey, 4);
-  u8g2.setDrawColor(0);
-  if (bossCool || bossPhase == EGG_BLOWUP) {      // ouch: squeezed-shut eyes
-    hLineSafe(ex - 3, ey - 1, 2); hLineSafe(ex + 2, ey - 1, 2);
-  } else {
-    plot(ex - 2, ey - 1); plot(ex + 2, ey - 1);
-  }
-  u8g2.setDrawColor(1);
-  if (eggLaugh && (eggLaugh & 4)) frameSafe(ex - 2, ey + 2, 5, 3);   // laughing
-  else hLineSafe(ex - 3, ey + 3, 7);
 
   // Smoke puffs while it breaks up / escapes
   if (bossPhase >= EGG_BLOWUP) {
-    for (uint8_t i = 0; i < 3; i++) {
+    for (uint8_t i = 0; i < 4; i++) {
       uint8_t h = h8((uint16_t)(eggT / 3 + i * 37));
-      int16_t ox = (h & 15) - 8, oy = ((h >> 4) & 7) - 6;
-      circleSafe(ex + ox - (bossPhase == EGG_FLEE ? 6 : 0), ey + oy, 2 + (eggT + i) % 3);
+      int16_t ox = (h & 31) - 16, oy = ((h >> 5) & 7) - 12;
+      circleSafe(ex + ox - (bossPhase == EGG_FLEE ? 10 : 0), ey + oy, 2 + (eggT + i) % 4);
     }
   }
-
-  frameSafe(2, 57, 50, 6);
-  fillBoxClipped(4, 59, bossHP * 5, 2);
 }
 
 void drawBanner() {
@@ -2843,6 +2866,11 @@ void drawGame() {
   u8g2.setCursor(26, 6); printTime(actSeconds());
   for (uint8_t i = 0; i < emeralds && i < 4; i++) plot(70 + i * 4, 3);
   for (uint8_t i = 0; i < lives && i < 4; i++) discSafe(124 - i * 6, 3, 2);
+  if (bossOn) {                     // boss health, in the HUD strip
+    u8g2.setDrawColor(0); u8g2.drawBox(52, 0, 28, 7); u8g2.setDrawColor(1);
+    frameSafe(53, 1, 26, 5);
+    fillBoxClipped(55, 3, bossHP * 22 / 8, 1);
+  }
   // Timed power-up: its icon and a bar that runs down
   uint16_t pt = starT ? starT : shoesT, pmax = starT ? STAR_FRAMES : SHOES_FRAMES;
   if (pt) {
