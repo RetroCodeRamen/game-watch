@@ -1,10 +1,19 @@
 #pragma once
+// Host stub of the U8g2 bits the watch uses. Pixels go straight into a page buffer laid out like
+// the SH1106's; text is drawn with the real U8g2 C library and fonts (see build.sh), so screenshots
+// show the actual lettering.
 #include "Arduino.h"
 #include <stdio.h>
-typedef uint16_t u8g2_uint_t;
-static const uint8_t u8g2_font_6x10_tr[1]={0}, u8g2_font_logisoso24_tn[1]={0}, u8g2_font_5x7_tr[1]={0}, u8g2_font_4x6_tr[1]={0}, u8g2_font_ncenB18_tr[1]={0}, u8g2_font_ncenB08_tr[1]={0}, u8g2_font_ncenB10_tr[1]={0};
+#include <string>
+#include "u8g2.h"
 struct U8G2_SH1106_128X64_NONAME_F_HW_I2C {
   uint8_t buf[1024]; uint8_t col = 1; int cx = 0, cy = 0;
+  u8g2_t g; bool ready = false; const uint8_t *font = u8g2_font_5x7_tr;
+  void ensure() {
+    if (ready) return;
+    u8g2_Setup_sh1106_128x64_noname_f(&g, U8G2_R0, u8x8_byte_empty, u8x8_dummy_cb);
+    u8g2_SetFontMode(&g, 1); u8g2_SetDrawColor(&g, 1); ready = true;
+  }
   void setDrawColor(uint8_t c) { col = c; }
   void drawPixel(int x, int y) { x &= 0xffff; y &= 0xffff; if (x >= 128 || y >= 64) return; uint8_t m = 1 << (y & 7); if (col) buf[(y>>3)*128+x] |= m; else buf[(y>>3)*128+x] &= ~m; }
   void drawBox(int x, int y, int w, int h) { for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) drawPixel(x+i, y+j); }
@@ -14,9 +23,25 @@ struct U8G2_SH1106_128X64_NONAME_F_HW_I2C {
   void drawTriangle(int, int, int, int, int, int) {}
   void drawXBMP(int x, int y, int w, int h, const uint8_t *b) { int rb = (w+7)/8; for (int j=0;j<h;j++) for(int i=0;i<w;i++) if (b[j*rb+i/8] & (1<<(i&7))) drawPixel(x+i,y+j); }
   uint8_t *getBufferPtr() { return buf; }
-  int getStrWidth(const char *s) { return 5 * (int)strlen(s); }
+  int getStrWidth(const char *s) { ensure(); u8g2_SetFont(&g, font); return u8g2_GetStrWidth(&g, s); }
   void setCursor(int x, int y) { cx = x; cy = y; }
-  void setFont(const uint8_t *) {}
-  template<class T> void print(T) {}
+  void setFont(const uint8_t *f) { font = f; }
+  // draw the string with U8g2 into its own buffer, then copy the lit pixels in our draw colour
+  void text(const std::string &s) {
+    ensure(); u8g2_SetFont(&g, font); u8g2_ClearBuffer(&g);
+    int w = u8g2_DrawStr(&g, cx, cy, s.c_str());
+    uint8_t *b = u8g2_GetBufferPtr(&g);
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 128; x++) if (b[(y >> 3) * 128 + x] & (1 << (y & 7))) drawPixel(x, y);
+    cx += w;
+  }
+  void print(const char *s) { text(s); }
+  void print(const class __FlashStringHelper *s) { text((const char *)s); }
+  void print(char c) { text(std::string(1, c)); }
+  void print(int v) { text(std::to_string(v)); }
+  void print(unsigned v) { text(std::to_string(v)); }
+  void print(long v) { text(std::to_string(v)); }
+  void print(unsigned long v) { text(std::to_string(v)); }
+  void print(uint8_t v) { text(std::to_string((int)v)); }
+  void print(uint16_t v) { text(std::to_string((int)v)); }
   void clearBuffer() { memset(buf, 0, sizeof buf); }
 };

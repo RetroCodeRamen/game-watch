@@ -10,11 +10,12 @@
 set -e
 T=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$T/../.." && pwd); O="$T/out"
 mkdir -p "$O"
+CLIB=$("$T/../u8g2_host_lib.sh" "$O" | tail -1)   # real U8g2 text in screenshots
 arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries "$ROOT/libraries" \
   --preprocess "$ROOT/sonic_watch" > "$O/pp.cpp"
 g++ -std=gnu++17 -O1 -w -I"$O" -I"$T/inc" -I"$ROOT/libraries/WatchCore/src" -I"$ROOT/sonic_watch" \
-  -x c++ "$T/bot.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -o "$O/bot"
+  -I"$CLIB" -x c++ "$T/bot.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -x none "$O/u8g2/libu8g2.a" -o "$O/bot"
 g++ -std=gnu++17 -O1 -w -I"$O" -I"$T" -I"$T/inc" -I"$ROOT/libraries/WatchCore/src" -I"$ROOT/sonic_watch" \
-  -x c++ "$T/stops.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -o "$O/stops"
-g++ -O1 -I"$ROOT/sonic_watch" -I"$T/inc" "$T/check.cpp" -o "$O/check"
+  -I"$CLIB" -x c++ "$T/stops.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -x none "$O/u8g2/libu8g2.a" -o "$O/stops"
+g++ -O1 -I"$ROOT/sonic_watch" -I"$T/inc" -I"$CLIB" "$T/check.cpp" "$O/u8g2/libu8g2.a" -o "$O/check"
 echo "built $O/bot, $O/stops and $O/check"
