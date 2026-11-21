@@ -79,7 +79,7 @@ const fx ACC_G = 40, DEC_G = 56, TURN_G = 80;
 const fx ACC_A = 30, DRAG_A = 8;
 const fx GRAV = 32;          // jump peak ≈ 46 px (2 × Samus): a 4-tile ledge with ~14 px to spare
 const fx JUMP_V = 880;
-const fx JUMP2_V = 700;      // double jump in mid-air: ≈ 28 px more (≈ 7 tiles with both)
+const fx JUMP2_V = 650;      // double jump in mid-air: ≈ 26 px more (≈ 71 px with both: 7-tile climbs, not the 9-tile shrine pits)
 const uint8_t AIR_JUMPS = 1;
 const fx SPACE_READY = -200;  // Space Jump: the next jump comes once the last one has nearly topped out
 const uint8_t SPIN_DMG = 4;   // Space Jump somersault vs enemies

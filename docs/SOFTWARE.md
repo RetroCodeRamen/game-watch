@@ -193,7 +193,7 @@ RP2040 has headroom, but keep watch games tiny:
   the ship.
 - **Sprites:** Samus comes from the Metroid II (Game Boy) sheet in `metroid_watch/`, converted by `python3 scripts/gen_metroid_sprites.py` (writes `metroid_gb_sprites.h`; `--preview` writes `assets/metroid_gb_preview.png`): stand, 3-frame run, knees-up jump (turned in quarter steps for the running somersault); the 7 px morph ball is hand-drawn in the script. `assets/metroid_sprite_compare.png` is the GB vs SNES comparison.
 - **Physics (60 Hz):** run 1.5 px/step; jump peak ≈ 45 px (a 4-tile ledge with room to spare), double jump in
-  mid-air ≈ 28 px more (always somersaults); release to cut the jump, jump buffer and ledge grace; running jumps
+  mid-air ≈ 26 px more (always somersaults; a perfect double jump tops out ~71 px, under the 9-tile shrine pits); release to cut the jump, jump buffer and ledge grace; running jumps
   somersault; hitbox 8×21 standing, 6×7 ball (fits a 1-tile duct).
 - **Bombs:** in the ball, Select/OK drops a bomb (up to 3 live, ~0.6 s fuse). The blast (11 px) breaks cracked
   rock (`B`; stays open until death/reload), hurts enemies (2), and pops the ball ~23 px if it's caught in
@@ -254,5 +254,8 @@ RP2040 has headroom, but keep watch games tiny:
   is reachable again. Moves: 4-tile jumps, 7 with the double jump, any height with Space Jump; ball ducts,
   bomb hops of 2; red doors need Missiles, `B` Bombs, `X` Space Jump, Ridley's hatch `g` Ice; with Ice a Ripper's
   lane counts as something to stand on; gap jumps up to 6; never standing on spikes or lava; stages include a
-  Ridley-first order) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  Ridley-first order) and `out/bot` (physics bot: explores every gear stage with the real game code and real button
+  macros - jumps with many timings, double/space jumps, rolls, bomb jumps, shots - and checks every room the
+  checker expects is really reachable and every spot can get back to a save; ~3 min; `ROOM=<id>` debug output)
+  and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
   see the header of `run.cpp`).

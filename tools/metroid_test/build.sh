@@ -2,6 +2,7 @@
 # Host-side Metroid tests (no watch needed):
 #   ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check   # room data rules
 #   ./tools/metroid_test/out/run "<script>" [prefix]                  # scripted play + screenshots
+#   ./tools/metroid_test/out/bot [stage]                              # physics bot: real reachability
 set -e
 T=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$T/../.." && pwd); O="$T/out"
 mkdir -p "$O"
@@ -12,4 +13,6 @@ arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries "$ROO
 g++ -std=gnu++17 -O1 -w -include cstddef -I"$O" -I"$T/inc" -I"$ROOT/libraries/WatchCore/src" -I"$ROOT/metroid_watch" \
   -I"$CLIB" -x c++ "$T/run.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -x none "$O/u8g2/libu8g2.a" -o "$O/run"
 g++ -std=gnu++17 -O1 -I"$ROOT/metroid_watch" -I"$T/inc" -I"$CLIB" "$T/check.cpp" "$O/u8g2/libu8g2.a" -o "$O/check"
-echo "built $O/run and $O/check"
+g++ -std=gnu++17 -O2 -w -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DNO_U8G2_TEXT -include cstddef -I"$O" -I"$T/inc" -I"$ROOT/libraries/WatchCore/src" -I"$ROOT/metroid_watch" \
+  -x c++ "$T/bot.cpp" "$ROOT/libraries/WatchCore/src/WatchGfx.cpp" "$T/u8.cpp" -o "$O/bot"
+echo "built $O/run, $O/check and $O/bot"

@@ -20,5 +20,7 @@ jobs:
         run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries metroid_watch
       - name: Metroid room checker (reachability, softlocks, gates)
         run: ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check
+      - name: Metroid physics bot (real reachability and backtracking, ~3 min)
+        run: ./tools/metroid_test/out/bot
       - name: Sonic level checker
         run: ./tools/sonic_test/build.sh && ./tools/sonic_test/out/check
