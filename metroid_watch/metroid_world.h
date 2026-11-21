@@ -1,5 +1,5 @@
 #pragma once
-// Metroid Watch — world map (Design Revision 4, Brinstar slice B01–B06)
+// Metroid Watch — world map (Brinstar, Kraid's Lair, Norfair, Tourian)
 //
 // The world is one grid of "screens" (128×56 px = 16×7 tiles of 8 px). Each room sits at a map
 // position (mx, my) and covers sw×sh screens. Rooms touch edge to edge, so walking or falling out
@@ -75,10 +75,10 @@ static const char T_B02[] =
 static const char T_B03[] =
   "################"
   "####        ####"
-  "##            ##"
-  "#              #"
-  "#              #"
-  "#              #"
+  "#          X   #"
+  "#          X t #"
+  "#          X   #"
+  "#          #####"
   "#              #"
   "#              #"
   "#              #"
@@ -176,17 +176,17 @@ static const char T_B07[] =
   "################  ##############"
   "#                              #"
   "#                              #"
+  "#  t                           #"
+  "# ####         ####            #"
   "#                              #"
-  "#              ####            #"
   "#                              #"
   "#                              #"
-  "#                              #"
-  "#          ###                 #"
+  "#     r    ###                 #"
   "                               #"
   "                               #"
   "                               #"
-  "#################  #####GG######"
-  "#################  #####GG######";
+  "####GG###########  #############"
+  "####GG###########  #############";
 
 // ---------------------------------------------------------------- B08 Buried Alcove 1×1
 // Missile tank #2 under the cracked seam on the Surface Path (bomb through it). From the low step
@@ -208,7 +208,7 @@ static const char T_K01[] =
   "###          ###"
   "D              R"
   "D              R"
-  "D     z        R"
+  "D     p        R"
   "################";
 
 // ---------------------------------------------------------------- K02 Spike Hall 2×1
@@ -220,7 +220,7 @@ static const char T_K02[] =
   "D                              #"
   "D                              D"
   "####                           D"
-  "####       p              z    D"
+  "####       z              z    D"
   "######^^########^^######^^######";
 
 // ---------------------------------------------------------------- K03 Bombs Shrine 1×2
@@ -451,6 +451,78 @@ static const char T_N09[] =
   "#####~~~~~~#####"
   "################";
 
+// ---------------------------------------------------------------- T01 Tourian Entry Save 1×1
+// Under the gate room's hatch (open once Kraid and Ridley are beaten). Save station; the hole
+// in the floor goes down to the first Metroid. Space Jump back up through the hatch.
+static const char T_T01[] =
+  "####  ##########"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "####P####  #####";
+
+// ---------------------------------------------------------------- T02 First Metroid 1×1
+// One Metroid alone, to learn it: freeze it, shatter it with a missile; bomb it off if it latches.
+static const char T_T02[] =
+  "#########  #####"
+  "#              #"
+  "#   n          #"
+  "D              #"
+  "D              #"
+  "D              #"
+  "################";
+
+// ---------------------------------------------------------------- T03 Metroid Nest 2×2
+// Two Metroids over an acid pit; Rippers patrol above the acid - freeze them to cross (or Space
+// Jump). The hole at the far west drops to the final save.
+static const char T_T03[] =
+  "################################"
+  "#                              #"
+  "#        n            n        #"
+  "#                              D"
+  "#                              D"
+  "#                              D"
+  "#                          #####"
+  "#                              #"
+  "#                              #"
+  "#                              #"
+  "#            r     r           #"
+  "#                              #"
+  "#  ####~~~~~~~~~~~~~~~~~########"
+  "#  #############################";
+
+// ---------------------------------------------------------------- T05 Final Save 1×1
+// Refill before Mother Brain (east). Space Jump back up the hole to the nest.
+static const char T_T05[] =
+  "#  #############"
+  "#              #"
+  "#              #"
+  "#              D"
+  "#              D"
+  "#              D"
+  "######P#########";
+
+// ---------------------------------------------------------------- T06 Mother Brain 1×2
+// Her tank on the east; a ledge under the door and a step on the west. Destroying her starts the
+// escape: back to the ship before the timer runs out.
+static const char T_T06[] =
+  "################"
+  "#              #"
+  "#              #"
+  "D              #"
+  "D              #"
+  "D              #"
+  "####           #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "######         #"
+  "######    W    #"
+  "################"
+  "################";
+
 // ---------------------------------------------------------------- SB Test Room 4×3 (hidden)
 // Not part of the world: reached from the title (hold Left + Right). Samus starts at '@' with
 // everything. Left to right: the Bombs orb and a cracked-rock plug at ball height; a pit under a
@@ -582,6 +654,11 @@ static const RoomDef ROOMS[] = {
   {"N06", "RIDLEY SAVE",    6, 7, 1, 1, 2, T_N06},
   {"N08", "RIDLEY",         6, 8, 1, 2, 2, T_N08},
   {"N09", "RIDLEY'S EXIT",  5, 8, 1, 2, 2, T_N09},
+  {"T01", "TOURIAN SAVE",   4, 8, 1, 1, 3, T_T01},
+  {"T02", "FIRST METROID",  4, 9, 1, 1, 3, T_T02},
+  {"T03", "METROID NEST",   2, 9, 2, 2, 3, T_T03},
+  {"T05", "FINAL SAVE",     2, 11, 1, 1, 3, T_T05},
+  {"T06", "MOTHER BRAIN",   3, 11, 1, 2, 3, T_T06},
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},

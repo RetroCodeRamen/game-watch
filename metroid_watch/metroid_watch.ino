@@ -53,7 +53,7 @@ const uint8_t B_FIRE = B_GAME;  // Select/OK
 const uint8_t CHORD_HOLD = 12;  // frames of DOWN+FIRE that open the pause menu (~0.4 s)
 
 // ---- modes ----
-enum : uint8_t { M_TITLE, M_STORY, M_PLAY, M_ITEM, M_PAUSE, M_DEAD };
+enum : uint8_t { M_TITLE, M_STORY, M_PLAY, M_ITEM, M_PAUSE, M_DEAD, M_END };
 uint8_t mode = M_TITLE;
 
 // ---- screen ----
@@ -127,6 +127,9 @@ uint8_t coyote, jumpBuf, airJumps; bool jumpPress, bombPop;   // bombPop: rising
 uint8_t fireCD, invul, hurtLock, runPhase, animT, spinPhase;
 uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
 uint8_t gearOff;                  // gear switched OFF in the pause menu's Items tab
+uint16_t escapeT;                 // frames left to reach the ship after Mother Brain (0: no alarm)
+const uint16_t ESCAPE_FRAMES = 180 * 30;
+uint8_t endT;
 inline uint8_t eg() { return gear & ~gearOff & ~((gearOff & G_MORPH) ? G_BOMB : 0) & ~((gearOff & G_MISSILE) ? G_ICE : 0); }
 uint32_t playFrames;
 
@@ -234,7 +237,8 @@ bool solidTile(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   switch (c) {
     case 'B': case 'X': return !isBroken(tx, ty);
-    case '#': case '=': case 'G': case 'h': case 'S': case 'P': case '^': case '~': return true;
+    case '#': case '=': case 'h': case 'S': case 'P': case '^': case '~': return true;
+    case 'G': return (bossesBeaten & 3) != 3;  // the Tourian hatch: both bosses
     case 'g': return !(bossesBeaten & 2);      // Ridley's hatch: opens when he's beaten
     case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
     default: return false;
@@ -244,7 +248,7 @@ bool solidTile(int16_t tx, int16_t ty) {
 bool rockish(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   if (c == 'B' || c == 'X') return !isBroken(tx, ty);
-  return c == '#' || c == '=' || c == 'G' || c == 'D' || c == 'R' || (c == 'g' && !(bossesBeaten & 2));
+  return c == '#' || c == '=' || c == 'D' || c == 'R' || (c == 'G' && (bossesBeaten & 3) != 3) || (c == 'g' && !(bossesBeaten & 2));
 }
 
 // [x0,x1) × [y0,y1) in px
@@ -459,7 +463,7 @@ void loadFrom(const SaveData &s) {
   saveTX = s.saveTX; saveTY = s.saveTY; bossesBeaten = s.bosses;
   energy = maxEnergy; missiles = maxMissiles; weapon = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
-  orbOpen = 0; brokenN = 0;
+  orbOpen = 0; brokenN = 0; escapeT = 0;
   invul = 0; hurtLock = 0; fireCD = 0; jumpBuf = 0; coyote = 0;
   placeAtPad();
 }
@@ -981,9 +985,10 @@ void bossDefeated(uint8_t kind) {
   bossesBeaten |= kind == EN_KRAID ? 1 : kind == EN_RIDLEY ? 2 : 4;
   if (kind == EN_KRAID) { gear |= G_SPACE; itemKind = 'j'; }
   if (kind == EN_RIDLEY) { gear |= G_ICE; itemKind = 'i'; }
-  if (kind == EN_MBRAIN) {                  // the escape comes with Tourian; for now, the news
+  if (kind == EN_MBRAIN) {                  // the alarm: back to the ship before the timer runs out
     for (auto &b : bul) b.live = false;
-    showMsg("MOTHER BRAIN DESTROYED", 150); watch::playTune(TUNE_MAJOR, 9); return;
+    escapeT = ESCAPE_FRAMES;
+    showMsg("ESCAPE! GET TO THE SHIP", 120); watch::playTune(TUNE_DEAD, 4); return;
   }
   for (auto &b : bul) b.live = false;
   itemT = 0; mode = M_ITEM; watch::playTune(TUNE_MAJOR, 9);
@@ -1325,6 +1330,15 @@ void playStep(uint8_t e) {
   if (mode != M_PLAY) return;
   if (cardT) cardT--;
   if (modeLabelT) modeLabelT--;
+  if (escapeT) {                                // the alarm: beeps, faster near the end; out of time = game over
+    escapeT--;
+    uint16_t every = escapeT < 30 * 30 ? 15 : 30;
+    if (escapeT % every == 0) beep(escapeT < 30 * 30 ? 1400 : 900, 40);
+    if (!escapeT) { energy = 0; mode = M_DEAD; deadT = 0; msgT = 0; watch::playTune(TUNE_DEAD, 4); return; }
+  }
+  if ((bossesBeaten & 4) && !sandbox && ground && rawTile(toPx(sX) >> 3, toPx(sY) >> 3) == 'S') {   // home: the end
+    mode = M_END; endT = 0; escapeT = 0; watch::playTune(TUNE_MAJOR, 9); return;
+  }
   if (msgT) msgT--;
 
   uint8_t h = inputLock ? 0 : watch::held();
@@ -1403,7 +1417,7 @@ void playStep(uint8_t e) {
 
   // the Tourian hatch: what it needs
   if (ground && rawTile(toPx(sX) >> 3, toPx(sY) >> 3) == 'G' && !msgT)
-    showMsg((bossesBeaten & 3) == 3 ? "TOURIAN: NEXT BUILD" : "SEALED: BEAT KRAID AND RIDLEY", 60);
+    showMsg("SEALED: BEAT KRAID AND RIDLEY", 60);
   // an open door with nothing built behind it yet
   for (uint8_t i = 0; i < doorN; i++) {
     if (!doorIsOpen(i)) continue;
@@ -1441,6 +1455,12 @@ void drawRock(int16_t tx, int16_t ty, int16_t x, int16_t y, char c) {
   if (Bt) { hLineSafe(x + l, y + 7, 8 - l - r); if (h & 8) plot(x + 3 + ((h >> 4) & 1), y + 6); }
   if (L) { vLineSafe(x, y + t, 8 - t - b); if (h & 32) plot(x + 1, y + 2 + ((h >> 6) & 3)); }
   if (R) { vLineSafe(x + 7, y + t, 8 - t - b); if (h & 256) plot(x + 6, y + 2 + ((h >> 9) & 3)); }
+  uint8_t zone = 0; { int8_t rr = roomAtTile(tx, ty); if (rr >= 0) zone = ROOMS[rr].zone; }
+  if (zone == 1 && T) { plot(x + 2, y - 1); plot(x + 6, y - 1); }                 // Kraid's Lair: spiky stone
+  if (zone == 1 && (h & 7) == 3 && c == '#') lineSafe(x + 2, y + 5, x + 4, y + 3);
+  if (zone == 2 && T) for (int8_t i = (tx & 1); i < 8; i += 2) plot(x + i, y + 2); // Norfair: lava-lit edges
+  if (zone == 2 && ((h >> 12) & 7) == 2 && c == '#') circleSafe(x + 4, y + 4, 1);
+  if (zone == 3 && c == '#') { plot(x + 1, y + 1); plot(x + 6, y + 1); plot(x + 1, y + 6); plot(x + 6, y + 6); }   // Tourian: riveted metal
   if (c == '=') {                        // ledge: a banded slab
     for (int8_t i = 1; i < 7; i += 2) plot(x + i, y + 3);
   } else if (c == 'B') {                 // bomb block: jagged seam
@@ -1507,7 +1527,7 @@ void drawWorld() {
     for (int16_t tx = tx0; tx <= tx0 + 16; tx++) {
       char c = rawTile(tx, ty);
       int16_t x = scrX(tx * 8), y = scrY(ty * 8);
-      if (c == '#' || c == '=' || c == 'G' || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
+      if (c == '#' || c == '=' || (c == 'G' && (bossesBeaten & 3) != 3) || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
       else if (c == 'g' && !(bossesBeaten & 2)) drawRock(tx, ty, x, y, 'G');
       else if (c == '~') {                      // lava: a rolling surface over a dithered glow
         for (int8_t i = 0; i < 8; i++) {
@@ -1861,6 +1881,12 @@ void drawHud() {
     hLineSafe(x + 1, 3, 6); plot(x + 7, 3); plot(x, 2); plot(x, 4); plot(x + 2, 2); plot(x + 2, 4);
     u8g2.setCursor(x + 11, 6); print3(missiles);
     u8g2.setDrawColor(1);
+  }
+  if (escapeT) {
+    uint16_t sec = (escapeT + 29) / 30;
+    if (escapeT > 30 * 30 || (frameN & 4)) {
+      u8g2.setCursor(56, 6); u8g2.print(sec / 60); u8g2.print(':'); watch::print2(sec % 60);
+    }
   }
   for (const auto &e : en) {                // a boss in the room: its health under the HUD centre
     if (!e.live || !isBoss(e.kind) || modeLabelT) continue;
@@ -2229,7 +2255,42 @@ void gameUpdate(uint8_t e) {
     case M_ITEM: itemStep(e); break;
     case M_PAUSE: pauseStep(e); break;
     case M_DEAD: deadStep(e); break;
+    case M_END: endStep(e); break;
   }
+}
+
+// ---------------------------------------------------------------- the end
+uint8_t itemCount(bool got) {
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < itemN; i++) {
+    int8_t r = roomAtTile(items[i].tx, items[i].ty);
+    if (r < 0 || ROOMS[r].zone == ZONE_TEST) continue;
+    if (!got || ((itemsGot >> i) & 1)) n++;
+  }
+  return n;
+}
+void endStep(uint8_t e) {
+  if (endT < 255) endT++;
+  if (endT > 60 && (e & (B_UP | B_FIRE | B_DOWN))) { watch::stopTune(); mode = M_TITLE; titleSel = 0; frameN = 0; }
+}
+void drawEnd() {
+  // the ship lifting off over Zebes, then the results
+  int16_t lift = endT < 60 ? endT / 2 : 30;
+  for (uint8_t i = 0; i < 30; i++) plot((i * 37 + frameN) & 127, (i * 23) % 64);
+  int16_t cx = 64, ty = 30 - lift;
+  hLineSafe(cx - 17, ty, 35); lineSafe(cx - 17, ty, cx - 21, ty + 7); lineSafe(cx + 17, ty, cx + 21, ty + 7);
+  hLineSafe(cx - 21, ty + 8, 43); hLineSafe(cx - 28, ty + 14, 57);
+  lineSafe(cx - 21, ty + 8, cx - 28, ty + 14); lineSafe(cx + 21, ty + 8, cx + 28, ty + 14);
+  if (frameN & 2) { vLineSafe(cx - 10, ty + 15, 3); vLineSafe(cx + 10, ty + 15, 3); }
+  frameN++;
+  if (endT < 40) return;
+  u8g2.setDrawColor(0); u8g2.drawBox(8, 30, 112, 32); u8g2.setDrawColor(1); frameSafe(8, 30, 112, 32);
+  u8g2.setFont(u8g2_font_6x10_tr); drawCenteredText("MISSION COMPLETE", 41);
+  u8g2.setFont(u8g2_font_4x6_tr);
+  uint32_t sec = playFrames / 30;
+  u8g2.setCursor(16, 51); u8g2.print(F("TIME ")); watch::print2(sec / 3600); u8g2.print(':'); watch::print2((sec / 60) % 60); u8g2.print(':'); watch::print2(sec % 60);
+  u8g2.setCursor(72, 51); u8g2.print(F("ITEMS ")); u8g2.print(itemCount(true)); u8g2.print('/'); u8g2.print(itemCount(false));
+  if (endT > 60 && (frameN & 16)) drawCenteredText("PUSH JUMP", 59);
 }
 
 void gameDraw() {
@@ -2239,6 +2300,7 @@ void gameDraw() {
     case M_PLAY: case M_DEAD: drawPlay(); break;
     case M_ITEM: drawItemScreen(); break;
     case M_PAUSE: drawPause(); break;
+    case M_END: drawEnd(); break;
   }
   if (trLevel) applyFade(trLevel, trSteps);
 }

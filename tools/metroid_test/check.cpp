@@ -63,7 +63,7 @@ int main() {
           else { printf("%s: opening at %d,%d leads out of the world\n", R.id, x, y); bad++; }
           continue;
         }
-        if (solid(n) && n != 'B' && n != 'X' && n != 'g') { printf("%s: opening at %d,%d meets rock in %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
+        if (solid(n) && n != 'B' && n != 'X' && n != 'g' && n != 'G') { printf("%s: opening at %d,%d meets rock in %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
         else if (door(c) != door(n)) { printf("%s: door/opening mismatch at %d,%d with %s\n", R.id, x, y, ROOMS[nr].id); bad++; }
       }
     }
@@ -106,6 +106,7 @@ int main() {
       if (c == 'B') return !gr.bombs;
       if (c == 'X') return !gr.space;
       if (c == 'g') return !gr.ice;           // Ridley's hatch: Ice comes from beating him
+      if (c == 'G') return !(gr.space && gr.ice);   // Tourian hatch: both bosses
       return solid(c);
     };
     auto body = [&](int x, int y, int h) { for (int i = 1; i <= h; i++) if (S(x, y - i)) return false; return true; };
@@ -193,6 +194,9 @@ int main() {
     if (find("Y", kx, ky)) { gr = stages[2]; flood(padX, padY, 0); bool ok = false;
       for (int x = kx - 8; x <= kx + 8; x++) if (x >= 0 && seen[idx(x, ky + 1, 0)]) ok = true;
       if (!ok) { printf("Ridley is NOT reachable with Missiles\n"); bad++; } else printf("  Ridley reachable with Missiles\n"); }
+    if (find("W", kx, ky)) { gr = stages[5]; flood(padX, padY, 0); bool ok = false;
+      for (int x = kx - 8; x <= kx; x++) if (seen[idx(x, ky + 1, 0)]) ok = true;
+      if (!ok) { printf("Mother Brain is NOT reachable with everything\n"); bad++; } else printf("  Mother Brain reachable with everything\n"); }
     if (find("K", kx, ky)) { gr = stages[3]; flood(padX, padY, 0); bool ok = false;
       for (int x = kx - 8; x <= kx; x++) if (seen[idx(x, ky + 1, 0)]) ok = true;
       if (!ok) { printf("Kraid is NOT reachable with Bombs\n"); bad++; } else printf("  Kraid reachable with Bombs\n"); }

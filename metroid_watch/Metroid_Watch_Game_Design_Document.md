@@ -152,7 +152,8 @@ flowchart TD
 | -------- | ----------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | B01 | Ship and Landing Site | 2×2 | Ship and starting save (the primary save until Kraid's K07). East to B02. The shaft vent beside the ship receives the alarm exit from T07. |
 | B02 | Surface Path | 2×1 | Rocky shelf. West to the ship, east into the top of B03. Show the cracked floor and tank #2 below before Samus has Bombs. |
-| B03 | Brinstar Shaft | 1×4 | Doors near the top: west to B02, east to the shrine, across a 2-tile gap. Shelves step down the middle and climb back with the base jump and double jump. At the bottom a ball-sized hole in each wall: east returns from the shrine, west goes on to B05. Both are visible before the Morph Ball. |
+| B03 | Brinstar Shaft | 1×4 | A slashed-rock nook high up holds missile tank #7 (Space Jump), seen early. |
+| B03a | (cont.) | | Doors near the top: west to B02, east to the shrine, across a 2-tile gap. Shelves step down the middle and climb back with the base jump and double jump. At the bottom a ball-sized hole in each wall: east returns from the shrine, west goes on to B05. Both are visible before the Morph Ball. |
 | B04 | Morph Ball Shrine | 1×3 | One way in: the door ledge drops 13 tiles (deeper than a double jump) into the statue's chamber. Shoot the Chozo orb, take the Morph Ball, and roll out through the west tunnel into the bottom of B03. |
 | B05 | Missile Room | 2×2 | Rolled into from the bottom of B03 (east duct, top right). A step and a long shelf lead down to the floor and back up. The Missile Launcher (with tank #1) sits in a Chozo statue's hands. East door to B06. |
 | B06 | Junction | 2×2 | Hub. Blue door (upper west) back to B05, climbed via a step and a ledge. Missile doors west to K01 and east to N01. Locked hatch down to B07. |
@@ -201,31 +202,19 @@ Rippers are invincible flyers: freezing them (Ice Missiles) is the only way to d
 
 ## Tourian
 
-Enter from the upper right and work west through the lab. The last save sits over Mother Brain. The alarm turns the approach into a short return through T05 and up to the ship.
-
-```mermaid
-flowchart TD
-    T01 --- T02
-    T02 ---|"First Metroid shattered"| T03
-    T03 --- T04
-    T04 --- T08
-    T04 ---|"Normal play only"| T05
-    T05 --- T06
-    T05 -->|"Alarm"| T07
-```
-
-Footprints are width × height in play windows. Cross-zone links appear in the room descriptions.
+Under B07's hatch, which opens once Kraid and Ridley are beaten. The final region combines everything: Ice for the Metroids and the Ripper platforms, Bombs to shake off a latched Metroid, Space Jump to climb between rooms.
 
 | **ID** | **Room** | **W × H** | **Shape and traversal** |
 | -------- | -------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
-| T01 | Tourian Entry Save | 1×1 | Save and refill below B07. Leave the route back to Brinstar open. Continue down to T02. |
-| T02 | First Metroid | 1×1 | Teaching room. The west door to T03 opens after freeze and shatter. Keep the upper retreat to T01 available. |
-| T03 | Metroid Nest | 2×2 | Two Metroids in the main gallery. A lower run-and-jump route reconnects to the west exit and lets Samus slip past. |
-| T04 | Turret Corridor | 2×1 | Westbound turret lane. Branch down to T08 and continue west to the final save. |
-| T05 | Final Save | 1×1 | Refill before the fight below. The west hatch to T07 opens on alarm. The east route to T04 closes during the escape. |
-| T06 | Mother Brain | 2×2 | Chamber below T05. Keep the climb to the refill and escape landing open before, during, and after the fight. |
-| T07 | Emergency Shaft | 1×4 | West of the lab and directly beneath the ship. Alarm-only route. Climb on base jumps and exit one-way at B01. |
-| T08 | Hidden Cache | 1×1 | Tank #8 on a detour from T04. Return to the turret corridor before the alarm. |
+| T01 | Tourian Entry Save | 1×1 | Save station under the hatch; a hole down to T02. Space Jump back up. |
+| T02 | First Metroid | 1×1 | One Metroid alone, to learn it. West to the nest. |
+| T03 | Metroid Nest | 2×2 | Two Metroids over an acid pit with Rippers patrolling above it (freeze them, or Space Jump). A hole at the far west drops to the final save. |
+| T05 | Final Save | 1×1 | Refill before Mother Brain (east). |
+| T06 | Mother Brain | 1×2 | Her tank on the east, a ledge and step on the west. Destroying her starts the escape. |
+
+### Escape
+
+Beating Mother Brain starts a 3-minute alarm (countdown in the HUD, beeps that speed up in the last 30 seconds). The route home is the way in, with Space Jump making the climbs quick. Reaching the ship's pad ends the game: the ship lifts off and the results show the time and items found. If time runs out, Samus is back at her last save.
 
 ## Progression and recovery rules
 

@@ -158,15 +158,20 @@ RP2040 has headroom, but keep watch games tiny:
   Rooms touch edge to edge, so leaving a room's edge puts Samus in whichever room is there (fade, camera
   snaps to the new room's bounds). Doors are 3-tile columns on room edges: blue opens to any shot, red needs a
   missile and then stays open. Tile/object legend is at the top of the file.
-- **Current build:** Brinstar B01–B08 and Kraid's Lair K01–K10 (no K05: its missile tank sits at the bottom of
-  K04). Ship → surface → shaft → Morph Ball shrine → Missile Room → junction (B06) → west red door → Lair:
-  spike hall (Swipe Pirate) → Bombs shrine (9-tile drop; bomb the floor) → cracked descent (tank #3) → lower
-  tunnels (Energy Tank) → Kraid save station (K07) → Kraid (K08) → chute (K09; slashed rock opens with Space
-  Jump) → B07 under the junction (Tourian hatch in its floor) and the K10 cache (tank #4). B08 under the surface
-  path's cracked seam holds tank #2. Norfair N01–N09 through the junction's east red door: lava crossing (two
-  jumps with wide landings), lower shaft (Energy Tank #2), hot corridor (Bolt Pirate), Ridley save, Ridley, and
-  after him the hatch (`g`) to N09 - freeze the invincible Ripper over the lava to cross, then climb into B07 by
-  the Tourian hatch (from B07 you can drop in and climb back out without Ice).
+- **Current build:** the whole game. Brinstar B01–B08, Kraid's Lair K01–K10, Norfair N01–N09, Tourian T01–T06.
+  - Brinstar: ship → surface → shaft (slashed-rock nook with tank #7, Space Jump) → Morph Ball shrine → Missile
+    Room → junction (B06): west red door to Kraid's Lair, east red door to Norfair, a drop to B07 (an Ice ledge
+    over a Ripper lane with tank #8; the Tourian hatch, open once Kraid and Ridley are beaten). B08 under the
+    surface seam (tank #2, Bombs).
+  - Kraid's Lair: entrance (Swipe Pirate, alone) → spike hall → Bombs shrine (bomb the floor) → descent (tank
+    #3) → tunnels (Energy Tank) → save → Kraid (Space Jump) → chute back to B07 (+ cache, tank #4).
+  - Norfair: entrance → lava crossing (tank #6) → shaft (Energy Tank) → hot corridor (Bolt Pirate, tank #5) →
+    save → Ridley (Ice) → N09: freeze the Ripper over the lava, climb into B07.
+  - Tourian: hatch → save (T01) → first Metroid alone (T02) → Metroid nest over acid with Rippers (T03) → final
+    save (T05) → Mother Brain (T06). Beating her starts a 3-minute alarm (countdown in the HUD, beeps): reach
+    the ship's pad for the ending (ship lifts off; MISSION COMPLETE, time, items x/12). Out of time = game over
+    back at the last save.
+- **Zones look different:** Kraid's Lair spiky stone, Norfair lava-lit edges, Tourian riveted metal.
 - **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
   Beaten bosses are saved (`bosses` bits) and don't come back. Save version 4.
 - **Hazards:** spikes (`^`) and lava (`~`), solid: 1 energy and back to the last safe footing in this room (both
