@@ -26,6 +26,7 @@ int main(int argc, char **argv) {
   if (argc > 2) prefix = argv[2];
   std::stringstream ss(argc > 1 ? argv[1] : ""); std::string tok;
   while (ss >> tok) {
+    if (tok == "hit") { rings = 10; invul = 0; shieldOn = false; starT = 0; hurt(); continue; }   // take a hit (keeps the rings rule)
     if (tok == "die") { rings = 0; invul = 0; shieldOn = false; starT = 0; hurt(); continue; }   // lose a life now
     if (tok == "save") { SonicSave v; bool ok = readSave(); v = lastSave; printf("  save: %s zone=%d act=%d starX=%d t=%u lives=%d em=%d score=%lu  title shows save=%d\n", ok ? "yes" : "no", v.zone, v.act, v.starX, v.starTime, v.lives, v.emeralds, (unsigned long)v.score, haveSave); continue; }
     if (tok == "st") { printf("  zone=%d act=%d px=%d py=%d shield=%d invul=%d rings=%d mode=%d gnd=%d starX=%d t=%u lives=%d\n", zone, act, px, py, shieldOn, invul, rings, mode, onGround, starX, actFrames, lives); continue; }

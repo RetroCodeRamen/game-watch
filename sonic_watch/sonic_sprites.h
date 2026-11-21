@@ -7,7 +7,7 @@
 static const uint8_t SONIC_W = 24;
 static const uint8_t SONIC_H = 29;
 static const uint8_t SONIC_ROWBYTES = 3;
-static const uint8_t sonicFrames[13][87] PROGMEM = {
+static const uint8_t sonicFrames[14][87] PROGMEM = {
   { // stand
     0x00, 0xFF, 0x01,  //         #########
     0xC0, 0xDF, 0x23,  //       ####### ####   #
@@ -411,6 +411,37 @@ static const uint8_t sonicFrames[13][87] PROGMEM = {
     0x00, 0x7E, 0x00,  //          ######
     0x00, 0x00, 0x00,  // 
   },
+  { // hurt
+    0xF0, 0x1F, 0x00,  //     #########
+    0xF8, 0x7B, 0x04,  //    ####### ####   #
+    0xC0, 0xF5, 0x06,  //       ### # #### ##
+    0x00, 0xED, 0x07,  //         # ## ######
+    0x80, 0xFD, 0x07,  //        ## #########
+    0xE0, 0x9F, 0x07,  //      ########  ####
+    0xF0, 0xDF, 0x1F,  //     ######### #######
+    0xF8, 0xDF, 0x16,  //    ########## ## ## #
+    0xFC, 0xDF, 0xD6,  //   ########### ## ## # ##
+    0x92, 0xDF, 0x34,  //  #  #  ###### ##  # ##
+    0x92, 0x8F, 0x1A,  //  #  #  #####   # # ##
+    0xAC, 0xEF, 0x2E,  //   ## # ##### ### ### #
+    0xA0, 0xEF, 0x0F,  //      # ##### #######
+    0xC0, 0xDF, 0x07,  //       ####### #####
+    0xC0, 0x08, 0x00,  //       ##   #
+    0x40, 0x70, 0x07,  //       #     ### ###
+    0x00, 0x58, 0x17,  //            ## # ### #
+    0x00, 0x48, 0x17,  //            #  # ### #
+    0x00, 0x28, 0x17,  //            # #  ### #
+    0x00, 0x70, 0x0A,  //             ###  # #
+    0x00, 0xC3, 0x00,  //         ##    ##
+    0x80, 0x81, 0x01,  //        ##      ##
+    0xC0, 0x00, 0x03,  //       ##        ##
+    0x60, 0x00, 0x06,  //      ##          ##
+    0x3C, 0x00, 0x3C,  //   ####            ####
+    0x22, 0x00, 0x44,  //  #   #            #   #
+    0x3E, 0x00, 0x7C,  //  #####            #####
+    0x00, 0x00, 0x00,  // 
+    0x00, 0x00, 0x00,  // 
+  },
 };
 // Egg Wrecker ship (egg_mobile.txt), facing right; row 0 is the dome top:
 static const uint8_t EGG_W = 44;
@@ -593,6 +624,6 @@ static const uint8_t spBack[2][84] PROGMEM = {
   },
 };
 enum : uint8_t {
-  SPR_STAND = 0, SPR_BLINK = 1, SPR_RUN0 = 2, SPR_RUN1 = 3, SPR_RUN2 = 4, SPR_RUN3 = 5, SPR_FAST0 = 6, SPR_FAST1 = 7, SPR_SKID = 8, SPR_ROLL0 = 9, SPR_ROLL1 = 10, SPR_ROLL2 = 11, SPR_ROLL3 = 12,
-  SPR_COUNT = 13
+  SPR_STAND = 0, SPR_BLINK = 1, SPR_RUN0 = 2, SPR_RUN1 = 3, SPR_RUN2 = 4, SPR_RUN3 = 5, SPR_FAST0 = 6, SPR_FAST1 = 7, SPR_SKID = 8, SPR_ROLL0 = 9, SPR_ROLL1 = 10, SPR_ROLL2 = 11, SPR_ROLL3 = 12, SPR_HURT = 13,
+  SPR_COUNT = 14
 };

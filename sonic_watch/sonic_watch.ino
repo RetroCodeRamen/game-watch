@@ -197,6 +197,7 @@ enum : uint8_t { MON_SHOES, MON_LIFE, MON_SHIELD, MON_STAR };
 static const uint16_t SHOES_FRAMES = 8 * 30, STAR_FRAMES = 15 * 30;
 uint16_t shoesT, starT;          // frames left of Speed Shoes / invincibility
 bool shieldOn;                   // takes one hit instead of the rings
+bool hurtAir;                    // knocked back by a hit: show the hurt pose until he lands
 // Starposts (kind 14, state 1 = passed): a death respawns at the last one, act time kept
 int16_t starX;                   // world x of the last starpost touched this act (0 = none)
 uint16_t starTime;               // act frames when it was touched
@@ -730,7 +731,7 @@ void hurt() {
     // Shield hit: the shield goes, the rings stay
     shieldOn = false;
     beep(300, 120);
-    invul = 55;
+    invul = 55; hurtAir = true;
     setPlayerVel(faceRight ? ZV(-2) : ZV(2), -HURT_VY);
     jumpCut = true; onGround = false; rolling = true; groundRoll = false; inLoop = false; inHollow = false;
     return;
@@ -740,7 +741,7 @@ void hurt() {
     beep(200, 140);
     rings = 0;
     spillRings();
-    invul = 55;
+    invul = 55; hurtAir = true;
     setPlayerVel(faceRight ? ZV(-2) : ZV(2), -HURT_VY);
     jumpCut = true;            // knock-back isn't a jump: releasing the button can't shorten it
     onGround = false;
@@ -903,7 +904,7 @@ void startAct(uint8_t z, uint8_t a) {
   lvl = &ACTS[z][a];
   actEnd = Z(lvl->len);
   rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
-  shoesT = 0; starT = 0; shieldOn = false; spdScale = SPD_NORMAL;
+  shoesT = 0; starT = 0; shieldOn = false; hurtAir = false; spdScale = SPD_NORMAL;
   starX = 0; starTime = 0;
   actFrames = 0;
   camLead = 0;
@@ -2492,10 +2493,13 @@ void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, b
 // In-game Sonic: animation follows his speed (walk → run → figure-8 legs at top speed),
 // skids when you push against a fast run, spins faster when rolling faster.
 void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame) {
+  if (onGround || inLoop || mode == DEAD) hurtAir = false;
   fx spd = inLoop ? abs(loopGspd) : abs(fvx);
   uint8_t id;
   bool face = faceRight;
-  if (roll || groundRoll) {
+  if (hurtAir && !onGround) {
+    id = SPR_HURT;           // knocked back: arms flung up, legs splayed (rulebook 165)
+  } else if (roll || groundRoll) {
     if (spd > ZV(3)) runAnim += 256; else runAnim += 128;
     id = SPR_ROLL0 + ((runAnim >> 8) & 3);
   } else if (spd == 0 && !inLoop) {

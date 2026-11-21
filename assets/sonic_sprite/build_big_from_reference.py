@@ -73,7 +73,35 @@ def roll(k):                                         # spiked ball, three spiral
                 g[y][x] = '#'
     return txt(g)
 for k in range(4): frames['roll%d' % k] = roll(k)
-order = ['stand', 'blink', 'run0', 'run1', 'run2', 'run3', 'fast0', 'fast1', 'skid', 'roll0', 'roll1', 'roll2', 'roll3']
+# hurt: knocked back - the standing frame leaning back, arms flung up, legs splayed
+g = [['.'] * W for _ in range(H)]
+for y in range(0, 20):
+    lean = (20 - y) // 5                              # top of him tips back (to the left)
+    for x in range(W):
+        if stand[y][x] == '#' and 0 <= x - lean < W: g[y][x - lean] = '#'
+for y, r in enumerate([                                 # arms thrown up and back, gloves open
+    "..##..................##",
+    ".#..#................#..",
+    ".#..#...............#...",
+    "..##.#.............#....",
+    ".....#............#.....",
+    "......#..........#......"]):
+    for x, c in enumerate(r):
+        if c == '#': g[8 + y][x] = '#'
+for y, r in enumerate([                                 # legs kicked out front and back
+    "........##....##........",
+    ".......##......##.......",
+    "......##........##......",
+    ".....##..........##.....",
+    "..####............####..",
+    ".#...#............#...#.",
+    ".#####............#####.",
+    "........................",
+    "........................"]):
+    for x, c in enumerate(r):
+        g[20 + y][x] = '#' if c == '#' else '.'
+frames['hurt'] = txt(g)
+order = ['stand', 'blink', 'run0', 'run1', 'run2', 'run3', 'fast0', 'fast1', 'skid', 'roll0', 'roll1', 'roll2', 'roll3', 'hurt']
 with open(os.path.join(HERE, 'sonic_big.txt'), 'w') as f:
     for n in order: f.write('= %s\n' % n + '\n'.join(frames[n]) + '\n')
 Z = 6; img = Image.new('L', ((W + 2) * Z * 7, (H + 3) * Z * 2), 25); d = ImageDraw.Draw(img)
