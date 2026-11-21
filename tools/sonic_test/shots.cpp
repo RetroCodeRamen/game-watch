@@ -49,5 +49,5 @@ int main(int argc, char **argv) {
     for (char ch : b) held |= ch=='L'?B_LEFT: ch=='R'?B_RIGHT: ch=='U'?B_MID: ch=='D'?B_MODE: ch=='F'?B_GAME: 0;
     for (int i = 0; i < n; i++) frame(held);
   }
-  printf("end mode=%d zone=%d act=%d px=%d py=%d rings=%d boss=%d\n", mode, zone, act, px, py, rings, bossOn);
+  printf("end mode=%d zone=%d act=%d px=%d py=%d rings=%d boss=%d sx=%d sy=%d\n", mode, zone, act, px, py, rings, bossOn, px - cam, py - camY);
 }

@@ -188,10 +188,17 @@ uint8_t h8(uint16_t n) {
 }
 
 // Fixed-point physics (1/256 px), 60Hz steps.
-// ZOOM: the whole world is drawn 5/4 bigger than the level data (sonic_levels.h stays in
-// design units). Level positions, sizes, hitboxes, speeds and accelerations all scale by it,
-// so timing and feel are unchanged — only the pixels are bigger. Z() scales a design length.
-#define Z(v) ((int16_t)(((int32_t)(v) * 5) / 4))
+// ZOOM: the world is drawn ZN/ZD bigger than the level data (sonic_levels.h stays in design
+// units). It was 5/4 with the 22-px Sonic; the 32-px Sonic (from the reference drawing) needs
+// 7/4. Running speed and acceleration were deliberately kept at their 5/4 values (the game was
+// already fast enough on screen): ZV() still scales by 5/4. Everything vertical — jump,
+// springs, gravity, Sonic's body — scales with the world by VS() so every ledge is still in
+// reach and a jump takes the same time. Z() scales a design length.
+#define ZN 7
+#define ZD 4
+#define Z(v) ((int16_t)(((int32_t)(v) * ZN) / ZD))
+// Vertical / size values tuned at the old 5/4 zoom, scaled to the current one (×7/5)
+#define VS(v) ((v) * ZN * 4 / (ZD * 5))
 // Watch-tuned: snappy accel, firmer coast (less slippery), hard skid ≈11× accel.
 // Design values (pre-zoom) in comments; every speed/accel below is design × 5/4.
 static const fx FX_ONE      = 256;
@@ -201,20 +208,20 @@ static const fx BRAKE       = 412;     // 330 — ~11× accel, deliberate skid
 static const fx TOP_SPD     = 1920;    // 1536 — 7.5 px/step
 static const fx START_KICK  = 160;     // 128 — immediate bite from standstill
 static const fx AIR_ACCEL   = 22;      // 18  — air steer so jumps feel controllable
-static const fx JUMP_SPD    = 700;     // 560 — ~48 px: 2.2 Sonic heights, the Genesis ratio
-static const fx SPRING_SPD  = 890;     // 712 — yellow spring ≈ 77 px (levels are spaced for this)
-static const fx GRAVITY     = 20;      // 16
+static const fx JUMP_SPD    = VS(700); // 560 — ~48 px: 2.2 Sonic heights, the Genesis ratio
+static const fx SPRING_SPD  = VS(890); // 712 — yellow spring ≈ 77 px (levels are spaced for this)
+static const fx GRAVITY     = VS(20);  // 16
 static const fx ROLL_FRIC   = 10;      // 8
-static const fx MAX_FALL    = 1462;    // 1170
+static const fx MAX_FALL    = VS(1462);// 1170
 // Host tests define this to log every place Sonic gets stopped (no-op on the watch)
 #ifndef STOP_HOOK
 #define STOP_HOOK(reason, x0, x1)
 #endif
-static const int16_t CLIFF_STEP = 7;
+static const int16_t CLIFF_STEP = VS(7);
 // In the air the Genesis wall sensors sit at Sonic's middle, so a ledge whose top is level
 // with his body still catches him (floor sensors pop him up onto it). Same leniency here.
-static const int16_t CLIFF_STEP_AIR = 12;   // ground rising more than this within Sonic's half-width = a wall
-static const int16_t RAD_STAND = 6, RAD_ROLL = 5;   // feet below centre (5 / 4 before the zoom)
+static const int16_t CLIFF_STEP_AIR = VS(12);   // ground rising more than this within Sonic's half-width = a wall
+static const int16_t RAD_STAND = VS(6), RAD_ROLL = VS(6) - 1;   // feet below centre (8 / 7)
 // Slope pull per px of height change over 10 px (slopeAt). Genesis proportions to our ACCEL:
 // the max slope you can walk up from rest is ~21° (as in Sonic 1); rolling 2.5× down, 0.625× up.
 static const fx SLOPE_RUN     = 10;
@@ -223,9 +230,9 @@ static const fx SLOPE_ROLL_UP = 6;
 static const fx UNROLL_SPD    = ZV(1) / 2;   // roll slower than this → stand up
 // Vertical launches, set against the jump (gravity here is scaled for the 64-px screen, so
 // Genesis ysp values can't be copied directly). Heights: jump 46, hurt ~20, stomp = the fall.
-static const fx HURT_VY       = 470;         // Genesis hurt ysp −4 vs jump −6.5 → ~0.45× jump height
-static const fx BOSS_BOUNCE   = 560;         // off the top of the Egg Mobile (~30 px)
-static const fx BUMPER_VY     = 780;         // Casino bumper launch up (~60 px)
+static const fx HURT_VY       = VS(470);         // Genesis hurt ysp −4 vs jump −6.5 → ~0.45× jump height
+static const fx BOSS_BOUNCE   = VS(560);         // off the top of the Egg Mobile (~30 px)
+static const fx BUMPER_VY     = VS(780);         // Casino bumper launch up (~60 px)
 // Stomp: reverse the fall like the Genesis (ysp = −ysp), kept between ½ and 1 jump
 inline fx stompVY(fx fall) { if (fall > JUMP_SPD) fall = JUMP_SPD; if (fall < JUMP_SPD / 2) fall = JUMP_SPD / 2; return -fall; }
 // Loop / steep-track rules from Sonic 1 (Sonic_SlopeResist / Sonic_SlopeRepel).
@@ -310,23 +317,23 @@ int16_t arenaOrigin;             // world X where boss arena starts
 
 // Ground height from the act's terrain profile (linear between points)
 // Ground height at world x. The profile is in design units: find the segment in data space
-// (world x × 4/5) and interpolate, then scale the height by 5/4 — all in one division.
+// (world x × ZD/ZN) and interpolate, then scale the height by ZN/ZD — all in one division.
 static inline int32_t floorDiv(int32_t a, int32_t b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
 int16_t terrainAt(int32_t wx) {
   const TerrainPt *t = lvl->ter;
   uint8_t n = lvl->nTer;
-  int32_t q = wx * 4;                    // world x in units of 1/5 design px
-  if (q <= (int32_t)t[0].x * 5) return Z(t[0].y);
-  if (q >= (int32_t)t[n - 1].x * 5) return Z(t[n - 1].y);
+  int32_t q = wx * ZD;                   // world x in units of 1/ZN design px
+  if (q <= (int32_t)t[0].x * ZN) return Z(t[0].y);
+  if (q >= (int32_t)t[n - 1].x * ZN) return Z(t[n - 1].y);
   uint8_t lo = 0, hi = n - 1;            // binary search: t[lo].x <= x < t[hi].x
   while (hi - lo > 1) {
     uint8_t mid = (lo + hi) / 2;
-    if ((int32_t)t[mid].x * 5 <= q) lo = mid; else hi = mid;
+    if ((int32_t)t[mid].x * ZN <= q) lo = mid; else hi = mid;
   }
-  int32_t den = ((int32_t)t[hi].x - t[lo].x) * 5;
-  int32_t num = q - (int32_t)t[lo].x * 5;
-  int32_t y5 = ((int32_t)t[lo].y * den + (int32_t)(t[hi].y - t[lo].y) * num) * 5;
-  return (int16_t)floorDiv(y5, den * 4);
+  int32_t den = ((int32_t)t[hi].x - t[lo].x) * ZN;
+  int32_t num = q - (int32_t)t[lo].x * ZN;
+  int32_t y5 = ((int32_t)t[lo].y * den + (int32_t)(t[hi].y - t[lo].y) * num) * ZN;
+  return (int16_t)floorDiv(y5, den * ZD);
 }
 
 int16_t groundAt(int32_t wx) {
@@ -352,7 +359,8 @@ bool onScreen(int16_t wx, int16_t margin = 16) {
 }
 
 static inline fx I2F(int16_t v) { return (fx)v * FX_ONE; }
-// A design-units speed (px/step before the zoom) in world fixed-point
+// A design-units speed (px/step before the zoom) in world fixed-point (kept at the old 5/4 zoom:
+// running speed was left alone when the world grew to 7/4)
 static inline fx ZV(int16_t v) { return (fx)v * FX_ONE * 5 / 4; }
 static inline int16_t F2I(fx v) {
   return (int16_t)((v >= 0) ? ((v + 128) >> 8) : -(((-v) + 128) >> 8));
@@ -382,7 +390,7 @@ int16_t slopeAt(int16_t wx) {
 
 void placeGreenHillLoop(int16_t x) {
   // Diameter > screen height — camera must scroll vertically through it
-  loopTrack.r = Z(38);
+  loopTrack.r = 47;            // the 5/4-zoom size: speed stayed, so the loop did too
   int16_t g = terrainAt(x);
   loopTrack.cx = x + loopTrack.r;
   loopTrack.cy = g - loopTrack.r;   // bottom of track on the floor
@@ -1936,7 +1944,7 @@ void gameStepInner(uint8_t e) {
   if (bossOn) {
     cam = arenaOrigin;
     // Floor stays at the bottom; the view rises to keep Sonic in sight above the Egg Mobile
-    int16_t want = py - 16;
+    int16_t want = py - 30;
     if (want > 0) want = 0;
     if (camY > want) camY -= (camY - want + 1) / 2;
     else if (camY < want) camY += (want - camY + 3) / 4;
@@ -1960,8 +1968,8 @@ void gameStepInner(uint8_t e) {
       if (cam < 0) cam = 0;
       // Vertical follow — keeps Sonic framed through tall loops
       int16_t psy = py - camY;
-      if (psy < 20) camY = py - 20;
-      if (psy > 44) camY = py - 44;
+      if (psy < 34) camY = py - 34;      // his head stays below the HUD
+      if (psy > 48) camY = py - 48;
     }
   }
 
@@ -2176,19 +2184,18 @@ uint16_t runAnim;   // run-cycle phase (8.8 fixed): advances faster the faster h
 // Blit one sprite frame (sonic_sprites.h); mirrored when facing left. A dark 1-px halo on
 // the sides and top keeps him readable over ground patterns and scenery (none below, so the
 // shoes still sit on the ground line).
-void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
-  const uint8_t *src = sonicFrames[frameId];
+void blitSonic(int16_t left, int16_t top, const uint8_t *src, uint8_t w, uint8_t h, uint8_t rb, bool faceRight) {
   for (uint8_t pass = 0; pass < 2; pass++) {
     u8g2.setDrawColor(pass);
-    for (uint8_t row = 0; row < SONIC_H; row++) {
+    for (uint8_t row = 0; row < h; row++) {
       uint32_t bits = 0;
-      for (uint8_t k = 0; k < SONIC_ROWBYTES; k++)
-        bits |= (uint32_t)pgm_read_byte(&src[row * SONIC_ROWBYTES + k]) << (8 * k);
+      for (uint8_t k = 0; k < rb; k++)
+        bits |= (uint32_t)pgm_read_byte(&src[row * rb + k]) << (8 * k);
       if (!bits) continue;
       int16_t y = top + row;
-      for (uint8_t col = 0; col < SONIC_W; col++) {
+      for (uint8_t col = 0; col < w; col++) {
         if (!(bits & (1ul << col))) continue;
-        int16_t x = left + (faceRight ? col : (SONIC_W - 1 - col));
+        int16_t x = left + (faceRight ? col : (w - 1 - col));
         if (pass) plot(x, y);
         else { plot(x - 1, y); plot(x + 1, y); plot(x, y - 1); }
       }
@@ -2199,7 +2206,11 @@ void blitSonic(int16_t left, int16_t top, uint8_t frameId, bool faceRight) {
 
 // Centre at (x, y): feet on the row y + RAD_STAND (the spin-ball's bottom is one row higher)
 void drawSonicFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
-  blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 1 + RAD_STAND, id, faceRight);
+  blitSonic(x - (int16_t)SONIC_W / 2, y - (int16_t)SONIC_H + 1 + RAD_STAND, sonicFrames[id], SONIC_W, SONIC_H, SONIC_ROWBYTES, faceRight);
+}
+// The small Sonic (clock face). Feet on row y + 6, as before the big sprite.
+void drawMiniFrame(int16_t x, int16_t y, uint8_t id, bool faceRight) {
+  blitSonic(x - (int16_t)MINI_W / 2, y - (int16_t)MINI_H + 1 + 6, sonicMini[id], MINI_W, MINI_H, MINI_ROWBYTES, faceRight);
 }
 
 // Simple version for the watch face: run cycle / spin-ball / idle blink by frame count
@@ -2208,7 +2219,7 @@ void drawHogAt(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame, b
   if (roll) id = SPR_ROLL0 + ((frame >> 1) & 3);
   else if (moving) id = SPR_RUN0 + ((frame >> 1) & 3);
   else id = ((frame & 63) < 3) ? SPR_BLINK : SPR_STAND;
-  drawSonicFrame(x, y, id, faceRight);
+  drawMiniFrame(x, y, id, faceRight);
 }
 
 // In-game Sonic: animation follows his speed (walk → run → figure-8 legs at top speed),
@@ -2804,7 +2815,7 @@ void selectStep(uint8_t e) {
 }
 
 void drawSelect() {
-  static const char *const ZN[4] = {"GREEN HILL", "CHEM PLANT", "CASINO NIGHT", "SCRAP BRAIN"};
+  static const char *const ZONE_NAMES[4] = {"GREEN HILL", "CHEM PLANT", "CASINO NIGHT", "SCRAP BRAIN"};
   u8g2.setFont(u8g2_font_5x7_tr);
   u8g2.setCursor(34, 7); u8g2.print(F("LEVEL SELECT"));
   hLineSafe(0, 9, 128);
@@ -2817,7 +2828,7 @@ void drawSelect() {
     int16_t y = 18 + r * 8;
     if (i == selIdx) { fillBoxClipped(0, y - 7, 128, 8); u8g2.setDrawColor(0); }
     u8g2.setCursor(4, y);
-    if (i < 8) { u8g2.print(ZN[i / 2]); u8g2.print(F("  ACT ")); u8g2.print(i % 2 + 1); }
+    if (i < 8) { u8g2.print(ZONE_NAMES[i / 2]); u8g2.print(F("  ACT ")); u8g2.print(i % 2 + 1); }
     else { u8g2.print(F("SPECIAL STAGE ")); u8g2.print(i - 7); }
     u8g2.setDrawColor(1);
   }
