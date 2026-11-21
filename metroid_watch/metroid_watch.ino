@@ -148,6 +148,7 @@ bool safeOK;                       // false until she has stood on safe ground i
 int8_t lastZone = -1;
 int16_t sbTX = 0, sbTY = 0;       // test-room start
 uint8_t titleHoldT;               // Left + Right held on the title -> test room
+uint8_t eraseAsk;                 // 1-2: "ERASE SAVE?" is up on the title (1 NO, 2 YES)
 int16_t camX, camY;
 
 Enemy en[MAX_EN];
@@ -2131,11 +2132,32 @@ void titleStep(uint8_t e) {
     return;
   }
   titleHoldT = 0;
+  if (eraseAsk) {                               // NEW GAME over a save: ask first (NO is the default)
+    if (e & (B_LEFT | B_RIGHT)) { eraseAsk = 3 - eraseAsk; beep(700, 8); }
+    if (e & B_DOWN) { eraseAsk = 0; beep(400, 10); }
+    if (e & (B_UP | B_FIRE)) {
+      if (eraseAsk == 2) { eraseAsk = 0; watch::stopTune(); storyPage = 0; storyT = 0; transitionTo([] { mode = M_STORY; }, 14); }
+      else { eraseAsk = 0; beep(400, 10); }
+    }
+    return;
+  }
   if (haveSave && (e & (B_LEFT | B_RIGHT | B_DOWN))) { titleSel ^= 1; beep(700, 8); }
   if (e & (B_UP | B_FIRE)) {
-    watch::stopTune();
-    if (haveSave && titleSel == 0) transitionTo(continueGame, 14);
-    else { storyPage = 0; storyT = 0; transitionTo([] { mode = M_STORY; }, 14); }
+    if (haveSave && titleSel == 0) { watch::stopTune(); transitionTo(continueGame, 14); }
+    else if (haveSave) { eraseAsk = 1; beep(500, 15); }
+    else { watch::stopTune(); storyPage = 0; storyT = 0; transitionTo([] { mode = M_STORY; }, 14); }
+  }
+}
+
+void drawEraseAsk() {
+  u8g2.setDrawColor(0); u8g2.drawBox(14, 18, 100, 34); u8g2.setDrawColor(1); frameSafe(14, 18, 100, 34);
+  u8g2.setFont(u8g2_font_6x10_tr); drawCenteredText("ERASE SAVE?", 31);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  const char *o[2] = {"NO", "YES"};
+  for (uint8_t i = 0; i < 2; i++) {
+    int16_t x = 36 + i * 40, ww = u8g2.getStrWidth(o[i]);
+    if (eraseAsk == i + 1) { fillBoxClipped(x - 3, 37, ww + 6, 10); u8g2.setDrawColor(0); }
+    u8g2.setCursor(x, 45); u8g2.print(o[i]); u8g2.setDrawColor(1);
   }
 }
 
@@ -2165,6 +2187,7 @@ void drawTitle() {
       u8g2.setCursor(x, 51); u8g2.print(o[i]); u8g2.setDrawColor(1);
     }
   } else if ((frameN >> 4) & 1) drawCenteredText("PUSH JUMP", 52);
+  if (eraseAsk) drawEraseAsk();
 }
 
 static const char *const STORY[3][4] = {

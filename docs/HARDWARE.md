@@ -62,6 +62,9 @@ Treat this as a **watch-sized** device:
 - One screen composition; no multi-panel UI.
 - Avoid long blocking delays in `loop()`.
 - Clock time is millis-based in the current firmware (resets on power loss) — not RTC-backed unless you add hardware later.
+  `scripts/flash.sh` sets the clock over USB right after uploading; `scripts/settime.sh` does it any time the
+  watch is plugged in (it sends `T <seconds since midnight> <month> <day>` on the USB serial port; the watch
+  answers `OK`).
 
 ## Pin summary
 

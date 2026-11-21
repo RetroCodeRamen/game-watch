@@ -8,7 +8,8 @@
 //   void setup() { watch::begin(APP); }
 //   void loop()  { watch::run(); }
 //
-// System flow:  FACE ⇄ SET          FACE --Game--> APP --watch::exitToClock()--> FACE
+// System flow:  FACE ⇄ SET (time, date, alarm, sound)   FACE --Game--> APP --watch::exitToClock()--> FACE
+// The time can also be set over USB: scripts/settime.sh (flash.sh runs it after uploading).
 //               any mode --alarm--> RING --any key--> back where you were
 //
 // Build: arduino-cli compile --libraries <repo>/libraries ...  (scripts/flash.sh does this)
@@ -75,11 +76,12 @@ uint8_t seconds();
 uint8_t month();                    // 1..12
 uint8_t day();                      // 1..31
 bool alarmOn();
+bool soundEnabled();                // false when SOUND is OFF on the set screens (beeps and tunes are silent)
 uint8_t alarmHours();
 uint8_t alarmMinutes();
 
 // ---- Set screen state (for a themed setDraw) ----
-uint8_t setPage();                  // 0 time, 1 date, 2 alarm
+uint8_t setPage();                  // 0 time, 1 date, 2 alarm, 3 sound
 uint8_t setField();                 // time/alarm: 0 hour 1 minute (alarm 2 = on/off); date: 0 month 1 day
 
 // ---- Text helpers (print at the current u8g2 cursor) ----

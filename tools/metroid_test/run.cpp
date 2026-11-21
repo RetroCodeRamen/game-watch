@@ -35,6 +35,7 @@ int main(int argc, char **argv) {
     if (tok == "shot") { dump(); continue; }
     if (tok.rfind("en:", 0) == 0) { energy = atoi(tok.c_str() + 3); continue; }
     if (tok == "god") { god = true; continue; }
+    if (tok == "havesave") { haveSave = true; continue; }   // pretend a save exists (title shows CONTINUE / NEW GAME)
     if (tok.rfind("beat:", 0) == 0) { bossesBeaten = atoi(tok.c_str() + 5); continue; }   // mark bosses beaten (1 Kraid 2 Ridley 4 Mother Brain)
     if (tok.rfind("frz:", 0) == 0) { int tx = atoi(tok.c_str() + 4); for (auto &e : en) if (e.live && e.kind == EN_RIPPER) { e.x = (rTX(curRoom) + tx) * 8 - 2; e.frozen = FREEZE_T; } continue; }   // freeze Rippers at a column
     if (tok.rfind("keep:", 0) == 0) { int k = atoi(tok.c_str() + 5); for (auto &e : en) if (e.kind != k) e.live = false; continue; }   // only this enemy kind

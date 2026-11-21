@@ -36,4 +36,7 @@ arduino-cli compile --fqbn "$FQBN" --libraries "$LIBS" "$SKETCH"
 echo "==> Uploading to $PORT"
 arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$SKETCH"
 
+# start on the right time (the clock isn't battery-backed)
+"$ROOT/scripts/settime.sh" || echo "(couldn't set the clock; run scripts/settime.sh)"
+
 echo "==> Done"

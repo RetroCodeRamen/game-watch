@@ -14,6 +14,10 @@ This repo holds the shared platform docs and two firmwares for the same hardware
 ./scripts/flash.sh metroid_watch
 ```
 
+Flashing also sets the watch's clock from the computer over USB; `./scripts/settime.sh` resets it any time the
+watch is plugged in. On the watch, the set screens (Mode on the clock) are time, date, alarm and SOUND on/off
+(off silences beeps and game music; the alarm still rings).
+
 Requirements: [`arduino-cli`](https://arduino.github.io/arduino-cli/), Earle Philhower RP2040 core, U8g2 library. See [docs/FLASH.md](docs/FLASH.md).
 
 ## Repo layout

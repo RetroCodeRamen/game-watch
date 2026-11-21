@@ -37,8 +37,29 @@ uint32_t alarmTod = 7UL * 3600;
 bool alarmEnabled = false;
 unsigned long lastSec = 0;
 
-// set screen
+// set screen: 0 time, 1 date, 2 alarm, 3 sound
 uint8_t setPg = 0, setFld = 0;
+const uint8_t SET_PAGES = 4;
+
+// sound: off silences beeps and tunes (the alarm still rings)
+bool soundOn = true;
+
+// time from the USB serial port: "T <seconds since midnight> <month> <day>\n" (scripts/settime.sh)
+char serBuf[32]; uint8_t serLen = 0;
+void serialStep() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      serBuf[serLen] = 0;
+      unsigned long t; unsigned m, d;
+      if (serLen && serBuf[0] == 'T' && sscanf(serBuf + 1, "%lu %u %u", &t, &m, &d) == 3 && t < 86400UL && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        tod = t; mon = m; dday = d; lastSec = millis();
+        Serial.println("OK");
+      }
+      serLen = 0;
+    } else if (serLen < sizeof(serBuf) - 1) serBuf[serLen++] = c;
+  }
+}
 
 // power save (face only): 0 full, 1 dim, 2 off
 uint8_t idleStage = 0;
@@ -184,6 +205,9 @@ void adjust(int8_t d) {
     uint8_t dim = MDAYS[mon - 1];
     if (dday > dim) dday = dim;
     if (setFld == 1) dday = (dday - 1 + d + dim) % dim + 1;
+  } else if (setPg == 3) {
+    soundOn = !soundOn;
+    if (soundOn) tone(pins.buzzer, 1200, 60);
   } else {
     if (setFld == 2) { alarmEnabled = !alarmEnabled; return; }
     uint8_t h = alarmTod / 3600, m = (alarmTod / 60) % 60;
@@ -193,18 +217,28 @@ void adjust(int8_t d) {
 }
 
 void setStep(uint8_t e) {
-  if (e & B_MODE) { setPg++; setFld = 0; if (setPg > 2) sys = S_FACE; return; }
+  if (e & B_MODE) { setPg++; setFld = 0; if (setPg >= SET_PAGES) sys = S_FACE; return; }
   if (e & B_LEFT) adjust(-1);
   if (e & B_RIGHT) adjust(1);
   if (e & B_MID) {
     setFld++;
-    if (setFld >= ((setPg == 2) ? 3 : 2)) { setFld = 0; sys = S_FACE; }
+    if (setFld >= ((setPg == 2) ? 3 : setPg == 3 ? 1 : 2)) { setFld = 0; sys = S_FACE; }
   }
 }
 
 void drawSetDefault() {
   using namespace watch;
   u8g2.setFont(u8g2_font_6x10_tr);
+  if (setPg == 3) {                         // sound on/off
+    u8g2.setCursor(46, 12); u8g2.print(F("SOUND"));
+    u8g2.setFont(u8g2_font_ncenB14_tr);
+    u8g2.setCursor(soundOn ? 50 : 42, 40); u8g2.print(soundOn ? F("ON") : F("OFF"));
+    u8g2.setFont(u8g2_font_6x10_tr);
+    u8g2.setCursor(0, 54); u8g2.print(F("L/R change"));
+    u8g2.setCursor(0, 63); u8g2.print(F("ALARM RINGS"));
+    u8g2.setCursor(72, 63); u8g2.print(app.nextLabel ? app.nextLabel : "MID"); u8g2.print(F(" done"));
+    return;
+  }
   u8g2.setCursor(setPg == 2 ? 40 : 30, 12);
   u8g2.print(setPg == 0 ? F("SET TIME") : setPg == 1 ? F("SET DATE") : F("ALARM"));
   u8g2.setFont(u8g2_font_logisoso20_tn);
@@ -260,7 +294,7 @@ void render() {
 
 // ================================================================ public
 void beep(uint16_t freq, uint16_t ms) {
-  if (sys == S_RING || tune) return;  // don't stomp on the alarm or a tune
+  if (sys == S_RING || tune || !soundOn) return;  // don't stomp on the alarm or a tune; muted: silent
   tone(pins.buzzer, freq, ms);
 }
 
@@ -276,6 +310,7 @@ void begin(const WatchApp &a, const Pins &p) {
   Wire.setSDA(p.sda);
   Wire.setSCL(p.scl);
   Wire.setClock(400000);
+  Serial.begin(115200);   // USB: accepts the time from scripts/settime.sh
   u8g2.begin();
   u8g2.setBitmapMode(1);  // bitmap 0-bits are transparent
   lastSec = millis();
@@ -283,6 +318,7 @@ void begin(const WatchApp &a, const Pins &p) {
 }
 
 void run() {
+  serialStep();
   pending |= readButtons();
   tuneStep();
   unsigned long now = millis();
@@ -323,7 +359,7 @@ void exitToClock() {
 bool inApp() { return sys == S_APP; }
 
 void playTune(const Note *notes, uint8_t count) {
-  if (sys == S_RING) return;
+  if (sys == S_RING || !soundOn) return;
   tune = notes;
   tuneLen = count;
   tuneIdx = 0;
@@ -340,6 +376,7 @@ uint8_t seconds() { return tod % 60; }
 uint8_t month() { return mon; }
 uint8_t day() { return dday; }
 bool alarmOn() { return alarmEnabled; }
+bool soundEnabled() { return soundOn; }
 uint8_t alarmHours() { return alarmTod / 3600; }
 uint8_t alarmMinutes() { return (alarmTod / 60) % 60; }
 

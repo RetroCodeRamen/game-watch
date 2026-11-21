@@ -172,6 +172,7 @@ RP2040 has headroom, but keep watch games tiny:
     the ship's pad for the ending (ship lifts off; MISSION COMPLETE, time, items x/12). Out of time = game over
     back at the last save.
 - **Zones look different:** Kraid's Lair spiky stone, Norfair lava-lit edges, Tourian riveted metal.
+- **Title:** NEW GAME over an existing save asks ERASE SAVE? (NO is the default).
 - **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
   Beaten bosses are saved (`bosses` bits) and don't come back. Save version 4.
 - **Hazards:** spikes (`^`) and lava (`~`), solid: 1 energy and back to the last safe footing in this room (both
@@ -234,6 +235,7 @@ RP2040 has headroom, but keep watch games tiny:
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
   Skrees dive and burst into shards, Rippers are invincible (freeze one with Ice to stand on it; missiles don't shatter it). Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
+- **Title:** NEW GAME over an existing save asks ERASE SAVE? (NO is the default).
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
 - Host tests: `tools/metroid_test/build.sh`, then `out/check` (room sizes, overlaps, openings line up,
