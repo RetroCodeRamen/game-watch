@@ -163,11 +163,14 @@ RP2040 has headroom, but keep watch games tiny:
   spike hall (Swipe Pirate) → Bombs shrine (9-tile drop; bomb the floor) → cracked descent (tank #3) → lower
   tunnels (Energy Tank) → Kraid save station (K07) → Kraid (K08) → chute (K09; slashed rock opens with Space
   Jump) → B07 under the junction (Tourian hatch in its floor) and the K10 cache (tank #4). B08 under the surface
-  path's cracked seam holds tank #2. The junction's east red door (Norfair) is unbuilt.
+  path's cracked seam holds tank #2. Norfair N01–N09 through the junction's east red door: lava crossing (two
+  jumps with wide landings), lower shaft (Energy Tank #2), hot corridor (Bolt Pirate), Ridley save, Ridley, and
+  after him the hatch (`g`) to N09 - freeze the invincible Ripper over the lava to cross, then climb into B07 by
+  the Tourian hatch (from B07 you can drop in and climb back out without Ice).
 - **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
   Beaten bosses are saved (`bosses` bits) and don't come back. Save version 4.
-- **Hazards:** spikes (`^`, solid): 1 energy and back to the last safe footing (updated whenever Samus stands
-  clear of spikes). Broken `B`/`X` blocks stay open until death or a reload (oldest first if 32 are open).
+- **Hazards:** spikes (`^`) and lava (`~`), solid: 1 energy and back to the last safe footing in this room (both
+  feet on safe ground); with none yet, a hazard bounces her up instead. Broken `B`/`X` blocks stay open until death or a reload (oldest first if 32 are open).
 - **Zones:** crossing into another zone shows its name card; the pause map shows the current zone only.
 - **Items:** each kind has its own 8×8 icon (`ICON_*`). Major items (Morph Ball, Missiles) sit in a seated
   Chozo statue's hands inside an orb that must be shot open; taking one flashes the screen, pulls rings of
@@ -224,7 +227,7 @@ RP2040 has headroom, but keep watch games tiny:
   map. It has Bombs and Space Jump orbs, a cracked-rock plug, a pit under a cracked lid, a bomb-jump wall, and an
   enemy arena with a slashed-rock wall and a high ledge.
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
-  Skrees dive and burst into shards, Rippers are beam-proof. Energy starts at 6 (contact = 1), knock-back
+  Skrees dive and burst into shards, Rippers are invincible (freeze one with Ice to stand on it; missiles don't shatter it). Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
@@ -232,5 +235,7 @@ RP2040 has headroom, but keep watch games tiny:
   door shape, no 2-tile pinch points; each major item reachable with the gear before it; the Morph Ball and Bombs
   shrines only left by using the item; and from everywhere Samus can reach at each gear stage, a save station
   is reachable again. Moves: 4-tile jumps, 7 with the double jump, any height with Space Jump; ball ducts,
-  bomb hops of 2; red doors need Missiles, `B` Bombs, `X` Space Jump; never standing on spikes) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
+  bomb hops of 2; red doors need Missiles, `B` Bombs, `X` Space Jump, Ridley's hatch `g` Ice; with Ice a Ripper's
+  lane counts as something to stand on; gap jumps up to 6; never standing on spikes or lava; stages include a
+  Ridley-first order) and `out/run "<script>"` (plays the real sketch with scripted buttons, dumps screenshots;
   see the header of `run.cpp`).

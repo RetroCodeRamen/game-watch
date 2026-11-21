@@ -235,6 +235,7 @@ bool solidTile(int16_t tx, int16_t ty) {
   switch (c) {
     case 'B': case 'X': return !isBroken(tx, ty);
     case '#': case '=': case 'G': case 'h': case 'S': case 'P': case '^': case '~': return true;
+    case 'g': return !(bossesBeaten & 2);      // Ridley's hatch: opens when he's beaten
     case 'D': case 'R': { int8_t d = doorAt(tx, ty); return d < 0 || !doorIsOpen(d); }
     default: return false;
   }
@@ -243,7 +244,7 @@ bool solidTile(int16_t tx, int16_t ty) {
 bool rockish(int16_t tx, int16_t ty) {
   char c = rawTile(tx, ty);
   if (c == 'B' || c == 'X') return !isBroken(tx, ty);
-  return c == '#' || c == '=' || c == 'G' || c == 'D' || c == 'R';
+  return c == '#' || c == '=' || c == 'G' || c == 'D' || c == 'R' || (c == 'g' && !(bossesBeaten & 2));
 }
 
 // [x0,x1) × [y0,y1) in px
@@ -749,7 +750,7 @@ void damageEnemy(Enemy &e, uint8_t dmg, uint8_t how, int8_t fromDir) {
     else beep(2000, 6);
     return;
   }
-  if (e.kind == EN_RIPPER && how == HIT_BEAM) { beep(2000, 8); return; }
+  if (e.kind == EN_RIPPER) { beep(2000, 8); return; }   // armoured all over: freeze one and stand on it
   e.flash = 6;
   if (e.hp <= dmg) killEnemy(e);
   else { e.hp -= dmg; beep(600, 10); }
@@ -908,7 +909,7 @@ int16_t ridleyPerchX(int8_t side) {      // body x for a landing on the left (-1
 }
 void ridleyStep(Enemy &e) {
   int16_t floorY = (int16_t)e.vy, hoverY = floorY - 54;
-  e.t++;
+  if (e.st != 0 || ground) e.t++;               // he doesn't start a swoop while she's still dropping in
   switch (e.st) {
     case 0: {                                   // hover over the side he'll start from
       int16_t tx = ridleyPerchX(-e.dx);
@@ -1133,7 +1134,7 @@ void shotStep(Shot &s) {
       return;
     }
     if (e.frozen) {                                // frozen: a missile shatters it, the beam glances off
-      if (s.missile) { burst(e.x + e.w / 2, e.y + e.h / 2, 14, 5); killEnemy(e); }
+      if (s.missile && e.kind != EN_RIPPER) { burst(e.x + e.w / 2, e.y + e.h / 2, 14, 5); killEnemy(e); }
       else { beep(2200, 6); spark(x, y, -sgn(s.vx) * 4, -3, 5); }
       return;
     }
@@ -1143,7 +1144,7 @@ void shotStep(Shot &s) {
       beep(1800, 20); burst(x, y, 6, 3);
       return;
     }
-    if (e.kind == EN_RIPPER && !s.missile) spark(x, y, -sgn(s.vx) * 4, -3, 5);
+    if (e.kind == EN_RIPPER) spark(x, y, -sgn(s.vx) * 4, -3, 5);
     damageEnemy(e, s.missile ? 4 : 1, s.missile ? HIT_MISSILE : HIT_BEAM, sgn(s.vx));
     return;
   }
@@ -1507,6 +1508,7 @@ void drawWorld() {
       char c = rawTile(tx, ty);
       int16_t x = scrX(tx * 8), y = scrY(ty * 8);
       if (c == '#' || c == '=' || c == 'G' || ((c == 'B' || c == 'X') && !isBroken(tx, ty))) drawRock(tx, ty, x, y, c);
+      else if (c == 'g' && !(bossesBeaten & 2)) drawRock(tx, ty, x, y, 'G');
       else if (c == '~') {                      // lava: a rolling surface over a dithered glow
         for (int8_t i = 0; i < 8; i++) {
           int16_t wv = ((tx * 8 + i + (frameN >> 1)) >> 2) & 1;

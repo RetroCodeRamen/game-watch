@@ -185,37 +185,19 @@ West through the junction's red door. The upper passage heads west to Bombs; the
 
 ## Norfair
 
-Descend on the west side, cross the lower hot corridor, then climb to the upper save. Ridley’s lift exits at B05. The optional bypass skips the Bolt Pirate corridor after tank #5.
-
-```mermaid
-flowchart TD
-    N01 --- N02
-    N02 --- N03
-    N03 --- N04
-    N04 --- N05
-    N05 --- N06
-    N06 --- N07
-    N07 --- N08
-    N04 ---|"Space Jump"| N06
-    N05 --- N10
-    N10 -->|"One way"| N04
-    N08 ---|"Ridley defeated"| N09
-```
-
-Footprints are width × height in play windows. Cross-zone links appear in the room descriptions.
+East through the junction's red door: across the lava, down the shaft, back west along the hot corridor to the save and Ridley. Beating him opens the way out: an Ice-only crossing that climbs into B07 beside the Tourian hatch, so Norfair is a loop like Kraid's Lair.
 
 | **ID** | **Room** | **W × H** | **Shape and traversal** |
 | -------- | ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| N01 | Norfair Entrance | 1×1 | Missile door from B06 at the upper west edge. Keep it open in both directions once shot. Descend to N02. |
-| N02 | Lava Crossing | 2×1 | Wide lava lane with a safe midpoint shelf and a visible landing. Lower outlet goes to N03. |
-| N03 | Lower Shaft | 1×3 | Base-jump ledges lead to Energy Tank #2 on a side shelf. N02 above, east exit to N04 at the lower landing. |
-| N04 | Missile Ledge | 2×1 | Auto-collect tank #5 before the route splits. East to N05 or high Space Jump bypass to N06. The return drop from N10 lands here. |
-| N05 | Hot Corridor | 2×2 | Bolt Pirate guards the lower east lane. Climb to N06 or take a smaller overhead route west to N10. Both climbs work with the base jump. |
-| N06 | Upper Cache | 1×1 | Auto-collect tank #6 after the main climb and bypass merge. South to N05, east to N07, and back across the opened bypass to N04. |
-| N07 | Ridley Save | 1×1 | Save and refill at the upper east landing. Descend to Ridley. The path remains open back from the arena. |
-| N08 | Ridley | 2×2 | Arena below the save. Maintain a climb back to N07 at zero ammo. Victory grants Ice Missiles and unlocks the east path to N09. |
-| N09 | Return Lift | 1×3 | Lift rises outside the east side of the loop, then returns one-way to B05. Return to N08 remains available before committing to the lift. |
-| N10 | Hidden Ledge | 1×1 | Reach tank #7 from N05 using the base jump. Return to N05 or take a one-way drop to N04. |
+| N01 | Norfair Entrance | 1×1 | Red door west to B06. A Skree. |
+| N02 | Lava Crossing | 2×2 | In high; a ledge and step down to a lava lane crossed in two jumps with wide landings (a full held jump and a short hop both land). Missile tank #6 above the middle shelf. |
+| N03 | Lower Shaft | 1×3 | Ledge down to the floor (and back). Energy Tank #2. Lava in the floor. Out west at the bottom. |
+| N04 | Hot Corridor | 2×1 | Westbound; a Bolt Pirate guards it. Missile tank #5 by the door to the save. |
+| N06 | Ridley Save | 1×1 | Save station; a hole in the floor drops into Ridley's arena. |
+| N08 | Ridley | 1×2 | He waits until Samus has landed. Ledges up the west side back to the hole; the hatch under them opens when he's beaten. |
+| N09 | Ridley's Exit | 1×2 | A lava pit too wide to jump under a low ceiling, with an invincible Ripper patrolling it: freeze it mid-pit, hop across, climb into B07. |
+
+Rippers are invincible flyers: freezing them (Ice Missiles) is the only way to deal with them, and a frozen Ripper is a platform. They are the Ice gates.
 
 ## Tourian
 

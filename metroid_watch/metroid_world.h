@@ -9,7 +9,7 @@
 // Tiles (one char each, rows top to bottom):
 //   ' ' empty       '#' rock          '=' rock ledge       'B' bomb block (cracked seam)
 //   'D' blue door (any shot)   'R' red door (missile, then stays open)   'G' locked hatch
-//   'h' ship hull (solid, drawn as the ship)   'S' save pad on the ship (solid)
+//   'g' Ridley's hatch (solid until he's beaten)   'h' ship hull (solid, drawn as the ship)   'S' save pad on the ship (solid)
 //   '@' test-room start (empty)   'P' save station (solid)   '^' spikes, '~' lava (solid; 1 energy
 //   and back to safe footing)
 // Objects (the tile itself is empty):
@@ -18,7 +18,7 @@
 //       ('M', 'L', 'O', 'J'): statue on the right, facing left. Face it toward where Samus arrives.
 //   't' missile tank (+5)  'e' Energy Tank (+2)
 //   'z' Zoomer (crawls round surfaces)  'k' Skree (hangs from the ceiling, dives)
-//   'r' Ripper (flies a lane, beam-proof)  'u' turret (on the wall beside it)
+//   'r' Ripper (flies a lane, invincible: freeze it to stand on it)  'u' turret (on the wall beside it)
 //   'p' Swipe Pirate  'q' Bolt Pirate (stand on the floor below)  'n' Metroid  'K' Kraid  'Y' Ridley  'W' Mother Brain
 // Doors sit in a room's edge column, 3 tiles tall; the room next door has its own door facing it.
 
@@ -185,8 +185,8 @@ static const char T_B07[] =
   "                               #"
   "                               #"
   "                               #"
-  "########################GG######"
-  "########################GG######";
+  "#################  #####GG######"
+  "#################  #####GG######";
 
 // ---------------------------------------------------------------- B08 Buried Alcove 1×1
 // Missile tank #2 under the cracked seam on the Surface Path (bomb through it). From the low step
@@ -344,8 +344,8 @@ static const char T_N01[] =
   "################";
 
 // ---------------------------------------------------------------- N02 Lava Crossing 2×2
-// In high on the west; a ledge and a step down to a lava lane with stepping stones (gaps of 3, an
-// easy running jump, lots of air above); the wide middle shelf is safe; missile tank #6 floats above it.
+// In high on the west; a ledge and a step down to a lava lane in two jumps (gaps of 4
+// with wide landings, so a full held jump and a short hop both land; lots of air above); missile tank #6 floats above it.
 static const char T_N02[] =
   "################################"
   "#####     #########      #######"
@@ -355,12 +355,12 @@ static const char T_N02[] =
   "D                              #"
   "###                            #"
   "#                              #"
-  "#                t             #"
+  "#             t                #"
   "#                              #"
   "#  ###                         D"
   "#  ###                         D"
   "#  ###                         D"
-  "########~~~##~~~####~~~##~~~####";
+  "########~~~~#####~~~############";
 
 // ---------------------------------------------------------------- N03 Lower Shaft 1×3
 // In from the crossing low on the west; a ledge down to the floor (and back); Energy Tank #2 on it;
@@ -412,7 +412,8 @@ static const char T_N06[] =
   "####P###  ######";
 
 // ---------------------------------------------------------------- N08 Ridley 1×2
-// Ridley's arena under the save. Ledges up the west side lead back to the hole.
+// Ridley's arena under the save. Ledges up the west side lead back to the hole; the hatch under them
+// opens when he's beaten (the way out, N09).
 static const char T_N08[] =
   "########  ######"
   "#              #"
@@ -423,10 +424,31 @@ static const char T_N08[] =
   "#              #"
   "#              #"
   "####           #"
-  "#              #"
-  "#              #"
-  "#       Y      #"
+  "g              #"
+  "g              #"
+  "g       Y      #"
   "################"
+  "################";
+
+// ---------------------------------------------------------------- N09 Ridley's Way Out 1×2
+// Behind Ridley's hatch (opens when he's beaten). A lava pit too wide to jump - the low ceiling kills a
+// running jump - with an invincible Ripper patrolling over it: freeze it mid-pit (Ice Missiles), hop on,
+// hop to the far post, then climb up through the hole into B07 beside the Tourian hatch. From B07 you can
+// drop in and climb straight back out without Ice.
+static const char T_N09[] =
+  "#  #############"
+  "#    ###########"
+  "#    ###########"
+  "#    ###########"
+  "#    ###########"
+  "#==            #"
+  "#              #"
+  "#              #"
+  "#              #"
+  "#              g"
+  "#   #  r   #   g"
+  "#   #      #   g"
+  "#####~~~~~~#####"
   "################";
 
 // ---------------------------------------------------------------- SB Test Room 4×3 (hidden)
@@ -559,6 +581,7 @@ static const RoomDef ROOMS[] = {
   {"N04", "HOT CORRIDOR",   7, 7, 2, 1, 2, T_N04},
   {"N06", "RIDLEY SAVE",    6, 7, 1, 1, 2, T_N06},
   {"N08", "RIDLEY",         6, 8, 1, 2, 2, T_N08},
+  {"N09", "RIDLEY'S EXIT",  5, 8, 1, 2, 2, T_N09},
   {"SB",  "TEST ROOM",      8, 0, 4, 3, ZONE_TEST, T_SB},
   {"SB2", "ENEMY TEST",    12, 0, 3, 2, ZONE_TEST, T_SB2},
   {"SB3", "KRAID TEST",    15, 0, 1, 2, ZONE_TEST, T_SB3},
