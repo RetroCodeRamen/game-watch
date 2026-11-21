@@ -168,7 +168,7 @@ RP2040 has headroom, but keep watch games tiny:
   - Norfair: entrance → lava crossing (tank #6) → shaft (Energy Tank) → hot corridor (Bolt Pirate, tank #5) →
     save → Ridley (Ice) → N09: freeze the Ripper over the lava, climb into B07.
   - Tourian: hatch → save (T01) → first Metroid alone (T02) → Metroid nest over acid with Rippers (T03) → final
-    save (T05) → Mother Brain (T06). Beating her starts a 3-minute alarm (countdown in the HUD, beeps): reach
+    save (T05) → Mother Brain (T06). Beating her starts a 4-minute alarm (countdown in the HUD, beeps): reach
     the ship's pad for the ending (ship lifts off; MISSION COMPLETE, time, items x/12). Out of time = game over
     back at the last save.
 - **Zones look different:** Kraid's Lair spiky stone, Norfair lava-lit edges, Tourian riveted metal.
@@ -208,7 +208,7 @@ RP2040 has headroom, but keep watch games tiny:
   - Bolt Pirate (`q`): guards its spot facing Samus; reaches out with a blinking muzzle (tell), fires one slow bolt
     at a time, high enough to crouch under and low enough to jump. 6 hp.
   - Metroid (`n`): drifts toward Samus, pulses (tell), dives; on contact it latches onto her head and drains 1
-    energy every ~0.8 s. Only a bomb blast knocks it off. Beam, missiles and the flip don't hurt it (missiles
+    energy every ~1.5 s. Only a bomb blast knocks it off. Beam, missiles and the flip don't hurt it (missiles
     shove it); Ice freezes it, then any missile shatters it.
 - **Bosses:** `isBoss()` kinds take hits only on their weak point (bombs and the flip do nothing; touching
   them costs 2); a health bar shows under the HUD; while one is alive the camera holds on its floor.

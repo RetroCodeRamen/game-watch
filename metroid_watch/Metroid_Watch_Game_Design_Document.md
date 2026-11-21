@@ -213,7 +213,7 @@ Under B07's hatch, which opens once Kraid and Ridley are beaten. The final regio
 
 ### Escape
 
-Beating Mother Brain starts a 3-minute alarm (countdown in the HUD, beeps that speed up in the last 30 seconds). The route home is the way in, with Space Jump making the climbs quick. Reaching the ship's pad ends the game: the ship lifts off and the results show the time and items found. If time runs out, Samus is back at her last save.
+Beating Mother Brain starts a 4-minute alarm (countdown in the HUD, beeps that speed up in the last 30 seconds). The route home is the way in, with Space Jump making the climbs quick. Reaching the ship's pad ends the game: the ship lifts off and the results show the time and items found. If time runs out, Samus is back at her last save.
 
 ## Progression and recovery rules
 

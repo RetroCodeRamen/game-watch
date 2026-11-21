@@ -78,7 +78,7 @@ const uint8_t RIDLEY_HP = 6, RID_HOVER = 70, RID_TELL = 26, RID_LAND = 60, RID_R
 // Mother Brain: 6 missiles crack the glass, then 8 beam hits (missiles 2) on the brain
 const uint8_t MB_GLASS = 6, MB_HP = 8, MB_CANNON = 140, MB_CANNON_TELL = 26, MB_EYE = 150, MB_RING = 46, MB_DIE = 140;
 // Metroid timings (physics steps): pulse before a dive, dive length, energy drain while latched, stun
-const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 50, MET_STUN = 70;
+const uint8_t MET_TELL = 24, MET_DIVE = 44, MET_DRAIN = 90, MET_STUN = 70;   // drain: 1 energy per ~1.5 s (time to bomb it off)
 const uint16_t FREEZE_T = 300;  // Ice Missiles: an enemy stays frozen ~5 s (physics steps)
 const uint16_t THAW_WARN = 90;  // ...and shivers for the last 1.5 s
 const fx JUMP_CUT = 256;     // release while rising → at most 1 px/step up
@@ -128,7 +128,7 @@ uint8_t fireCD, invul, hurtLock, runPhase, animT, spinPhase;
 uint8_t energy, maxEnergy, missiles, maxMissiles, weapon, gear;
 uint8_t gearOff;                  // gear switched OFF in the pause menu's Items tab
 uint16_t escapeT;                 // frames left to reach the ship after Mother Brain (0: no alarm)
-const uint16_t ESCAPE_FRAMES = 180 * 30;
+const uint16_t ESCAPE_FRAMES = 240 * 30;   // 4 minutes: the way home is ~10 rooms
 uint8_t endT;
 inline uint8_t eg() { return gear & ~gearOff & ~((gearOff & G_MORPH) ? G_BOMB : 0) & ~((gearOff & G_MISSILE) ? G_ICE : 0); }
 uint32_t playFrames;
