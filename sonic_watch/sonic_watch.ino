@@ -159,6 +159,11 @@ void drawView() {
 //        5 deco (state: 0 sun 1 palm 2 pipe 3 neon 4 gear)
 //        6 goal 7 wall 8 flame/chem trap 9 bumper 10 saw
 struct Obj { int16_t x, y, home; uint8_t kind, state, timer; int8_t vx; bool live; };
+// Item monitors (TV boxes, kind 12, state = item) and the icon that pops out (kind 13)
+enum : uint8_t { MON_SHOES, MON_LIFE, MON_SHIELD, MON_STAR };
+static const uint16_t SHOES_FRAMES = 8 * 30, STAR_FRAMES = 15 * 30;
+uint16_t shoesT, starT;          // frames left of Speed Shoes / invincibility
+bool shieldOn;                   // takes one hit instead of the rings
 struct Plat { int16_t x, y, w; bool live; };
 struct Shot { int16_t x, y; int16_t vx, vy; int16_t qx, qy; bool live; };   // q/v in 1/16 px
 struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
@@ -203,16 +208,29 @@ uint8_t h8(uint16_t n) {
 // Watch-tuned: snappy accel, firmer coast (less slippery), hard skid ≈11× accel.
 // Design values (pre-zoom) in comments; every speed/accel below is design × 5/4.
 static const fx FX_ONE      = 256;
-static const fx ACCEL       = 37;      // 30  — snappy launch
-static const fx FRICTION    = 70;      // 56  — firmer coast than accel (watch grip)
-static const fx BRAKE       = 412;     // 330 — ~11× accel, deliberate skid
-static const fx TOP_SPD     = 1920;    // 1536 — 7.5 px/step
-static const fx START_KICK  = 160;     // 128 — immediate bite from standstill
-static const fx AIR_ACCEL   = 22;      // 18  — air steer so jumps feel controllable
+// Running values below are the FULL speed, which is now the Speed Shoes speed. Normal play runs
+// at SPD_NORMAL/256 of it (−17%, "too fast for regular play"); all of them scale together, so the
+// feel is the same, just slower. SPD() applies the current scale.
+static const uint16_t SPD_NORMAL = 212, SPD_SHOES = 256;
+uint16_t spdScale = SPD_NORMAL;
+#define SPD(v) ((fx)(((int32_t)(v) * spdScale) >> 8))
+static const fx ACCEL_FULL      = 37;      // 30  — snappy launch
+static const fx FRICTION_FULL   = 70;      // 56  — firmer coast than accel (watch grip)
+static const fx BRAKE_FULL      = 412;     // 330 — ~11× accel, deliberate skid
+static const fx TOP_SPD_FULL    = 1920;    // 1536 — 7.5 px/step
+static const fx START_KICK_FULL = 160;     // 128 — immediate bite from standstill
+static const fx AIR_ACCEL_FULL  = 22;      // 18  — air steer so jumps feel controllable
+#define ACCEL      SPD(ACCEL_FULL)
+#define FRICTION   SPD(FRICTION_FULL)
+#define BRAKE      SPD(BRAKE_FULL)
+#define TOP_SPD    SPD(TOP_SPD_FULL)
+#define START_KICK SPD(START_KICK_FULL)
+#define AIR_ACCEL  SPD(AIR_ACCEL_FULL)
 static const fx JUMP_SPD    = VS(700); // 560 — ~48 px: 2.2 Sonic heights, the Genesis ratio
 static const fx SPRING_SPD  = VS(890); // 712 — yellow spring ≈ 77 px (levels are spaced for this)
 static const fx GRAVITY     = VS(20);  // 16
-static const fx ROLL_FRIC   = 10;      // 8
+static const fx ROLL_FRIC_FULL = 10;   // 8
+#define ROLL_FRIC  SPD(ROLL_FRIC_FULL)
 static const fx MAX_FALL    = VS(1462);// 1170
 // Host tests define this to log every place Sonic gets stopped (no-op on the watch)
 #ifndef STOP_HOOK
@@ -635,7 +653,16 @@ void drawTerrain() {
 }
 
 void hurt() {
-  if (invul || restartPending) return;
+  if (invul || restartPending || starT) return;
+  if (shieldOn) {
+    // Shield hit: the shield goes, the rings stay
+    shieldOn = false;
+    beep(300, 120);
+    invul = 55;
+    setPlayerVel(faceRight ? ZV(-2) : ZV(2), -HURT_VY);
+    jumpCut = true; onGround = false; rolling = true; groundRoll = false; inLoop = false; inHollow = false;
+    return;
+  }
   if (rings) {
     // Ring hit: spill rings, keep going
     beep(200, 140);
@@ -769,6 +796,12 @@ void buildAct() {
       case L_LOOP:   placeGreenHillLoop(x); break;
       case L_CHEMX:  placeChemWavyCross(x); break;
       case L_FISH:   addObj(x, groundAt(x) - 4, 11); break;   // in the pool, under the deck
+      case L_MONITOR:                        // item TV standing on the ground (or a platform)
+        for (auto &o : objs) if (!o.live) {
+          o = Obj{x, (int16_t)(g - h - 6), x, 12, d.arg, 0, 0, true};
+          break;
+        }
+        break;
     }
   }
   clearLoopRunway();                 // no hazards right before / after a loop
@@ -781,6 +814,7 @@ void startAct(uint8_t z, uint8_t a) {
   lvl = &ACTS[z][a];
   actEnd = Z(lvl->len);
   rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
+  shoesT = 0; starT = 0; shieldOn = false; spdScale = SPD_NORMAL;
   actFrames = 0;
   camLead = 0;
   goalT = 0;
@@ -1383,8 +1417,36 @@ void applyWalls(int16_t rad) {
 
 // True if spin-rolling or stomping down onto a target
 bool canBreakEnemy(int16_t ey) {
-  if (rolling || groundRoll) return true;
+  if (rolling || groundRoll || starT) return true;   // invincible: anything you touch pops
   return (fvy > 0 && py < ey);
+}
+
+static const watch::Note ONEUP_TUNE[] = {
+  {784, 110}, {0, 20}, {784, 110}, {0, 20}, {784, 110}, {1047, 200}, {988, 110}, {1047, 300},
+};
+// Break a monitor: its item takes effect now, and its icon floats up out of the box
+void popMonitor(int16_t x, int16_t y, uint8_t item) {
+  beep(900, 40);
+  switch (item) {
+    case MON_SHOES: shoesT = SHOES_FRAMES; break;
+    case MON_LIFE:
+      if (lives < 99) lives++;
+      watch::playTune(ONEUP_TUNE, sizeof(ONEUP_TUNE) / sizeof(ONEUP_TUNE[0]));
+      break;
+    case MON_SHIELD: shieldOn = true; break;
+    case MON_STAR: starT = STAR_FRAMES; break;
+  }
+  for (auto &o : objs) {
+    if (o.live) continue;
+    o.live = true; o.kind = 13; o.x = x; o.y = y; o.home = y; o.state = item; o.timer = 24; o.vx = 0;
+    break;
+  }
+}
+// Once per frame: count the power-ups down and set the running speed
+void powerStep() {
+  if (shoesT) shoesT--;
+  if (starT) starT--;
+  spdScale = shoesT ? SPD_SHOES : SPD_NORMAL;
 }
 
 void handleDoubleTapRoll(uint8_t e) {
@@ -1564,8 +1626,14 @@ void applyGroundControl() {
     if (heldIn() & B_RIGHT) { fvx += AIR_ACCEL; faceRight = true; }
   }
 
-  if (fvx > top) fvx = top;
-  if (fvx < -top) fvx = -top;
+  if (pinball) {
+    if (fvx > top) fvx = top;
+    if (fvx < -top) fvx = -top;
+  } else {
+    // Over the cap (the Speed Shoes just ran out): ease down instead of snapping
+    if (fvx > top) { fvx -= FRICTION_FULL; if (fvx < top) fvx = top; }
+    if (fvx < -top) { fvx += FRICTION_FULL; if (fvx > -top) fvx = -top; }
+  }
 }
 
 // ---- Green Hill loop: physics, not a speed gate ----
@@ -1927,6 +1995,7 @@ void gameStepInner(uint8_t e) {
 
   if (goalT) e = 0;                              // past the signpost: no control
   else if (actFrames < 0xFFFF) actFrames++;      // act timer (stops at the signpost)
+  powerStep();
 
   if (invul) invul--;
   if (intro) intro--;
@@ -2038,6 +2107,10 @@ void gameStepInner(uint8_t e) {
     }
     if (o.kind == 9 && o.timer) o.timer--;
     if (o.kind == 10) o.timer++;
+    if (o.kind == 13) {                        // monitor icon: rises out of the box, then goes
+      if (o.timer > 8) o.y--;
+      if (o.timer) o.timer--; else o.live = false;
+    }
     if (o.kind == 11) {                        // fish: wait in the pool, leap, splash back down
       if (o.state == 0) {
         if (o.timer) o.timer--;
@@ -2152,6 +2225,18 @@ void gameStepInner(uint8_t e) {
         }
       }
     }
+    else if (o.kind == 12) {
+      // Item monitor: jump on it or roll into it to break it; otherwise it's a solid box
+      if (abs(px - o.x) < 14 && abs(py - o.y) < 12) {
+        if (canBreakEnemy(o.y)) {
+          o.live = false; score += 10;
+          if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
+          popMonitor(o.x, o.y, o.state);
+        } else {
+          bumpFromSolid(o.x - 6, o.x + 6, o.y - 6, o.y + 6, rad + 4);   // his sprite is wider than his body
+        }
+      }
+    }
     // kind 5 deco: no collision
   }
 }
@@ -2235,7 +2320,7 @@ void drawHog(int16_t x, int16_t y, bool roll, bool faceRight, uint8_t frame) {
              (((heldIn() & B_LEFT) && fvx > 0) || ((heldIn() & B_RIGHT) && fvx < 0))) {
     id = SPR_SKID;           // braking: lean back, still facing the way he's sliding
     face = fvx > 0;
-  } else if (spd >= 1750) {
+  } else if (spd >= TOP_SPD_FULL * 9 / 10 * SPD_NORMAL / 256) {   // near normal top speed
     id = SPR_FAST0 + (frame & 1);
   } else {
     runAnim += 24 + spd / 15;  // ~4 steps/s at a walk up to ~15/s near top speed
@@ -2586,6 +2671,46 @@ void drawBanner() {
   u8g2.setFont(u8g2_font_6x10_tr);
 }
 
+// 7x5 item icons, drawn inside the monitor screen and in the HUD
+static const char *const MON_ICON[4][5] = {
+  {".##....", ".###...", ".#####.", "#######", "#######"},   // Speed Shoes
+  {"..##...", ".###...", "..##...", "..##...", ".####.."},   // 1-Up ("1")
+  {"..###..", ".#...#.", "#..#..#", ".#...#.", "..###.."},   // Shield
+  {"...#...", "#######", ".#####.", ".##.##.", "#.....#"},   // Invincibility star
+};
+void drawMonIcon(int16_t x, int16_t y, uint8_t item) {   // top-left corner
+  for (uint8_t j = 0; j < 5; j++)
+    for (uint8_t i = 0; i < 7; i++)
+      if (MON_ICON[item & 3][j][i] == '#') plot(x + i, y + j);
+}
+// Monitor: a 13x13 TV on a little stand, the item on its screen (flickers like a real one)
+void drawMonitor(int16_t x, int16_t y, uint8_t item) {
+  int16_t l = x - 6, t = y - 7;
+  u8g2.setDrawColor(0); fillBoxClipped(l, t, 13, 13); u8g2.setDrawColor(1);
+  hLineSafe(l, t, 13); hLineSafe(l, t + 10, 13);
+  for (int16_t j = t; j <= t + 10; j++) { plot(l, j); plot(l + 12, j); }
+  if ((animFrame & 15) != 0) drawMonIcon(l + 3, t + 3, item);
+  hLineSafe(l + 2, t + 12, 9); plot(l + 3, t + 11); plot(l + 9, t + 11);
+}
+// Shield bubble / invincibility sparkles around Sonic (sx, sy = his centre on screen)
+void drawPowerAura(int16_t x, int16_t y) {
+  int16_t cy = y + RAD_STAND - 14;             // middle of the sprite
+  if (shieldOn) {
+    for (uint8_t a = 0; a < 32; a++) {
+      if ((a + (animFrame >> 1)) & 1) continue;  // dotted, slowly turning
+      float t = a * 0.19635f;                    // 2π/32
+      plot(x + (int16_t)(16 * cosf(t)), cy + (int16_t)(17 * sinf(t)));
+    }
+  }
+  if (starT && (starT > 60 || (starT & 2))) {    // blinks out for the last two seconds
+    for (uint8_t k = 0; k < 4; k++) {
+      float t = animFrame * 0.35f + k * 1.5708f;
+      int16_t ex = x + (int16_t)(15 * cosf(t)), ey = cy + (int16_t)(15 * sinf(t));
+      plot(ex, ey); plot(ex - 1, ey); plot(ex + 1, ey); plot(ex, ey - 1); plot(ex, ey + 1);
+    }
+  }
+}
+
 void drawGame() {
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setDrawColor(1);
@@ -2661,6 +2786,8 @@ void drawGame() {
     else if (o.kind == 9) drawBumper(x, y, o.timer > 0);
     else if (o.kind == 10) drawSaw(x, y, o.timer);
     else if (o.kind == 11 && o.y < o.home - 5) drawFish(x, y);   // hidden while underwater
+    else if (o.kind == 12) drawMonitor(x, y, o.state);
+    else if (o.kind == 13) drawMonIcon(x - 3, y - 4, o.state);
   }
 
   // Bridge decks: logs with a gap, following the sag; posts at each end
@@ -2692,6 +2819,7 @@ void drawGame() {
 
   bool blink = invul && ((invul >> 2) & 1);
   if (!blink) drawHog(sx(px), sy(py), rolling, faceRight, animFrame);
+  drawPowerAura(sx(px), sy(py));
 
   // Compact HUD: one 7 px strip, backed in black so it reads over terrain
   u8g2.setFont(u8g2_font_5x7_tr);
@@ -2702,7 +2830,15 @@ void drawGame() {
   u8g2.setCursor(0, 6); u8g2.print(F("R")); u8g2.print(rings);
   u8g2.setCursor(26, 6); printTime(actSeconds());
   for (uint8_t i = 0; i < emeralds && i < 4; i++) plot(70 + i * 4, 3);
-  for (uint8_t i = 0; i < lives; i++) discSafe(124 - i * 6, 3, 2);
+  for (uint8_t i = 0; i < lives && i < 4; i++) discSafe(124 - i * 6, 3, 2);
+  // Timed power-up: its icon and a bar that runs down
+  uint16_t pt = starT ? starT : shoesT, pmax = starT ? STAR_FRAMES : SHOES_FRAMES;
+  if (pt) {
+    u8g2.setDrawColor(0); u8g2.drawBox(80, 0, 20, 7); u8g2.setDrawColor(1);
+    drawMonIcon(81, 1, starT ? MON_STAR : MON_SHOES);
+    hLineSafe(90, 3, (int16_t)((uint32_t)pt * 9 / pmax) + 1);
+    hLineSafe(90, 4, (int16_t)((uint32_t)pt * 9 / pmax) + 1);
+  }
   u8g2.setFont(u8g2_font_6x10_tr);
   if (intro) drawBanner();
   if (goalT > 8) {

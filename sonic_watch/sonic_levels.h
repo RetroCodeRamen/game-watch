@@ -42,6 +42,7 @@ enum : uint8_t {
   L_BRIDGE = 26,   // sagging log bridge from x, arg = length / 4, at the ground height at x.
                    // Dip the terrain underneath into a pool and bring it back up at the far end.
   L_FISH = 27,     // fish that leaps up out of the pool under a bridge
+  L_MONITOR = 28,  // item TV: arg = item (0 Speed Shoes, 1 1-Up, 2 Shield, 3 Invincibility), h = height (on a platform)
 };
 // Rule: spikes need open sky — never put a platform lower than 32 px (2 Sonic heights)
 // over a spike; put spikes in the gaps between ledges instead.
@@ -157,6 +158,8 @@ static const LvlObj GH1_O[] = {
   {5700, 8, L_RINGS, 3},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {1056, 0, L_SPRING, 0}, {2166, 0, L_SPRING, 0}, {4124, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {830, 0, L_MONITOR, 2}, {1800, 0, L_MONITOR, 3}, {3540, 0, L_MONITOR, 0}, {2652, 150, L_MONITOR, 1},   // shield, star, shoes, 1-up
 };
 
 // GREEN HILL ACT 2 — shorter: hills, a spring climb, a spike valley, then the Egg Wrecker.
@@ -200,6 +203,8 @@ static const LvlObj GH2_O[] = {
   {2360, 8, L_RINGS, 4},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {984, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {700, 0, L_MONITOR, 2}, {846, 52, L_MONITOR, 1},   // shield, 1-up
 };
 
 // =====================================================================
@@ -308,6 +313,8 @@ static const LvlObj CP1_O[] = {
   {5440, 0, L_DECO, D_PIPE},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {1224, 0, L_SPRING, 0}, {3644, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {560, 0, L_MONITOR, 2}, {1890, 0, L_MONITOR, 3}, {3430, 0, L_MONITOR, 0}, {3212, 154, L_MONITOR, 1},   // shield, star, shoes, 1-up
 };
 
 // CHEMICAL PLANT ACT 2 — a short trap run to the boss.
@@ -344,6 +351,8 @@ static const LvlObj CP2_O[] = {
   {2400, 8, L_RINGS, 4},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {1294, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {900, 0, L_MONITOR, 2}, {774, 52, L_MONITOR, 1},   // shield, 1-up
 };
 
 // =====================================================================
@@ -438,6 +447,8 @@ static const LvlObj CN1_O[] = {
   {5400, 8, L_RINGS, 4},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {706, 0, L_SPRING, 0}, {1734, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {600, 0, L_MONITOR, 2}, {2050, 0, L_MONITOR, 3}, {3680, 0, L_MONITOR, 0}, {2676, 130, L_MONITOR, 1},   // shield, star, shoes, 1-up
 };
 
 // CASINO NIGHT ACT 2 — two pinball bowls and a bumper chain, then the boss.
@@ -472,6 +483,8 @@ static const LvlObj CN2_O[] = {
   {2200, 8, L_RINGS, 5},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {498, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {760, 0, L_MONITOR, 2}, {1820, 0, L_MONITOR, 1},   // shield, 1-up
 };
 
 // =====================================================================
@@ -576,6 +589,8 @@ static const LvlObj SB1_O[] = {
   {5560, 8, L_RINGS, 3},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {628, 0, L_SPRING, 0}, {2888, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {480, 0, L_MONITOR, 2}, {2400, 0, L_MONITOR, 3}, {4070, 0, L_MONITOR, 0}, {1918, 150, L_MONITOR, 1},   // shield, star, shoes, 1-up
 };
 
 // SCRAP BRAIN ACT 2 — saws, a girder bridge and flame jets, then the final boss.
@@ -614,6 +629,8 @@ static const LvlObj SB2_O[] = {
   {2200, 8, L_RINGS, 5},
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {394, 0, L_SPRING, 0},
+  // item monitors (TV boxes)
+  {610, 0, L_MONITOR, 2}, {802, 20, L_MONITOR, 1},   // shield, 1-up
 };
 
 // [zone][act]

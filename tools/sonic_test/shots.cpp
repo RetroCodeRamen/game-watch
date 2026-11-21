@@ -1,7 +1,7 @@
 // Host screenshot runner for the real sonic_watch.ino (same idea as metroid_test/run.cpp):
 //   out/shots "<script>" [prefix]
 // tokens: <frames>:<buttons> (L R U=jump D=mode F=game, . = none) · shot · face:<frames> (animate and
-//   dump the clock face) · title · act:<zone>:<act> · special · toboss · run:<x> (bot runs right until px >= x)
+//   dump the clock face) · title · act:<zone>:<act> · special · toboss · at:<x> · run:<x> (bot runs right until px >= x)
 #include "pp.cpp"
 #include <stdio.h>
 #include <string>
@@ -26,11 +26,13 @@ int main(int argc, char **argv) {
   if (argc > 2) prefix = argv[2];
   std::stringstream ss(argc > 1 ? argv[1] : ""); std::string tok;
   while (ss >> tok) {
+    if (tok == "st") { printf("  px=%d py=%d shield=%d invul=%d rings=%d mode=%d gnd=%d\n", px, py, shieldOn, invul, rings, mode, onGround); continue; }
     if (tok == "shot") { uint8_t iv = invul; invul = 0; dump(); invul = iv; continue; }   // never catch him mid-blink
     if (tok.rfind("face:", 0) == 0) { faceView = true; for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); dump(); faceView = false; continue; }
     if (tok == "title") { gameStart(); for (int i = 0; i < 40; i++) frame(0); continue; }
     if (tok.rfind("act:", 0) == 0) { int z, a; sscanf(tok.c_str(), "act:%d:%d", &z, &a); gameStart(); startGame(); startAct(z, a); trState = TR_NONE; trLevel = 0; continue; }
     if (tok == "special") { startSpecial(); trState = TR_NONE; trLevel = 0; continue; }
+    if (tok.rfind("at:", 0) == 0) { int x = atoi(tok.c_str() + 3); setPlayerPos(x, groundAt(x) - RAD_STAND); fvx = fvy = 0; cam = x - 64; continue; }   // put Sonic on the ground at world x
     if (tok.rfind("rings:", 0) == 0) { rings = atoi(tok.c_str() + 6); continue; }
     if (tok == "toboss") { for (int t = 0; t < 30 * 240 && !bossOn && mode == GAME; t++) { frame(B_RIGHT | ((t % 40) < 10 ? B_MID : 0)); invul = 2; } continue; }
     if (tok.rfind("run:", 0) == 0) {          // hold right, hop when stalled (like bot.cpp)
@@ -49,5 +51,5 @@ int main(int argc, char **argv) {
     for (char ch : b) held |= ch=='L'?B_LEFT: ch=='R'?B_RIGHT: ch=='U'?B_MID: ch=='D'?B_MODE: ch=='F'?B_GAME: 0;
     for (int i = 0; i < n; i++) frame(held);
   }
-  printf("end mode=%d zone=%d act=%d px=%d py=%d rings=%d boss=%d sx=%d sy=%d\n", mode, zone, act, px, py, rings, bossOn, px - cam, py - camY);
+  printf("end mode=%d zone=%d act=%d px=%d py=%d rings=%d boss=%d sx=%d sy=%d shield=%d shoes=%d star=%d lives=%d\n", mode, zone, act, px, py, rings, bossOn, px - cam, py - camY, shieldOn, shoesT, starT, lives);
 }

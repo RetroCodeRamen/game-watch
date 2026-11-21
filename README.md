@@ -61,6 +61,15 @@ like Sonic, it isn't done.
 enough rings and you might get pulled into the Special Stage to chase a Chaos Emerald. There are four. Three
 is the goal; four is bragging rights.
 
+**Item monitors.** Jump on a TV box (or roll into it) to break it open:
+
+| Monitor | What it does |
+| --- | --- |
+| Speed Shoes | 8 seconds of full speed. Normal play runs about 17% slower, so this is the real rush. |
+| 1-Up | An extra life, with the jingle |
+| Shield | Takes one hit for you. Your rings stay put. |
+| Invincibility | 15 seconds of sparkles. Enemies pop on contact; spikes and flames can't touch you. |
+
 | Zone | Looks like | Plays like |
 | --- | --- | --- |
 | Green Hill | Checkerboard dirt, sunflowers, palms | Loops, springs, crabs. The warm-up. |

@@ -125,6 +125,13 @@ RP2040 has headroom, but keep watch games tiny:
 - Campaign: Green Hill → Chemical Plant → Casino Night → Scrap Brain (2 acts each + Egg Wrecker).
 - Levels are hand-designed in `sonic_levels.h`: per act a terrain profile (`{x, groundY}` points) and an object list (`{x, h above ground, kind, arg}`) with builders for ring rows/arcs, spike runs, platforms, the loop and the Chemical Plant wavy cross. Act 1 ≈ 5.5–5.9k px, Act 2 ≈ 2.3–2.5k px + boss.
 - Terrain can have **cliffs** (two points 1 px apart): a rise is a wall to jump (≤ 30 px) or spring up (a spring flush against the face, at cliff x − 6 — miss the top and you land back on it), a drop is a ledge. Act 1s span ~3–5 screens of height.
+- **Speed:** normal running is `SPD_NORMAL/256` (≈ −17%) of the full speed; Speed Shoes (`shoesT`) restore it for
+  8 s. All running values (accel, friction, brake, top speed, kick, air steer, roll friction) scale together
+  through `SPD()`; jumps and gravity don't. When the shoes run out he eases back down to the normal cap.
+- **Monitors:** object kind 12 (`L_MONITOR` in the level data, `arg` = item), broken by `canBreakEnemy()`
+  (rolling, or coming down on top); otherwise solid. Kind 13 is the icon that floats out. Shield (`shieldOn`)
+  replaces the ring loss on the next hit; invincibility (`starT`, 15 s) ignores hurt() and breaks anything
+  touched. All reset at the start of an act.
 - **Zoom:** the world is drawn 13/8 bigger than the level data (`ZN`/`ZD`, `Z()` in the sketch) to fit the 24×29
   Sonic from `assets/sonic_sprite/reference_29.webp`. `sonic_levels.h` and its rules stay in design units.
   Running speed and acceleration were kept at their old (5/4) values on purpose, so the game is no faster on
