@@ -1232,14 +1232,17 @@ void spDrawSonic() {
     return;
   }
   // Running: the back-view bitmap (sonic_sprites.h, from reference_special.png), rotated to
-  // stand on the pipe wall, mirrored every other step for the stride. Each screen pixel near him
+  // stand on the pipe wall. Four steps, 3 frames each: stride, passing, mirrored stride, mirrored
+  // passing (two poses flipping every 2 frames read as jitter). Each screen pixel near him
   // is mapped back into the bitmap, so the rotation leaves no holes; a dark halo first keeps
   // him readable over the pipe's lines.
-  bool st = (animFrame >> 1) & 1;
+  uint8_t step = (animFrame / 3) & 3;
+  bool st = step >= 2;                         // mirrored half of the cycle
+  const uint8_t *pose = spBack[step & 1];      // 0 stride, 1 passing
   auto lit = [&](int16_t c, int16_t r) -> bool {
     if (c < 0 || c >= SPB_W || r < 0 || r >= SPB_H) return false;
     if (st) c = SPB_W - 1 - c;
-    return pgm_read_byte(&spBack[0][r * SPB_ROWBYTES + (c >> 3)]) & (1 << (c & 7));
+    return pgm_read_byte(&pose[r * SPB_ROWBYTES + (c >> 3)]) & (1 << (c & 7));
   };
   int16_t R = SPB_H / 2 + 4;
   int16_t cx = (int16_t)lroundf(bx + ux * SPB_H / 2), cy = (int16_t)lroundf(by + uy * SPB_H / 2);

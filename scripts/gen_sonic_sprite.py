@@ -4,8 +4,9 @@
   sonic_big.txt  Sonic, in game and on the clock face (from the reference sheet
                  reference_29.webp; see build_big_from_reference.py for how the frames were made)
   special_back.txt  Sonic from behind, running into the Special Stage half-pipe (from
-                 reference_special.png); drawn rotated to his place on the pipe wall, and mirrored
-                 every other step for the stride
+                 reference_special.png): the stride and a passing pose (legs redrawn),
+                 drawn rotated to his place on the pipe wall; the run cycles stride, passing,
+                 mirrored stride, mirrored passing
   egg_mobile.txt the Egg Wrecker boss ship with Robotnik, facing right (44x26); the generator
                  also derives its outline (drawn while it flashes after a hit)
 
