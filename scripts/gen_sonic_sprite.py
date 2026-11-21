@@ -7,6 +7,8 @@
                  reference_special.png): the stride and a passing pose (legs redrawn),
                  drawn rotated to his place on the pipe wall; the run cycles stride, passing,
                  mirrored stride, mirrored passing
+  sunflower.txt  the Green Hill sunflower (from reference_sunflower.png), on the clock face and
+                 in the level; its bottom row is the ground
   egg_mobile.txt the Egg Wrecker boss ship with Robotnik, facing right (44x26); the generator
                  also derives its outline (drawn while it flashes after a hit)
 
@@ -57,6 +59,9 @@ outline = [''.join('#' if lit(x, y) and not (lit(x-1, y) and lit(x+1, y) and lit
                    for x in range(EW)) for y in range(EH)]
 out.append('// Egg Wrecker ship (egg_mobile.txt), facing right; row 0 is the dome top:')
 emit(out, 'EGG', 'eggShip', [('ship', rows), ('outline', outline)], EW, EH)
+sun, FW, FH = load('sunflower.txt')
+out.append('// Green Hill sunflower (sunflower.txt):')
+emit(out, 'SUN', 'sunflowerBmp', sun, FW, FH)
 back, SW, SH = load('special_back.txt')
 out.append('// Special Stage Sonic from behind (special_back.txt):')
 emit(out, 'SPB', 'spBack', back, SW, SH)

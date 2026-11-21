@@ -2450,35 +2450,11 @@ void drawLoopTrack() {
 }
 
 // Sonic GHZ sunflower — solid center disc, 8 sharp petals, tall stem + leaf pairs
+// Green Hill sunflower (sunflower.txt, from reference_sunflower.png): a big dark centre with a
+// rim and a shine, a ring of 8 short petals, a solid stem with lobed leaves. Same art on the
+// clock face and in the level, with the sprite halo so it reads over terrain.
 void drawSunflower(int16_t x, int16_t baseY) {
-  int16_t cy = baseY - 30;
-
-  // stem
-  vLineSafe(x, cy + 6, baseY - (cy + 6));
-
-  // three leaf pairs (pointed, angled up & out)
-  fillTriSafe(x, baseY - 8,  x - 6, baseY - 13, x - 3, baseY - 6);
-  fillTriSafe(x, baseY - 8,  x + 6, baseY - 13, x + 3, baseY - 6);
-  fillTriSafe(x, baseY - 16, x - 5, baseY - 20, x - 2, baseY - 14);
-  fillTriSafe(x, baseY - 16, x + 5, baseY - 20, x + 2, baseY - 14);
-  fillTriSafe(x, baseY - 23, x - 4, baseY - 26, x - 2, baseY - 21);
-  fillTriSafe(x, baseY - 23, x + 4, baseY - 26, x + 2, baseY - 21);
-
-  // 8 filled triangular petals (N/NE/E/SE/S/SW/W/NW)
-  fillTriSafe(x,     cy - 9, x - 3, cy - 3, x + 3, cy - 3);  // N
-  fillTriSafe(x + 7, cy - 7, x + 1, cy - 4, x + 4, cy - 1);  // NE
-  fillTriSafe(x + 9, cy,     x + 3, cy - 3, x + 3, cy + 3);  // E
-  fillTriSafe(x + 7, cy + 7, x + 1, cy + 4, x + 4, cy + 1);  // SE
-  fillTriSafe(x,     cy + 9, x - 3, cy + 3, x + 3, cy + 3);  // S
-  fillTriSafe(x - 7, cy + 7, x - 1, cy + 4, x - 4, cy + 1);  // SW
-  fillTriSafe(x - 9, cy,     x - 3, cy - 3, x - 3, cy + 3);  // W
-  fillTriSafe(x - 7, cy - 7, x - 1, cy - 4, x - 4, cy - 1);  // NW
-
-  // solid round face on the petal bases (dark center like the reference)
-  discSafe(x, cy, 4);
-  u8g2.setDrawColor(0);
-  discSafe(x, cy, 2);
-  u8g2.setDrawColor(1);
+  blitSonic(x - SUN_W / 2, baseY - SUN_H + 1, sunflowerBmp[0], SUN_W, SUN_H, SUN_ROWBYTES, true);
 }
 
 void drawRingGlyph(int16_t x, int16_t y) {
@@ -2607,24 +2583,7 @@ void drawTotem(int16_t x, int16_t baseY) {
 
 // In-game sunflower as an outline, so it reads as scenery and never as a spike.
 // (The filled version stays on the watch face.)
-void drawSunflowerOutline(int16_t x, int16_t baseY) {
-  int16_t cy = baseY - 38;
-  vLineSafe(x, cy + 7, baseY - (cy + 7));
-  triSafe(x, baseY - 10, x - 8, baseY - 16, x - 4, baseY - 7);
-  triSafe(x, baseY - 10, x + 8, baseY - 16, x + 4, baseY - 7);
-  triSafe(x, baseY - 20, x - 6, baseY - 25, x - 2, baseY - 17);
-  triSafe(x, baseY - 20, x + 6, baseY - 25, x + 2, baseY - 17);
-  triSafe(x,      cy - 11, x - 4, cy - 4, x + 4, cy - 4);
-  triSafe(x + 9,  cy - 9,  x + 1, cy - 5, x + 5, cy - 1);
-  triSafe(x + 11, cy,      x + 4, cy - 4, x + 4, cy + 4);
-  triSafe(x + 9,  cy + 9,  x + 1, cy + 5, x + 5, cy + 1);
-  triSafe(x,      cy + 11, x - 4, cy + 4, x + 4, cy + 4);
-  triSafe(x - 9,  cy + 9,  x - 1, cy + 5, x - 5, cy + 1);
-  triSafe(x - 11, cy,      x - 4, cy - 4, x - 4, cy + 4);
-  triSafe(x - 9,  cy - 9,  x - 1, cy - 5, x - 5, cy - 1);
-  circleSafe(x, cy, 5);
-  circleSafe(x, cy, 2);
-}
+void drawSunflowerOutline(int16_t x, int16_t baseY) { drawSunflower(x, baseY); }
 
 void drawGear(int16_t x, int16_t baseY) {
   int16_t cy = baseY - 12;
