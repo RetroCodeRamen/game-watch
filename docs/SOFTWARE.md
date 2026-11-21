@@ -174,7 +174,11 @@ RP2040 has headroom, but keep watch games tiny:
 - **Zones look different:** Kraid's Lair spiky stone, Norfair lava-lit edges, Tourian riveted metal.
 - **Title:** NEW GAME over an existing save asks ERASE SAVE? (NO is the default).
 - **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
-  Beaten bosses are saved (`bosses` bits) and don't come back. Save version 4.
+  Beaten bosses are saved (`bosses` bits) and don't come back. Two save slots written alternately (the newer
+  valid one loads, so a power cut mid-save can't lose the game). Save version 5.
+- **Suspend:** CLOCK in the pause menu writes a snapshot (room, position, energy, missiles, progress, any escape
+  countdown); CONTINUE resumes exactly there. A death, a new game or a station save drops it (death still
+  returns to the last station).
 - **Hazards:** spikes (`^`) and lava (`~`), solid: 1 energy and back to the last safe footing in this room (both
   feet on safe ground); with none yet, a hazard bounces her up instead. Broken `B`/`X` blocks stay open until death or a reload (oldest first if 32 are open).
 - **Zones:** crossing into another zone shows its name card; the pause map shows the current zone only.

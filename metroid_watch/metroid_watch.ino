@@ -36,8 +36,20 @@ struct SaveData {
   uint64_t items, visited, redDoors; uint32_t frames;
   int16_t saveTX, saveTY;          // the station saved at (feet on that tile)
   uint8_t bosses;                  // bosses beaten: 1 Kraid, 2 Ridley, 4 Mother Brain
+  uint32_t seq;                    // which of the two save slots is newer
   uint16_t sum;
 };
+// "CLOCK" from the pause menu: progress plus exactly where Samus was (CONTINUE resumes here)
+struct SuspendData {
+  uint32_t magic;
+  SaveData prog;
+  int16_t x, y;                    // px
+  uint16_t escapeT;
+  uint8_t room, energy, missiles, weapon, faceR, ball;
+  uint16_t sum;
+};
+static_assert(sizeof(SaveData) <= 128, "a save slot is 128 bytes");
+static_assert(sizeof(SuspendData) <= 128, "the suspend snapshot gets 128 bytes");
 
 // =====================================================================
 // Buttons. The prototype has five: Mode, Left, Action, Right, Select/OK.
@@ -178,6 +190,12 @@ uint16_t frameN;
 SaveData lastSave;
 bool haveSave;
 const uint32_t SAVE_MAGIC = 0x4D575331;  // "MWS1"
+const uint32_t SUSPEND_MAGIC = 0x4D575353;  // "MWSS"
+// Flash layout: two save slots (written alternately, the newer valid one wins - a power cut while
+// saving can't lose the game) and the suspend snapshot.
+const int EE_SLOT_A = 0, EE_SLOT_B = 128, EE_SUSPEND = 256, EE_SIZE = 384;
+uint32_t saveSeq;
+bool haveSuspend;
 
 // transitions (ordered-dither fade; the game is frozen while it fades out)
 enum : uint8_t { TR_NONE, TR_OUT, TR_IN };
@@ -336,19 +354,50 @@ uint16_t saveSum(const SaveData &s) {
 }
 void captureSave(SaveData &s) {
   memset(&s, 0, sizeof s);
-  s.magic = SAVE_MAGIC; s.ver = 4; s.saveTX = saveTX; s.saveTY = saveTY; s.bosses = bossesBeaten; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.magic = SAVE_MAGIC; s.ver = 5; s.saveTX = saveTX; s.saveTY = saveTY; s.bosses = bossesBeaten; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
   s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
   s.sum = saveSum(s);
 }
+bool saveValid(const SaveData &s) { return s.magic == SAVE_MAGIC && s.ver == 5 && s.sum == saveSum(s); }
+void clearSuspend();
 void writeSave() {
-  captureSave(lastSave); haveSave = true;
-  EEPROM.put(0, lastSave);
+  captureSave(lastSave);
+  lastSave.seq = ++saveSeq; lastSave.sum = saveSum(lastSave);
+  haveSave = true;
+  EEPROM.put((saveSeq & 1) ? EE_SLOT_B : EE_SLOT_A, lastSave);   // the other slot keeps the previous save
   EEPROM.commit();
+  clearSuspend();                                                  // a station save supersedes a snapshot
 }
 bool readSave() {
-  SaveData s; EEPROM.get(0, s);
-  if (s.magic != SAVE_MAGIC || s.ver != 4 || s.sum != saveSum(s)) return false;
-  lastSave = s; return true;
+  SaveData a, b; EEPROM.get(EE_SLOT_A, a); EEPROM.get(EE_SLOT_B, b);
+  bool va = saveValid(a), vb = saveValid(b);
+  if (!va && !vb) return false;
+  lastSave = (va && (!vb || a.seq > b.seq)) ? a : b;
+  saveSeq = lastSave.seq;
+  return true;
+}
+uint16_t suspendSum(const SuspendData &d) {
+  const uint8_t *p = (const uint8_t *)&d; uint16_t a = 0x3C3C;
+  for (size_t i = 0; i < offsetof(SuspendData, sum); i++) a = (uint16_t)(a * 31 + p[i]);
+  return a;
+}
+bool readSuspend(SuspendData &d) {
+  EEPROM.get(EE_SUSPEND, d);
+  return d.magic == SUSPEND_MAGIC && d.sum == suspendSum(d) && saveValid(d.prog);
+}
+void writeSuspend() {
+  SuspendData d; memset(&d, 0, sizeof d);
+  d.magic = SUSPEND_MAGIC; captureSave(d.prog);
+  d.x = toPx(sX); d.y = toPx(sY); d.escapeT = escapeT;
+  d.room = curRoom; d.energy = energy; d.missiles = missiles; d.weapon = weapon; d.faceR = faceR; d.ball = ball;
+  d.sum = suspendSum(d);
+  EEPROM.put(EE_SUSPEND, d); EEPROM.commit();
+  haveSuspend = true;
+}
+void clearSuspend() {                        // only touches flash if there's a snapshot to clear
+  if (!haveSuspend) return;
+  uint32_t z = 0; EEPROM.put(EE_SUSPEND, z); EEPROM.commit();
+  haveSuspend = false;
 }
 
 // =====================================================================
@@ -471,6 +520,7 @@ void loadFrom(const SaveData &s) {
 
 void newGame() {
   sandbox = false;
+  clearSuspend();
   gear = 0; gearOff = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
   saveTX = saveTY = -1; bossesBeaten = 0;
   captureSave(lastSave);
@@ -478,7 +528,20 @@ void newGame() {
   writeSave();          // automatic ship checkpoint
   mode = M_PLAY; cardT = 70; inputLock = 6;
 }
-void continueGame() { sandbox = false; loadFrom(lastSave); mode = M_PLAY; cardT = 70; inputLock = 6; }
+void continueGame() {
+  sandbox = false;
+  SuspendData d;
+  if (haveSuspend && readSuspend(d)) {         // back exactly where she was when the watch went to the clock
+    loadFrom(d.prog);
+    sX = toFx(d.x); sY = toFx(d.y); sVX = sVY = 0;
+    ball = d.ball; crouch = false; spin = false; faceR = d.faceR; ground = false;
+    curRoom = d.room; pendingRoom = curRoom; enterRoomNow();
+    energy = d.energy; missiles = d.missiles; weapon = d.weapon; escapeT = d.escapeT;
+    safeX = sX; safeY = sY; safeOK = false;
+    lastZone = ROOMS[curRoom].zone;
+  } else loadFrom(lastSave);
+  mode = M_PLAY; cardT = 70; inputLock = 6;
+}
 
 // The hidden test room: every item, nothing saved; dying puts Samus back at its start.
 void startSandbox() {
@@ -496,6 +559,7 @@ void startSandbox() {
 }
 void respawn() {
   if (sandbox) { startSandbox(); cardT = 0; return; }
+  clearSuspend();
   loadFrom(lastSave); mode = M_PLAY; inputLock = 6;
 }
 
@@ -2036,7 +2100,7 @@ void pauseStep(uint8_t e) {
     if (e & B_UP) { pauseSel ^= 1; beep(700, 8); }
     if (e & B_FIRE) {
       if (pauseSel == 0) { mode = M_PLAY; inputLock = 255; beep(600, 15); }
-      else { if (!sandbox) captureSave(lastSave); watch::exitToClock(); }
+      else { if (!sandbox) writeSuspend(); watch::exitToClock(); }
     }
   } else {
     if (gearSel >= n) gearSel = 0;
@@ -2245,9 +2309,11 @@ void applyFade(uint8_t level, uint8_t steps) {
 // =====================================================================
 void gameStart() {
   static bool eepromReady = false;
-  if (!eepromReady) { EEPROM.begin(256); eepromReady = true; }
+  if (!eepromReady) { EEPROM.begin(EE_SIZE); eepromReady = true; }
   buildWorld();
   haveSave = readSave();
+  { SuspendData d; haveSuspend = readSuspend(d); }
+  if (haveSuspend && !haveSave) { SuspendData d; readSuspend(d); lastSave = d.prog; haveSave = true; }
   titleSel = 0; frameN = 0;
   trState = TR_NONE; trLevel = 0; trAction = nullptr;
   mode = M_TITLE;

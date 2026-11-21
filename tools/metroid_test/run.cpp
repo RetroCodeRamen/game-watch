@@ -35,6 +35,8 @@ int main(int argc, char **argv) {
     if (tok == "shot") { dump(); continue; }
     if (tok.rfind("en:", 0) == 0) { energy = atoi(tok.c_str() + 3); continue; }
     if (tok == "god") { god = true; continue; }
+    if (tok == "corrupt") { SaveData a2, b2; EEPROM.get(EE_SLOT_A, a2); EEPROM.get(EE_SLOT_B, b2); int at = a2.seq > b2.seq ? EE_SLOT_A : EE_SLOT_B; EEPROM.d[at + 9] ^= 0xFF; continue; }   // a power cut mid-save: damage the newer slot
+    if (tok == "reboot") { gameStart(); continue; }   // the watch restarted: back to the title, flash kept
     if (tok == "havesave") { haveSave = true; continue; }   // pretend a save exists (title shows CONTINUE / NEW GAME)
     if (tok.rfind("beat:", 0) == 0) { bossesBeaten = atoi(tok.c_str() + 5); continue; }   // mark bosses beaten (1 Kraid 2 Ridley 4 Mother Brain)
     if (tok.rfind("frz:", 0) == 0) { int tx = atoi(tok.c_str() + 4); for (auto &e : en) if (e.live && e.kind == EN_RIPPER) { e.x = (rTX(curRoom) + tx) * 8 - 2; e.frozen = FREEZE_T; } continue; }   // freeze Rippers at a column
