@@ -41,6 +41,13 @@ unsigned long lastSec = 0;
 uint8_t setPg = 0, setFld = 0;
 const uint8_t SET_PAGES = 4;
 
+unsigned long lastFrame = 0;
+uint32_t frames = 0;
+uint16_t workUs = 0;              // how long the last frame's update + draw + send took (µs)
+uint16_t workMaxUs = 0;           // the worst since the last "F" query
+// USB test hooks: "P <buttons> <ms>" holds buttons, "F" reports frame times
+uint8_t injMask = 0; unsigned long injUntil = 0;
+
 // sound: off silences beeps and tunes (the alarm still rings)
 bool soundOn = true;
 
@@ -52,7 +59,15 @@ void serialStep() {
     if (c == '\n' || c == '\r') {
       serBuf[serLen] = 0;
       unsigned long t; unsigned m, d;
-      if (serLen && serBuf[0] == 'T' && sscanf(serBuf + 1, "%lu %u %u", &t, &m, &d) == 3 && t < 86400UL && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      unsigned mask, ms;
+      if (serLen == 1 && serBuf[0] == 'F') {
+        Serial.print("work_us="); Serial.print(workUs); Serial.print(" max_us="); Serial.print(workMaxUs);
+        Serial.print(" frames="); Serial.println(frames);
+        workMaxUs = 0;
+      } else if (serLen && serBuf[0] == 'P' && sscanf(serBuf + 1, "%u %u", &mask, &ms) == 2) {
+        injMask = mask & 31; injUntil = millis() + ms;
+        Serial.println("OK");
+      } else if (serLen && serBuf[0] == 'T' && sscanf(serBuf + 1, "%lu %u %u", &t, &m, &d) == 3 && t < 86400UL && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
         tod = t; mon = m; dday = d; lastSec = millis();
         Serial.println("OK");
       }
@@ -65,8 +80,6 @@ void serialStep() {
 uint8_t idleStage = 0;
 unsigned long lastInputMs = 0;
 
-unsigned long lastFrame = 0;
-uint32_t frames = 0;
 
 // tune player
 const watch::Note *tune = nullptr;
@@ -95,7 +108,7 @@ uint8_t readButtons() {
   uint8_t edges = 0;
   for (uint8_t i = 0; i < 5; i++) {
     uint8_t bit = (uint8_t)(1 << i);
-    bool raw = !digitalRead(btnPin[i]);
+    bool raw = !digitalRead(btnPin[i]) || ((injMask & bit) && (long)(injUntil - now) > 0);
     if (raw != ((lastRaw & bit) != 0)) { lastRaw ^= bit; changedAt[i] = now; }
     if (now - changedAt[i] >= DEBOUNCE_MS) {
       bool isHeld = (heldMask & bit) != 0;
@@ -312,6 +325,7 @@ void begin(const WatchApp &a, const Pins &p) {
   Wire.setClock(400000);
   Serial.begin(115200);   // USB: accepts the time from scripts/settime.sh
   u8g2.begin();
+  u8g2.setBusClock(800000);   // 400 kHz spent ~23 ms of the 33 ms frame sending the screen; 800 kHz: ~19 ms frames
   u8g2.setBitmapMode(1);  // bitmap 0-bits are transparent
   lastSec = millis();
   displayWake();
@@ -340,6 +354,7 @@ void run() {
   uint8_t ev = pending;
   pending = 0;
 
+  unsigned long t0 = micros();
   update(ev);
   updateIdle();
   if (sys == S_FACE && idleStage == 2) return;  // screen off: no I2C traffic
@@ -349,6 +364,8 @@ void run() {
   render();
   if (sys == S_FACE && idleStage == 1) applySoftwareDim();
   u8g2.sendBuffer();
+  unsigned long dt = micros() - t0; workUs = dt > 65535UL ? 65535 : (uint16_t)dt;
+  if (workUs > workMaxUs) workMaxUs = workUs;
 }
 
 void exitToClock() {
@@ -369,6 +386,7 @@ bool tunePlaying() { return tune != nullptr; }
 void stopTune() { tune = nullptr; noTone(pins.buzzer); }
 uint8_t held() { return heldMask; }
 uint32_t frameCount() { return frames; }
+uint16_t frameWorkUs() { return workUs; }
 
 uint8_t hours() { return tod / 3600; }
 uint8_t minutes() { return (tod / 60) % 60; }

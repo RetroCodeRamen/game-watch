@@ -1966,6 +1966,12 @@ void drawHud() {
     frameSafe(60, 1, 28, 5);
     fillBoxClipped(61, 2, (int16_t)26 * e.hp / mx, 3);
   }
+  if (sandbox && !modeLabelT) {             // test room: frame time (ms), and the worst of the last ~2 s
+    static uint16_t worst = 0, worstAge = 0;
+    uint16_t us = watch::frameWorkUs();
+    if (us > worst || ++worstAge > 60) { worst = us; worstAge = 0; }
+    u8g2.setCursor(56, 6); u8g2.print(us / 1000); u8g2.print('/'); u8g2.print(worst / 1000); u8g2.print(F("MS"));
+  }
   if (modeLabelT) {
     u8g2.setCursor(64, 6); u8g2.print(!weapon ? F("BEAM") : (eg() & G_ICE) ? F("ICE") : F("MISSILE"));
   }

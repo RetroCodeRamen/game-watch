@@ -20,7 +20,7 @@ USB enumerates as a Raspberry Pi Pico-class device (`ttyACM0`). Upload uses UF2 
 | SDA | **GP4** |
 | SCL | **GP5** |
 | Library | U8g2 — `U8G2_SH1106_128X64_NONAME_F_HW_I2C` |
-| I2C clock | 400 kHz |
+| I2C clock | 800 kHz (`u8g2.setBusClock` after `begin`; at 400 kHz sending the screen took ~23 ms of the 33 ms frame) |
 | Contrast (current FW) | `u8g2.setContrast(60)` |
 
 Full-frame buffer (`_F_`) is used: clear → draw → `sendBuffer()` each frame (~30 FPS).
@@ -64,7 +64,10 @@ Treat this as a **watch-sized** device:
 - Clock time is millis-based in the current firmware (resets on power loss) — not RTC-backed unless you add hardware later.
   `scripts/flash.sh` sets the clock over USB right after uploading; `scripts/settime.sh` does it any time the
   watch is plugged in (it sends `T <seconds since midnight> <month> <day>` on the USB serial port; the watch
-  answers `OK`).
+  answers `OK`). Test hooks on the same port: `P <buttons> <ms>` holds buttons (bit mask: 1 Left, 2 Mid, 4 Right,
+  8 Mode, 16 Game), `F` reports `work_us` (last frame) and `max_us` (worst since the last `F`).
+- Measured on the watch (Metroid test room): ~19 ms per frame at 800 kHz, ~33 ms at 400 kHz (the 30 FPS
+  budget is 33 ms).
 
 ## Pin summary
 

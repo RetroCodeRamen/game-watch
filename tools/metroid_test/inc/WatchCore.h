@@ -15,6 +15,7 @@ struct WatchApp { void (*faceStep)(); void (*faceDraw)(); void (*appStart)(); vo
 inline void begin(const WatchApp &) {}
 inline void run() {}
 inline void exitToClock() {}
+inline uint16_t frameWorkUs() { return 0; }
 inline bool inApp() { return true; }
 inline uint8_t held() { return g_held; }
 inline uint32_t frameCount() { return 0; }

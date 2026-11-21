@@ -68,6 +68,7 @@ void exitToClock();                 // leave the game; face is shown on the next
 bool inApp();                       // true while the game (not face/set/ring) owns the screen
 uint8_t held();                     // buttons currently held (debounced)
 uint32_t frameCount();              // increments once per rendered frame
+uint16_t frameWorkUs();             // µs the last frame took (update + draw + send); 33333 = the 30 FPS budget
 
 // ---- Clock (read by faces) ----
 uint8_t hours();
