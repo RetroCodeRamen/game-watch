@@ -841,7 +841,7 @@ void buildAct() {
     int16_t g = surfaceAt(x);
     switch (d.kind) {
       case L_RING:   addObj(x, g - h, 1); break;
-      case L_CRAB:   addObj(x, g - 6, 2); break;
+      case L_CRAB:   addObj(x, g - 8, 2); break;
       case L_SPRING: addObj(x, g - h - 5, 3); break;
       case L_BEE:    addObj(x, g - h, 4); break;
       case L_DECO:   addDeco(x, d.arg); break;
@@ -1560,7 +1560,7 @@ void bumpFromSolid(int16_t left, int16_t right, int16_t top, int16_t bot, int16_
   syncPlayerInts();
 }
 
-const int16_t SPIKE_H = 18, SPIKE_W = 12;
+const int16_t SPIKE_H = 22, SPIKE_W = 15;   // three spears, about 3/4 of Sonic's height
 
 // Walls and spike sides are solid every 60 Hz step, so even top speed can't sink into them
 void applyWalls(int16_t rad) {
@@ -2324,7 +2324,7 @@ void gameStepInner(uint8_t e) {
     if (!o.live) continue;
     if (!onScreen(o.x, 20)) continue;
     if (o.kind == 1) {
-      if (touches(o.x, o.y, 4, 4)) {
+      if (touches(o.x, o.y, 5, 5)) {
         o.live = false; rings++; score += 10; beep(1800, 22);
       }
     } else if (o.kind == 0) {
@@ -2338,7 +2338,7 @@ void gameStepInner(uint8_t e) {
       if (onTips && fvy >= 0) hurt();
     } else if (o.kind == 2) {
       // Crab: spin/stomp destroys; otherwise solid bump
-      if (touches(o.x, o.y, 7, 5)) {
+      if (touches(o.x, o.y, 9, 6)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 50; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); rolling = true; syncPlayerInts(); }
@@ -2357,7 +2357,7 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 4) {
       // Bee: spin/stomp destroys; otherwise solid bump
-      if (touches(o.x, o.y, 6, 4)) {
+      if (touches(o.x, o.y, 8, 5)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 75; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
@@ -2384,7 +2384,7 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 10) {
       // Saw: spin/stomp destroys; otherwise solid bump (same as enemies)
-      if (touches(o.x, o.y, 6, 6)) {
+      if (touches(o.x, o.y, 8, 8)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 80; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
@@ -2394,7 +2394,7 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 11) {
       // Fish: only dangerous while it's out of the water
-      if (o.y < o.home - 5 && touches(o.x, o.y, 4, 5)) {
+      if (o.y < o.home - 5 && touches(o.x, o.y, 5, 6)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 60; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
@@ -2552,22 +2552,22 @@ void drawSunflower(int16_t x, int16_t baseY) {
 }
 
 void drawRingGlyph(int16_t x, int16_t y) {
-  // Ring: 13 px across, 2 px band
+  // Ring: 15 px across, 2 px band plus an inner edge (sized against the 29-px Sonic)
+  circleSafe(x, y, 7);
   circleSafe(x, y, 6);
+  u8g2.setDrawColor(0); circleSafe(x, y, 4); u8g2.setDrawColor(1);
   circleSafe(x, y, 5);
-  u8g2.setDrawColor(0); circleSafe(x, y, 3); u8g2.setDrawColor(1);
-  circleSafe(x, y, 4);
 }
 
 // Classic Sonic spikes: 3 spears ~Sonic-tall, 4 px bases, group ~his width
 void drawSpikes(int16_t x, int16_t baseY) {
-  const int16_t h = 18;
+  const int16_t h = SPIKE_H;
   for (uint8_t i = 0; i < 3; i++) {
-    int16_t bx = x + (int16_t)i * 4;
-    fillTriSafe(bx, baseY, bx + 4, baseY, bx + 2, baseY - h);
-    triSafe(bx, baseY, bx + 4, baseY, bx + 2, baseY - h);
+    int16_t bx = x + (int16_t)i * 5;
+    fillTriSafe(bx, baseY, bx + 5, baseY, bx + 2, baseY - h);
+    triSafe(bx, baseY, bx + 5, baseY, bx + 2, baseY - h);
   }
-  hLineSafe(x, baseY - 1, 12);
+  hLineSafe(x, baseY - 1, 15);
 }
 
 void drawPalm(int16_t x, int16_t baseY) {
@@ -2712,11 +2712,11 @@ void drawBumper(int16_t x, int16_t y, bool flash) {
 }
 
 void drawSaw(int16_t x, int16_t y, uint8_t spin) {
-  circleSafe(x, y, 6);
-  discSafe(x, y, 2);
+  circleSafe(x, y, 8); circleSafe(x, y, 7);
+  discSafe(x, y, 3);
   uint8_t a = (spin >> 1) & 3;
-  static const int8_t DX[4] = {8, 0, -8, 0};
-  static const int8_t DY[4] = {0, 8, 0, -8};
+  static const int8_t DX[4] = {10, 0, -10, 0};
+  static const int8_t DY[4] = {0, 10, 0, -10};
   lineSafe(x - DX[a], y - DY[a], x + DX[a], y + DY[a]);
   lineSafe(x - DY[a], y + DX[a], x + DY[a], y - DX[a]);
 }
@@ -2732,39 +2732,41 @@ void drawDeco(int16_t x, int16_t baseY, uint8_t typ) {
 
 // Fish leaping straight up: body, side fins, tail fin below, teeth + eye cut out
 void drawFish(int16_t x, int16_t y) {
-  fillBoxClipped(x - 3, y - 5, 7, 10);
-  vLineSafe(x - 4, y - 2, 3); vLineSafe(x + 4, y - 2, 3);
-  fillTriSafe(x - 4, y + 9, x + 4, y + 9, x, y + 4);
+  fillBoxClipped(x - 4, y - 6, 9, 12);
+  vLineSafe(x - 5, y - 2, 4); vLineSafe(x + 5, y - 2, 4);
+  fillTriSafe(x - 5, y + 11, x + 5, y + 11, x, y + 5);
   u8g2.setDrawColor(0);
-  plot(x - 2, y - 5); plot(x, y - 5); plot(x + 2, y - 5);   // teeth
-  plot(x + 1, y - 2); plot(x + 2, y - 2);                   // eye
+  plot(x - 3, y - 6); plot(x - 1, y - 6); plot(x + 1, y - 6); plot(x + 3, y - 6);   // teeth
+  plot(x + 1, y - 2); plot(x + 2, y - 2); plot(x + 2, y - 3);                       // eye
   u8g2.setDrawColor(1);
 }
 
 // Crab: shell with eye stalks, legs, and big claws that snap open and shut
+// (about 1.25x the original, sized against the 29-px Sonic; feet on y + 7)
 void drawCrab(int16_t x, int16_t y, uint8_t frame) {
   int8_t claw = (frame & 4) ? 1 : 0;
-  fillBoxClipped(x - 6, y - 3, 13, 6);
-  u8g2.setDrawColor(0); hLineSafe(x - 4, y - 1, 9); u8g2.setDrawColor(1);
-  vLineSafe(x - 3, y - 7, 4); vLineSafe(x + 3, y - 7, 4);
-  discSafe(x - 3, y - 7, 1); discSafe(x + 3, y - 7, 1);
+  fillBoxClipped(x - 8, y - 4, 17, 8);
+  u8g2.setDrawColor(0); hLineSafe(x - 5, y - 1, 11); u8g2.setDrawColor(1);
+  vLineSafe(x - 4, y - 9, 5); vLineSafe(x + 4, y - 9, 5);
+  discSafe(x - 4, y - 9, 2); discSafe(x + 4, y - 9, 2);
   for (int8_t k = -1; k <= 1; k += 2) {
-    lineSafe(x + k * 3, y + 3, x + k * 6, y + 6);            // legs
-    lineSafe(x + k * 6, y,     x + k * 9, y - 2);            // arm
-    fillTriSafe(x + k * 9, y - 2, x + k * (12 + claw), y - 6 - claw, x + k * (12 + claw), y - 1);
-    fillTriSafe(x + k * 9, y - 2, x + k * (12 + claw), y + 2 + claw, x + k * (12 + claw), y - 1 + claw);
+    lineSafe(x + k * 4, y + 4, x + k * 7, y + 7);            // legs
+    lineSafe(x + k * 5, y + 4, x + k * 9, y + 7);
+    lineSafe(x + k * 8, y,     x + k * 11, y - 3);           // arm
+    fillTriSafe(x + k * 11, y - 3, x + k * (15 + claw), y - 8 - claw, x + k * (15 + claw), y - 2);
+    fillTriSafe(x + k * 11, y - 3, x + k * (15 + claw), y + 2 + claw, x + k * (15 + claw), y - 1 + claw);
   }
 }
 
 void drawBee(int16_t x, int16_t y, uint8_t frame, uint8_t state) {
-  discSafe(x, y, 4); fillBoxClipped(x - 1, y - 3, 6, 6);
-  u8g2.setDrawColor(0); vLineSafe(x + 1, y - 3, 6); vLineSafe(x + 4, y - 2, 4); u8g2.setDrawColor(1);
-  discSafe(x - 4, y, 3);
-  u8g2.setDrawColor(0); plot(x - 5, y - 1); u8g2.setDrawColor(1);
-  triSafe(x + 5, y, x + 9, y - 1, x + 9, y + 1);
-  int16_t wy = y - ((frame & 1) ? 7 : 5);
-  hLineSafe(x - 1, wy, 5); hLineSafe(x, wy - 1, 3);
-  if (state == 1) discSafe(x - 7, y + 3, 1);
+  discSafe(x, y, 5); fillBoxClipped(x - 1, y - 4, 8, 8);
+  u8g2.setDrawColor(0); vLineSafe(x + 1, y - 4, 8); vLineSafe(x + 5, y - 3, 6); u8g2.setDrawColor(1);
+  discSafe(x - 5, y, 4);
+  u8g2.setDrawColor(0); plot(x - 6, y - 1); plot(x - 7, y - 1); u8g2.setDrawColor(1);
+  triSafe(x + 7, y, x + 12, y - 2, x + 12, y + 2);
+  int16_t wy = y - ((frame & 1) ? 9 : 6);
+  hLineSafe(x - 1, wy, 7); hLineSafe(x, wy - 1, 5);
+  if (state == 1) discSafe(x - 9, y + 4, 2);
 }
 
 // The ship bitmap (sonic_sprites.h): 44x26, facing right, mirrored to face its way of travel.
@@ -2952,9 +2954,10 @@ void drawGame() {
       drawRingGlyph(x, y);
     } else if (o.kind == 2) drawCrab(x, y, animFrame);
     else if (o.kind == 3) {
-      fillBoxClipped(x - 6, y - 2, 12, 4);                 // spring: base, coil, pad
-      plot(x - 3, y - 3); plot(x + 3, y - 3); plot(x - 2, y - 4); plot(x + 2, y - 4);
-      fillBoxClipped(x - 5, y - 6, 10, 2);
+      fillBoxClipped(x - 7, y - 2, 15, 4);                 // spring: base, coil, pad
+      plot(x - 4, y - 3); plot(x + 4, y - 3); plot(x - 3, y - 4); plot(x + 3, y - 4);
+      plot(x - 4, y - 5); plot(x + 4, y - 5);
+      fillBoxClipped(x - 6, y - 8, 13, 3);
     } else if (o.kind == 4) drawBee(x, y, animFrame, o.state);
     else if (o.kind == 5) drawDeco(x, y, o.state);
     else if (o.kind == 6) {
