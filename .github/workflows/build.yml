@@ -1,0 +1,24 @@
+# Every push: both firmwares must compile for the watch, and the level/room checkers must pass.
+name: build
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install the RP2040 core and U8g2 (same versions as the dev machine)
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@6.3.2
+          arduino-cli lib install "U8g2@2.36.19"
+      - name: Compile Sonic Watch
+        run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries sonic_watch
+      - name: Compile Metroid Watch
+        run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries metroid_watch
+      - name: Metroid room checker (reachability, softlocks, gates)
+        run: ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check
+      - name: Sonic level checker
+        run: ./tools/sonic_test/build.sh && ./tools/sonic_test/out/check
