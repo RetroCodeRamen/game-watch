@@ -36,12 +36,14 @@ int main(int argc, char **argv) {
     if (tok.rfind("at:", 0) == 0) { int x = atoi(tok.c_str() + 3); setPlayerPos(x, groundAt(x) - RAD_STAND); fvx = fvy = 0; cam = x - 64; continue; }   // put Sonic on the ground at world x
     if (tok.rfind("rings:", 0) == 0) { rings = atoi(tok.c_str() + 6); continue; }
     if (tok.rfind("spbot:", 0) == 0) {      // Special Stage bot: N runs of stage k (emeralds held = k-1)
-      int k = 0, n = 0; sscanf(tok.c_str(), "spbot:%d:%d", &k, &n);
+      // "spbot:<stage>:<runs>[:kid]" - kid: reacts 10 frames late, sloppier steering, misses
+      // a third of the jumps (closer to a real 8-year-old than a frame-perfect bot)
+      int k = 0, n = 0, kid = 0; sscanf(tok.c_str(), "spbot:%d:%d:%d", &k, &n, &kid);
       int wins = 0, legsDone[4] = {0};
       for (int run = 0; run < n; run++) {
         randomSeed(1000 + run * 7919);
         emeralds = k - 1; startSpecial(); trState = TR_NONE; trLevel = 0;
-        int jumpCool = 0;
+        int jumpCool = 0; float wantQ[16] = {0}; bool pairQ[16] = {0};
         for (int t = 0; t < 30 * 120 && mode == SPECIAL && spPhase == SP_RUN; t++) {
           // aim: the nearest ring 8-50 ahead that isn't right beside a bomb; dodge bombs 6-30 ahead
           float want = spAng; int bestZ = 999; bool bombAhead = false, pairAhead = false;
@@ -60,10 +62,16 @@ int main(int argc, char **argv) {
             if (!nearBomb) { bestZ = z; want = o.ang; }
           }
           if (bombAhead && fabsf(want - spAng) < 16) want = spAng + (spAng > 0 ? -30 : 30);
+          bool jump = pairAhead;
+          if (kid) {                               // act on what was seen 10 frames ago
+            wantQ[t & 15] = want; pairQ[t & 15] = pairAhead;
+            want = t >= 10 ? wantQ[(t - 10) & 15] : spAng; jump = t >= 10 && pairQ[(t - 10) & 15] && (rand() % 3);
+          }
           uint8_t h = 0;
-          if (want < spAng - 4) h |= B_LEFT; else if (want > spAng + 4) h |= B_RIGHT;
+          int dead = kid ? 10 : 4;
+          if (want < spAng - dead) h |= B_LEFT; else if (want > spAng + dead) h |= B_RIGHT;
           if (jumpCool) jumpCool--;
-          if (pairAhead && !jumpCool && !spAir) { h |= B_MID; jumpCool = 20; }
+          if (jump && !jumpCool && !spAir) { h |= B_MID; jumpCool = 20; }
           frame(h);
         }
         int legs = spLeg; if (spWon) { wins++; legs = 3; }

@@ -945,9 +945,9 @@ struct SpStageDef { uint8_t quota[3]; uint8_t bombsPerLeg; uint8_t bombWeight; f
 static const SpStageDef SP_STAGES[EMERALD_MAX] = {
   //  quotas/leg     bombs  bomb-pattern  speed
   { {  8, 10, 12 },     0,       0,       2.0f },   // 1: rings only — hard to lose
-  { { 13, 15, 17 },     2,       1,       2.1f },   // 2: meet the bombs, one or two per leg
-  { { 18, 20, 22 },   255,       3,       2.15f },  // 3: the full mix
-  { { 18, 21, 24 },   255,       3,       2.25f },  // 4: hardest, but winnable for an 8-year-old
+  { {  9, 11, 13 },     2,       1,       2.0f },   // 2: meet the bombs, one or two per leg
+  { { 10, 12, 14 },   255,       2,       2.0f },  // 3: the full mix
+  { { 11, 13, 15 },   255,       2,       2.05f },  // 4: hardest, but winnable for an 8-year-old
 };
 // (a macro, not a function: Arduino's generated prototypes would land above the struct)
 #define spStage() (SP_STAGES[emeralds < EMERALD_MAX ? emeralds : EMERALD_MAX - 1])
