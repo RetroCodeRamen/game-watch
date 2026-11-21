@@ -173,7 +173,7 @@ struct Shot { int16_t x, y; int16_t vx, vy; int16_t qx, qy; bool live; };   // q
 struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
 
 // Whole act stays resident — no scroll-despawn (draw/AI cull only)
-Obj objs[256];   // a hand-built act is ~150–230 objects (each ring is one)
+Obj objs[384];   // a hand-built act is ~150–300 objects (each ring is one); ~12 bytes each
 Plat plats[64];
 // Green Hill log bridges: a walkway that sags toward wherever Sonic stands
 struct Bridge { int16_t x0, x1, y; bool live; };
@@ -2914,6 +2914,11 @@ void drawGame() {
     else if (o.kind == 9) drawBumper(x, y, o.timer > 0);
     else if (o.kind == 10) drawSaw(x, y, o.timer);
     else if (o.kind == 11 && o.y < o.home - 5) drawFish(x, y);   // hidden while underwater
+    else if (o.kind == 11 && o.state == 0 && o.timer < 20) {      // bubbles warn of the next leap
+      int16_t k = 20 - o.timer;
+      circleSafe(x - 2, y - 4 - k / 2, 1);
+      if (k > 6) circleSafe(x + 2, y - 4 - (k - 6) / 2, 1);
+    }
     else if (o.kind == 12) drawMonitor(x, y, o.state);
     else if (o.kind == 14) {                   // starpost: pole, base, lamp (hollow until passed)
       for (int16_t j = y - 22; j < y; j++) plot(x, j);

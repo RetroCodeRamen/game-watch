@@ -24,3 +24,5 @@ jobs:
         run: ./tools/metroid_test/out/bot
       - name: Sonic level checker
         run: ./tools/sonic_test/build.sh && ./tools/sonic_test/out/check
+      - name: Sonic reaction-time check (no blind or unwarned hazards at speed)
+        run: ./tools/sonic_test/out/sight | tail -1 | grep -q "^0 hazard"

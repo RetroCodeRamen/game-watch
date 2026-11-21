@@ -70,9 +70,9 @@ int main(){
     printf("  %s ground y %d..%d (%d px), highest ledge y %d -> total vertical %d px (%.1f screens)\n",NAMES[z][a],lo,hi,hi-lo,topPlat,hi-topPlat,(hi-topPlat)/64.0);
     for(int i=0;i<A->nObj;i++) if(A->obj[i].kind==L_DECO) for(int j=i+1;j<A->nObj;j++) if(A->obj[j].kind==L_DECO && abs(A->obj[j].x-A->obj[i].x)<32){ printf("  %s deco at %d and %d closer than 32 px\n",NAMES[z][a],A->obj[i].x,A->obj[j].x); bad++; }
     objs++; // goal
-    printf("%s: len %5d  par %2ds  objects %3d/256  plats %2d/64  rings %3d  hazards/enemies %3d  max slope %d/32  cliffs %d (max %d)\n",
+    printf("%s: len %5d  par %2ds  objects %3d/384  plats %2d/64  rings %3d  hazards/enemies %3d  max slope %d/32  cliffs %d (max %d)\n",
       NAMES[z][a],A->len,A->parSec,objs,plats,rings,hazards,maxSlope,nCliff,maxCliff);
-    if(objs>256||plats>64){printf("  OVER CAPACITY\n");bad++;}
+    if(objs>384||plats>64){printf("  OVER CAPACITY\n");bad++;}
   }
   printf(bad? "\n%d problems\n":"\nall checks passed\n",bad);
 }

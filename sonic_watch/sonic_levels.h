@@ -80,7 +80,7 @@ static const LvlObj GH1_O[] = {
   {320, 24, L_ARC, 6},                                   // over the first hill
   {430, 0, L_CRAB, 0},                                   // first badnik: flat ground, seen coming
   {360, 0, L_DECO, D_SUN},
-  {520, 30, L_BEE, 0},
+  {568, 30, L_BEE, 0},
   {548, 8, L_RINGS, 3},
   // early upper route: spring → three ledges with rings
   {616, 0, L_SPRING, 0},
@@ -88,7 +88,7 @@ static const LvlObj GH1_O[] = {
   {706, 48, L_PLAT, 32}, {710, 56, L_RINGS, 2},
   {756, 44, L_PLAT, 40}, {762, 52, L_RINGS, 3},
   {740, 0, L_CRAB, 0},                                    // ground route below
-  {910, 0, L_SPIKES, 2}, {900, 34, L_ARC, 4},            // first spikes, with rings showing the jump
+  {958, 0, L_SPIKES, 2}, {900, 34, L_ARC, 4},            // first spikes, with rings showing the jump
   {940, 0, L_DECO, D_PALM},
   {960, 8, L_RINGS, 4},
   {1010, 0, L_CRAB, 0},
@@ -102,7 +102,7 @@ static const LvlObj GH1_O[] = {
   {1600, 0, L_LOOP, 0},                                  // ★ the loop
   {1790, 0, L_DECO, D_PALM}, {1830, 8, L_RINGS, 5},
   {1934, 0, L_SPRING, 0}, {1970, 52, L_PLAT, 40}, {1976, 60, L_RINGS, 3},
-  {2095, 0, L_CRAB, 0},                                  // clear of the ledge drop
+  /* removed: blind crab by the ledge drop (rule 130) */
   {2210, 0, L_DECO, D_SUN},
   // spike valley: hop the ledges or take the high spring
   {2236, 8, L_RINGS, 4},                                 // landing pad: rings, nothing else
@@ -198,8 +198,8 @@ static const LvlObj GH2_O[] = {
   {1640, 0, L_DECO, D_SUN},
   {1720, 0, L_CRAB, 0},
   {1800, 8, L_RINGS, 5},
-  {1900, 28, L_BEE, 0},
-  {1980, 0, L_SPIKES, 1},
+  {1948, 28, L_BEE, 0},
+  {2028, 0, L_SPIKES, 1},
   {2060, 0, L_DECO, D_PALM},
   {2140, 8, L_RINGS, 6},
   {2260, 0, L_DECO, D_SUN},
@@ -210,6 +210,8 @@ static const LvlObj GH2_O[] = {
   {700, 0, L_MONITOR, 2}, {846, 52, L_MONITOR, 1},   // shield, 1-up
   // starposts (checkpoints)
   {1130, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {206, 34, L_ARC, 5}, {536, 34, L_ARC, 5}, {1412, 34, L_ARC, 5}, {1696, 34, L_ARC, 5},
 };
 
 // =====================================================================
@@ -248,18 +250,18 @@ static const LvlObj CP1_O[] = {
   {1160, 0, L_FLAME, 0},
   // low trap corridor with tubes overhead
   {1296, 20, L_PLAT, 44}, {1302, 28, L_RINGS, 3},
-  {1300, 0, L_FLAME, 0}, {1344, 0, L_SPIKE, 0},
+  {1348, 0, L_FLAME, 0}, {1344, 0, L_SPIKE, 0},
   {1356, 24, L_PLAT, 44}, {1362, 32, L_RINGS, 3},
   {1384, 0, L_FLAME, 0},
   {1416, 28, L_PLAT, 44}, {1422, 36, L_RINGS, 3},
   {1424, 0, L_WALL, 14},
-  {1464, 0, L_FLAME, 0},
+  {1512, 0, L_FLAME, 0},
   {1476, 20, L_PLAT, 44}, {1482, 28, L_RINGS, 3},
   {1524, 0, L_SPIKES, 2},
   {1570, 0, L_DECO, D_PIPE},
   {1700, 0, L_CRAB, 0},
   {1740, 8, L_RINGS, 5},
-  {1806, 26, L_BEE, 0},
+  /* removed: blind (rule 130) */
   {1856, 0, L_FLAME, 0},
   {2000, 0, L_DECO, D_PIPE},
   {2040, 8, L_RINGS, 4},
@@ -267,7 +269,7 @@ static const LvlObj CP1_O[] = {
   {2164, 0, L_SPIKES, 2},
   {2226, 0, L_FLAME, 0},
   {2270, 0, L_DECO, D_PIPE},
-  {2400, 0, L_CHEMX, 0},                                 // ★ second wavy cross
+  {2460, 0, L_CHEMX, 0},  {2465, 34, L_ARC, 5},                                 // ★ second wavy cross (clear of the drop at 2340: rule 130)
   {2560, 8, L_RINGS, 4},
   {2700, 0, L_FLAME, 0},
   {2730, 0, L_CRAB, 0},
@@ -286,8 +288,8 @@ static const LvlObj CP1_O[] = {
   {3250, 150, L_PLAT, 40}, {3256, 158, L_RINGS, 3},
   {3310, 140, L_PLAT, 40}, {3316, 148, L_RINGS, 3},
   {3154, 50, L_PLAT, 40}, {3160, 58, L_RINGS, 3},
-  {3030, 0, L_FLAME, 0}, {3060, 0, L_SPIKES, 3}, {3126, 0, L_FLAME, 0},
-  {3180, 0, L_SPIKES, 3}, {3246, 0, L_FLAME, 0},
+  // lower route under the climb: slower but survivable (rulebook 46, 159), was a spike/flame bed
+  {3078, 0, L_FLAME, 0}, {3150, 0, L_CRAB, 0}, {3246, 0, L_FLAME, 0},
   {3384, 0, L_CRAB, 0},
   {3420, 8, L_RINGS, 5},
   {3490, 0, L_DECO, D_PIPE},
@@ -304,11 +306,11 @@ static const LvlObj CP1_O[] = {
   {4206, 0, L_CRAB, 0},
   {4266, 28, L_BEE, 0},
   {4380, 0, L_SPRING, 0}, {4414, 50, L_PLAT, 44}, {4420, 58, L_RINGS, 4},
-  {4400, 0, L_SPIKES, 4},
+  /* removed: blind (rule 130) */
   {4486, 0, L_WALL, 16},
   {4540, 8, L_RINGS, 3},
-  {4700, 0, L_FLAME, 0}, {4740, 0, L_SPIKES, 2},
-  {4806, 0, L_CRAB, 0},
+  {4700, 0, L_FLAME, 0}, {4788, 0, L_SPIKES, 2},
+  /* removed: blind (rule 130) */
   {4866, 0, L_FLAME, 0},
   {4920, 8, L_RINGS, 5},
   {5100, 0, L_DECO, D_PIPE},
@@ -322,6 +324,8 @@ static const LvlObj CP1_O[] = {
   {560, 0, L_MONITOR, 2}, {1890, 0, L_MONITOR, 3}, {3430, 0, L_MONITOR, 0}, {3212, 154, L_MONITOR, 1},   // shield, star, shoes, 1-up
   // starposts (checkpoints)
   {1740, 0, L_STARPOST, 0}, {3710, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {276, 34, L_ARC, 5}, {396, 34, L_ARC, 5}, {1832, 34, L_ARC, 5}, {2080, 34, L_ARC, 5}, {2676, 34, L_ARC, 5}, {2706, 34, L_ARC, 5}, {3500, 34, L_ARC, 5}, {3542, 34, L_ARC, 5}, {3762, 34, L_ARC, 5}, {3976, 34, L_ARC, 5}, {4182, 34, L_ARC, 5}, {4242, 34, L_ARC, 5}, {4842, 34, L_ARC, 5}, {5242, 34, L_ARC, 5}, {5342, 34, L_ARC, 5},
 };
 
 // CHEMICAL PLANT ACT 2 — a short trap run to the boss.
@@ -340,7 +344,7 @@ static const LvlObj CP2_O[] = {
   {754, 52, L_PLAT, 40}, {760, 60, L_RINGS, 3},
   {700, 0, L_FLAME, 0}, {740, 0, L_SPIKES, 3}, {810, 0, L_FLAME, 0},
   {870, 0, L_WALL, 14},
-  {1000, 0, L_FLAME, 0}, {1030, 20, L_PLAT, 44}, {1036, 28, L_RINGS, 3},
+  {1048, 0, L_FLAME, 0}, {1030, 20, L_PLAT, 44}, {1036, 28, L_RINGS, 3},
   {1080, 0, L_SPIKES, 2}, {1110, 0, L_FLAME, 0},
   {1170, 26, L_BEE, 0},
   {1240, 0, L_CRAB, 0},
@@ -352,7 +356,7 @@ static const LvlObj CP2_O[] = {
   {1800, 8, L_RINGS, 4},
   {1860, 0, L_SPIKES, 2},
   {2000, 0, L_DECO, D_PIPE},
-  {2060, 28, L_BEE, 0},
+  /* removed: blind (rule 130) */
   {2140, 8, L_RINGS, 6},
   {2300, 0, L_DECO, D_PIPE},
   {2400, 8, L_RINGS, 4},
@@ -362,6 +366,8 @@ static const LvlObj CP2_O[] = {
   {900, 0, L_MONITOR, 2}, {774, 52, L_MONITOR, 1},   // shield, 1-up
   // starposts (checkpoints)
   {1350, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {176, 34, L_ARC, 5}, {1216, 34, L_ARC, 5}, {1476, 34, L_ARC, 5}, {1516, 34, L_ARC, 5},
 };
 
 // =====================================================================
@@ -410,7 +416,7 @@ static const LvlObj CN1_O[] = {
   {2000, 50, L_BUMPER, 0}, {1900, 64, L_BUMPER, 0}, {1980, 64, L_BUMPER, 0},
   {1870, 28, L_RINGS, 6}, {1916, 76, L_RINGS, 6},
   {2120, 0, L_DECO, D_NEON},
-  {2200, 0, L_CRAB, 0},
+  {2248, 0, L_CRAB, 0},
   {2250, 28, L_BEE, 0},
   {2290, 8, L_RINGS, 5},
   {2380, 18, L_PLAT, 28}, {2386, 26, L_RINGS, 2}, {2416, 0, L_SPIKES, 3}, {2420, 30, L_RINGS, 3},
@@ -460,6 +466,10 @@ static const LvlObj CN1_O[] = {
   {600, 0, L_MONITOR, 2}, {2050, 0, L_MONITOR, 3}, {3680, 0, L_MONITOR, 0}, {2676, 130, L_MONITOR, 1},   // shield, star, shoes, 1-up
   // starposts (checkpoints)
   {1830, 0, L_STARPOST, 0}, {3850, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {536, 34, L_ARC, 5}, {3516, 34, L_ARC, 5}, {5036, 34, L_ARC, 5},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {2226, 34, L_ARC, 5},
 };
 
 // CASINO NIGHT ACT 2 — two pinball bowls and a bumper chain, then the boss.
@@ -476,12 +486,12 @@ static const LvlObj CN2_O[] = {
   {376, 44, L_BUMPER, 0}, {416, 44, L_BUMPER, 0}, {396, 62, L_BUMPER, 0},
   {370, 30, L_RINGS, 5},
   {600, 0, L_DECO, D_NEON},
-  {660, 28, L_BEE, 0},
+  /* removed: blind (rule 130) */
   {700, 8, L_RINGS, 5},
   {916, 0, L_SPRING, 0},
   {880, 40, L_BUMPER, 0}, {956, 40, L_BUMPER, 0}, {918, 56, L_BUMPER, 0},
   {890, 26, L_RINGS, 5},
-  {1100, 0, L_CRAB, 0},
+  {1148, 0, L_CRAB, 0},
   {1160, 0, L_DECO, D_NEON},
   {1360, 24, L_BUMPER, 0}, {1400, 28, L_BUMPER, 0}, {1440, 24, L_BUMPER, 0},
   {1480, 28, L_BUMPER, 0},
@@ -498,6 +508,8 @@ static const LvlObj CN2_O[] = {
   {760, 0, L_MONITOR, 2}, {1820, 0, L_MONITOR, 1},   // shield, 1-up
   // starposts (checkpoints)
   {1140, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {1676, 34, L_ARC, 5},
 };
 
 // =====================================================================
@@ -529,11 +541,11 @@ static const LvlObj SB1_O[] = {
   {880, 6, L_SAW, 0},
   {930, 0, L_DECO, D_GEAR},
   // girder bridge over a spike pit
-  {1040, 16, L_PLAT, 24}, {1046, 24, L_RINGS, 2}, {1066, 0, L_SPIKES, 2},
-  {1090, 20, L_PLAT, 24}, {1096, 28, L_RINGS, 2}, {1116, 0, L_SPIKES, 2},
-  {1140, 16, L_PLAT, 24}, {1146, 24, L_RINGS, 2}, {1166, 0, L_SPIKES, 2},
-  {1150, 44, L_SAW, 0},
-  {1190, 20, L_PLAT, 24}, {1196, 28, L_RINGS, 2}, {1216, 0, L_SPIKES, 2},
+  // upper route: wide platforms with rings (faster, rewards); lower route: the ground, one crab
+  {1040, 18, L_PLAT, 44}, {1048, 26, L_RINGS, 3},
+  {1110, 22, L_PLAT, 44}, {1118, 30, L_RINGS, 3},
+  {1180, 18, L_PLAT, 44}, {1188, 26, L_RINGS, 3},
+  {1150, 58, L_SAW, 0}, {1120, 0, L_CRAB, 0},
   {1240, 30, L_BEE, 0},
   {1360, 0, L_FLAME, 0}, {1400, 0, L_FLAME, 0},
   {1440, 0, L_DECO, D_GEAR},
@@ -553,7 +565,7 @@ static const LvlObj SB1_O[] = {
   {1950, 0, L_DECO, D_GEAR},
   {1990, 6, L_SAW, 0}, {2050, 6, L_SAW, 0},
   {2010, 30, L_RINGS, 4},
-  {2120, 0, L_FLAME, 0},
+  {2168, 0, L_FLAME, 0},
   {2160, 28, L_BEE, 0},
   {2190, 18, L_PLAT, 28}, {2196, 26, L_RINGS, 2}, {2226, 0, L_SPIKES, 3}, {2230, 30, L_RINGS, 3},
   {2360, 0, L_CRAB, 0},
@@ -563,18 +575,17 @@ static const LvlObj SB1_O[] = {
   {2620, 28, L_SAW, 0}, {2600, 8, L_RINGS, 5},
   {2760, 0, L_FLAME, 0}, {2800, 0, L_FLAME, 0}, {2840, 0, L_FLAME, 0},
   {2780, 24, L_RINGS, 4},
-  {2960, 6, L_SAW, 0},
+  {3008, 6, L_SAW, 0},
   {3000, 30, L_BEE, 0},
   {3040, 0, L_DECO, D_GEAR},
   // long girder bridge
-  {3140, 16, L_PLAT, 24}, {3146, 24, L_RINGS, 2}, {3166, 0, L_SPIKES, 2},
-  {3190, 22, L_PLAT, 24}, {3196, 30, L_RINGS, 2}, {3216, 0, L_SPIKES, 2},
-  {3240, 16, L_PLAT, 24}, {3246, 24, L_RINGS, 2}, {3266, 0, L_SPIKES, 2},
-  {3250, 46, L_SAW, 0},
-  {3290, 22, L_PLAT, 24}, {3296, 30, L_RINGS, 2}, {3316, 0, L_SPIKES, 2},
-  {3340, 16, L_PLAT, 24}, {3346, 24, L_RINGS, 2}, {3366, 0, L_SPIKES, 2},
+  // upper route over a plain lower route (was tiny platforms over spike beds)
+  {3140, 18, L_PLAT, 44}, {3148, 26, L_RINGS, 3},
+  {3210, 24, L_PLAT, 44}, {3218, 32, L_RINGS, 3},
+  {3280, 18, L_PLAT, 44}, {3288, 26, L_RINGS, 3},
+  {3250, 60, L_SAW, 0}, {3240, 0, L_CRAB, 0},
   {3400, 30, L_BEE, 0},
-  {3560, 0, L_CRAB, 0},
+  {3608, 0, L_CRAB, 0},
   {3600, 6, L_SAW, 0},
   {3640, 8, L_RINGS, 4},
   {3760, 0, L_WALL, 16},
@@ -582,7 +593,7 @@ static const LvlObj SB1_O[] = {
   {3840, 0, L_DECO, D_GEAR},
   {3960, 0, L_SPRING, 0}, {3994, 50, L_PLAT, 40}, {4000, 58, L_RINGS, 4},
   {3980, 0, L_SPIKES, 3}, {4040, 0, L_FLAME, 0},
-  {4140, 6, L_SAW, 0}, {4200, 6, L_SAW, 0}, {4260, 6, L_SAW, 0},
+  {4140, 6, L_SAW, 0}, {4200, 6, L_SAW, 0}, {4308, 6, L_SAW, 0},
   {4160, 30, L_RINGS, 6},
   {4320, 28, L_BEE, 0},
   {4380, 0, L_FLAME, 0},
@@ -606,6 +617,8 @@ static const LvlObj SB1_O[] = {
   {480, 0, L_MONITOR, 2}, {2400, 0, L_MONITOR, 3}, {4070, 0, L_MONITOR, 0}, {1918, 150, L_MONITOR, 1},   // shield, star, shoes, 1-up
   // starposts (checkpoints)
   {2080, 0, L_STARPOST, 0}, {3830, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {156, 34, L_ARC, 5}, {336, 34, L_ARC, 5}, {716, 34, L_ARC, 5}, {856, 34, L_ARC, 5}, {1376, 34, L_ARC, 5}, {1456, 34, L_ARC, 5}, {1636, 34, L_ARC, 5}, {1762, 34, L_ARC, 7}, {2136, 34, L_ARC, 5}, {2336, 34, L_ARC, 5}, {2736, 34, L_ARC, 5}, {2976, 34, L_ARC, 5}, {3962, 34, L_ARC, 7}, {4296, 34, L_ARC, 5}, {4356, 34, L_ARC, 5}, {4676, 34, L_ARC, 5}, {5236, 34, L_ARC, 5},
 };
 
 // SCRAP BRAIN ACT 2 — saws, a girder bridge and flame jets, then the final boss.
@@ -621,11 +634,11 @@ static const LvlObj SB2_O[] = {
   {300, 0, L_FLAME, 0}, {340, 0, L_FLAME, 0},
   {450, 0, L_WALL, 14},
   {520, 28, L_SAW, 0}, {500, 8, L_RINGS, 5},
-  {640, 16, L_PLAT, 24}, {646, 24, L_RINGS, 2}, {666, 0, L_SPIKES, 2},
-  {690, 20, L_PLAT, 24}, {696, 28, L_RINGS, 2}, {716, 0, L_SPIKES, 2},
-  {740, 16, L_PLAT, 24}, {746, 24, L_RINGS, 2}, {766, 0, L_SPIKES, 2},
-  {790, 20, L_PLAT, 24}, {796, 28, L_RINGS, 2}, {816, 0, L_SPIKES, 2},
-  {760, 44, L_SAW, 0},
+  // upper route over a plain lower route (was tiny platforms over spike beds)
+  {640, 18, L_PLAT, 44}, {648, 26, L_RINGS, 3},
+  {710, 22, L_PLAT, 44}, {718, 30, L_RINGS, 3},
+  {780, 18, L_PLAT, 40},
+  {760, 58, L_SAW, 0}, /* removed: blind (rule 130) */
   {880, 30, L_BEE, 0},
   {960, 0, L_DECO, D_GEAR},
   {1080, 6, L_SAW, 0}, {1140, 6, L_SAW, 0},
@@ -645,9 +658,11 @@ static const LvlObj SB2_O[] = {
   // springs flush against the tall cliff faces (miss the top → land back on the spring)
   {394, 0, L_SPRING, 0},
   // item monitors (TV boxes)
-  {610, 0, L_MONITOR, 2}, {802, 20, L_MONITOR, 1},   // shield, 1-up
+  {610, 0, L_MONITOR, 2}, {800, 18, L_MONITOR, 1},   // shield, 1-up
   // starposts (checkpoints)
   {1170, 0, L_STARPOST, 0},
+  // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
+  {176, 34, L_ARC, 5}, {316, 34, L_ARC, 5}, {496, 34, L_ARC, 5}, {1436, 34, L_ARC, 5}, {1536, 34, L_ARC, 5},
 };
 
 // [zone][act]
