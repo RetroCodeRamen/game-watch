@@ -164,6 +164,7 @@ enum : uint8_t { MON_SHOES, MON_LIFE, MON_SHIELD, MON_STAR };
 static const uint16_t SHOES_FRAMES = 8 * 30, STAR_FRAMES = 15 * 30;
 uint16_t shoesT, starT;          // frames left of Speed Shoes / invincibility
 bool shieldOn;                   // takes one hit instead of the rings
+bool touches(int16_t ox, int16_t oy, int16_t hw, int16_t hh);   // object box vs Sonic's body
 struct Plat { int16_t x, y, w; bool live; };
 struct Shot { int16_t x, y; int16_t vx, vy; int16_t qx, qy; bool live; };   // q/v in 1/16 px
 struct Scatter { int16_t x, y; int8_t vx, vy; uint8_t life; bool live; };
@@ -618,7 +619,7 @@ void updateScatter() {
 
     // Grace period: spilled rings are not grab-able until they've flown out
     if (r.life > SCATTER_LIFE - SCATTER_GRACE) continue;
-    if (abs(px - r.x) < 8 && abs(py - r.y) < 8) {
+    if (touches(r.x, r.y, 4, 4)) {
       r.live = false;
       rings++;
       score += 10;
@@ -1550,7 +1551,7 @@ void eggStep(int16_t rad) {
   if (bossPhase >= EGG_BLOWUP) return;            // can't hurt or be hurt any more
 
   // Touch the ship: always bounce off; spinning into it scores a hit
-  if (abs(px - eggX) < 14 && abs(py - eggY) < 13) {
+  if (touches(eggX, eggY, 9, 8)) {
     bool attack = rolling && bossCool == 0;
     setPlayerVel((px < eggX) ? ZV(-2) : ZV(2),
                  (py <= eggY + 2) ? -BOSS_BOUNCE : BOSS_BOUNCE / 2);
@@ -1572,9 +1573,7 @@ void eggStep(int16_t rad) {
 
   // Wrecking ball
   if (!invul && chainLen > 4) {
-    int16_t dx = px - ballWX, dy = py - ballWY;
-    int16_t reach = BALL_R + rad - 1;
-    if ((int32_t)dx * dx + (int32_t)dy * dy < (int32_t)reach * reach) { hurt(); eggLaugh = 40; }
+    if (touches(ballWX, ballWY, BALL_R - 1, BALL_R - 1)) { hurt(); eggLaugh = 40; }
   }
 }
 
@@ -1978,6 +1977,19 @@ bool nearPlayerSwept(int16_t x, int16_t y, int16_t rx, int16_t ry) {
   if (abs(px - x) < rx && abs(py - y) < ry) return true;
   return abs(midPX - x) < rx && abs(midPY - y) < ry;
 }
+// Sonic's body for touching things (rulebook 8, 117): upright it's the 29-px sprite's body
+// (feet to the top of his head, minus the quills and outstretched arms); curled it's the ball.
+// py is his physics centre, RAD_STAND above the feet.
+inline bool curled() { return rolling || groundRoll; }
+inline int16_t bodyCY(int16_t y) { return curled() ? y - 3 : y - 7; }
+inline int16_t bodyHW() { return curled() ? 9 : 7; }
+inline int16_t bodyHH() { return curled() ? 9 : 13; }
+// Does an object box (centre ox, oy; half sizes hw, hh) touch Sonic, at either physics sub-step?
+bool touches(int16_t ox, int16_t oy, int16_t hw, int16_t hh) {
+  int16_t w = hw + bodyHW(), h = hh + bodyHH();
+  if (abs(px - ox) < w && abs(bodyCY(py) - oy) < h) return true;
+  return abs(midPX - ox) < w && abs(bodyCY(midPY) - oy) < h;
+}
 
 void gameStepInner(uint8_t e);
 
@@ -2133,7 +2145,7 @@ void gameStepInner(uint8_t e) {
     s.y += s.qy / 16; s.qy %= 16;
     if (s.x < cam - 6 || s.x > cam + 134 || s.y < camY - 6 || s.y > camY + 70) { s.live = false; continue; }
     if (s.y > groundAt(s.x)) { s.live = false; continue; }     // pops on the ground
-    if (!invul && abs(s.x - px) < 6 && abs(s.y - py) < 8) { s.live = false; hurt(); }
+    if (!invul && touches(s.x, s.y, 1, 1)) { s.live = false; hurt(); }
   }
 
   updateScatter();
@@ -2146,7 +2158,7 @@ void gameStepInner(uint8_t e) {
     if (!o.live) continue;
     if (!onScreen(o.x, 20)) continue;
     if (o.kind == 1) {
-      if (nearPlayerSwept(o.x, o.y, 8, 9)) {
+      if (touches(o.x, o.y, 4, 4)) {
         o.live = false; rings++; score += 10; beep(1800, 22);
       }
     } else if (o.kind == 0) {
@@ -2160,7 +2172,7 @@ void gameStepInner(uint8_t e) {
       if (onTips && fvy >= 0) hurt();
     } else if (o.kind == 2) {
       // Crab: spin/stomp destroys; otherwise solid bump
-      if (abs(px - o.x) < 10 && abs(py - o.y) < 9) {
+      if (touches(o.x, o.y, 7, 5)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 50; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); rolling = true; syncPlayerInts(); }
@@ -2179,20 +2191,20 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 4) {
       // Bee: spin/stomp destroys; otherwise solid bump
-      if (abs(px - o.x) < 9 && abs(py - o.y) < 8) {
+      if (touches(o.x, o.y, 6, 4)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 75; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
         } else {
-          bumpFromSolid(o.x - 5, o.x + 6, o.y - 5, o.y + 5, rad);
+          hurt();                       // touched upright: it stings (rulebook 118)
         }
       }
     } else if (o.kind == 8) {
       // flame / chem jet — only hurts while firing
-      if (o.state && abs(px - o.x) < 9 && py + rad > o.y - 18 && py < o.y + 2) hurt();
+      if (o.state && touches(o.x, o.y - 9, 3, 9)) hurt();
     } else if (o.kind == 9) {
       // pinball bumper (cooldown avoids sticky re-hits / lag spikes)
-      if (o.timer == 0 && abs(px - o.x) < 11 && abs(py - o.y) < 11) {
+      if (o.timer == 0 && touches(o.x, o.y, 8, 8)) {
         int8_t dx = (px >= o.x) ? 1 : -1;
         int8_t dy = (py >= o.y) ? 1 : -1;
         setPlayerVel(ZV(dx * 4), (dy > 0) ? BUMPER_VY / 3 : -BUMPER_VY);
@@ -2206,17 +2218,17 @@ void gameStepInner(uint8_t e) {
       }
     } else if (o.kind == 10) {
       // Saw: spin/stomp destroys; otherwise solid bump (same as enemies)
-      if (abs(px - o.x) < 10 && abs(py - o.y) < 10) {
+      if (touches(o.x, o.y, 6, 6)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 80; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
         } else {
-          bumpFromSolid(o.x - 6, o.x + 6, o.y - 6, o.y + 6, rad);
+          hurt();                       // running into a saw upright hurts (rulebook 118)
         }
       }
     } else if (o.kind == 11) {
       // Fish: only dangerous while it's out of the water
-      if (o.y < o.home - 5 && abs(px - o.x) < 8 && abs(py - o.y) < 10) {
+      if (o.y < o.home - 5 && touches(o.x, o.y, 4, 5)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 60; beep(1400, 50);
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
@@ -2227,7 +2239,7 @@ void gameStepInner(uint8_t e) {
     }
     else if (o.kind == 12) {
       // Item monitor: jump on it or roll into it to break it; otherwise it's a solid box
-      if (abs(px - o.x) < 14 && abs(py - o.y) < 12) {
+      if (touches(o.x, o.y, 6, 7)) {
         if (canBreakEnemy(o.y)) {
           o.live = false; score += 10;
           if (fvy > 0) { fvy = stompVY(fvy); syncPlayerInts(); }
