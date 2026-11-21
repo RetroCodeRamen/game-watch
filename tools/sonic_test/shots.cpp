@@ -82,6 +82,22 @@ int main(int argc, char **argv) {
       printf("  stage %d: won %d/%d   legs passed: 1st %d, 2nd %d, 3rd %d\n", k, wins, n, legsDone[0], legsDone[1], legsDone[2]);
       continue;
     }
+    if (tok.rfind("trace:", 0) == 0) {       // hold right n frames, printing his height above ground
+      int n = atoi(tok.c_str() + 6);
+      for (int t = 0; t < n; t++) { frame(B_RIGHT); invul = 2;
+        printf("  t=%d px=%d feet=%d above=%d gnd=%d ledge=%d vx=%d vy=%d\n", t, px, py + RAD_STAND, groundAt(px) - (py + RAD_STAND), onGround, onLedge, (int)fvx, (int)fvy); }
+      continue;
+    }
+    if (tok.rfind("route:", 0) == 0) {       // run right from here; how far does he travel up on platforms?
+      int n = atoi(tok.c_str() + 6), upX0 = -1, upX1 = -1;
+      for (int t = 0; t < n; t++) {
+        frame(B_RIGHT); invul = 2;
+        bool high = onGround && groundAt(px) - (py + RAD_STAND) > 40;   // standing well above the ground
+        if (high) { if (upX0 < 0) upX0 = px; upX1 = px; }
+      }
+      printf("  route: on high platforms from x=%d to x=%d (%d px)\n", upX0, upX1, upX0 < 0 ? 0 : upX1 - upX0);
+      continue;
+    }
     if (tok == "fight") {                    // boss bot: wait on the side away from the ball, jump at the ship
       int t = 0, jumpT = 0, hits = 0, hp = bossHP, hurtN = 0;
       for (; t < 30 * 90 && bossOn && mode == GAME; t++) {

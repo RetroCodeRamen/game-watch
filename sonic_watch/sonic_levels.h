@@ -163,6 +163,9 @@ static const LvlObj GH1_O[] = {
   {830, 0, L_MONITOR, 2}, {1800, 0, L_MONITOR, 3}, {3540, 0, L_MONITOR, 0}, {2652, 150, L_MONITOR, 1},   // shield, star, shoes, 1-up
   // starposts (checkpoints)
   {1890, 0, L_STARPOST, 0}, {3730, 0, L_STARPOST, 0},
+  // high route (rulebook 43-54): spring up, ring rows along level platforms, drops back to the
+  // ground route at the end; missing it or falling off just leaves you on the slower ground
+  {4995, 0, L_SPRING, 0}, {4971, 34, L_ARC, 3}, {5007, 55, L_PLAT, 44}, {5015, 63, L_RINGS, 3}, {5051, 53, L_PLAT, 44}, {5059, 61, L_RINGS, 3}, {5095, 52, L_PLAT, 44}, {5103, 60, L_RINGS, 3}, {5139, 53, L_PLAT, 44}, {5147, 61, L_RINGS, 3}, {5183, 56, L_PLAT, 44}, {5191, 64, L_RINGS, 3}, {5227, 60, L_PLAT, 44}, {5235, 68, L_RINGS, 3}, {5271, 66, L_PLAT, 44}, {5279, 74, L_RINGS, 3},
 };
 
 // GREEN HILL ACT 2 — shorter: hills, a spring climb, a spike valley, then the Egg Wrecker.
@@ -212,6 +215,9 @@ static const LvlObj GH2_O[] = {
   {1130, 0, L_STARPOST, 0},
   // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
   {206, 34, L_ARC, 5}, {536, 34, L_ARC, 5}, {1412, 34, L_ARC, 5}, {1696, 34, L_ARC, 5},
+  // high route (rulebook 43-54): spring up, ring rows along level platforms, drops back to the
+  // ground route at the end; missing it or falling off just leaves you on the slower ground
+  {415, 0, L_SPRING, 0}, {391, 34, L_ARC, 3}, {427, 56, L_PLAT, 44}, {435, 64, L_RINGS, 3}, {471, 61, L_PLAT, 44}, {479, 69, L_RINGS, 3}, {515, 65, L_PLAT, 44}, {523, 73, L_RINGS, 3}, {559, 70, L_PLAT, 44}, {567, 78, L_RINGS, 3},
 };
 
 // =====================================================================
@@ -470,6 +476,9 @@ static const LvlObj CN1_O[] = {
   {536, 34, L_ARC, 5}, {3516, 34, L_ARC, 5}, {5036, 34, L_ARC, 5},
   // ring arcs: jump cues before hazards met at speed (rulebook 131, 141)
   {2226, 34, L_ARC, 5},
+  // high route (rulebook 43-54): spring up, ring rows along level platforms, drops back to the
+  // ground route at the end; missing it or falling off just leaves you on the slower ground
+  {4935, 0, L_SPRING, 0}, {4911, 34, L_ARC, 3}, {4947, 55, L_PLAT, 44}, {4955, 63, L_RINGS, 3}, {4991, 55, L_PLAT, 44}, {4999, 63, L_RINGS, 3}, {5035, 56, L_PLAT, 44}, {5043, 64, L_RINGS, 3}, {5079, 58, L_PLAT, 44}, {5087, 66, L_RINGS, 3}, {5123, 59, L_PLAT, 44}, {5131, 67, L_RINGS, 3}, {5167, 61, L_PLAT, 44}, {5175, 69, L_RINGS, 3}, {5211, 63, L_PLAT, 44}, {5219, 71, L_RINGS, 3},
 };
 
 // CASINO NIGHT ACT 2 — two pinball bowls and a bumper chain, then the boss.
