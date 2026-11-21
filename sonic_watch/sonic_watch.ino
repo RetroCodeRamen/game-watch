@@ -5,12 +5,27 @@
 // Clock, alarm, set screens and buttons live in libraries/WatchCore.
 // This sketch supplies the Sonic-themed clock face and the game (see WatchApp at the bottom).
 
+#include <EEPROM.h>
 #include <Arduino.h>
 #include <math.h>
 #include <WatchCore.h>
 #include "title_bitmap.h"
 #include "sonic_sprites.h"
 #include "sonic_levels.h"
+
+// Save data (see "Saving" below)
+struct SonicSave {
+  uint32_t magic; uint8_t ver, zone, act, emeralds, lives, pad;
+  int16_t starX; uint16_t starTime; uint32_t score, seq; uint16_t sum;
+};
+static const uint32_t SAVE_MAGIC = 0x534F4E31;   // "SON1"
+static const int EE_SLOT_A = 0, EE_SLOT_B = 64, EE_SIZE = 128;
+static_assert(sizeof(SonicSave) <= 64, "save slot is 64 bytes");
+bool eepromReady, haveSave, savingOn;            // savingOn: this run saves (not level select)
+uint32_t saveSeq;
+SonicSave lastSave;
+uint8_t titleSel;                                // title: 0 CONTINUE, 1 NEW GAME
+bool eraseAsk;                                   // title: "ERASE SAVE?" showing
 
 // Fixed-point type must be visible before Arduino's auto-prototypes
 typedef int32_t fx;
@@ -53,6 +68,7 @@ uint8_t wfPause = 0;      // brief hold before looping from the left
 bool    wfRingLive = true;
 bool    wfAir = false;
 
+
 void drawSplash() {
   // Title screen shown when GAME button is pressed from watch mode
   u8g2.drawXBMP(0, 0, TITLE_W, TITLE_H, titleBitmap);
@@ -63,7 +79,24 @@ void drawSplash() {
     u8g2.setDrawColor(1);
   }
 
-  if (splashFrame > 18 && ((splashFrame / 8) & 1)) {
+  if (splashFrame > 18 && (haveSave || eraseAsk)) {
+    // Saved game: CONTINUE / NEW GAME (Left/Right), or the erase question
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.setDrawColor(0); u8g2.drawBox(4, 53, 120, 11); u8g2.setDrawColor(1);
+    u8g2.drawFrame(4, 53, 120, 11);
+    if (eraseAsk) {
+      u8g2.setCursor(9, 61); u8g2.print(F("ERASE SAVE? L=YES R=NO"));
+    } else {
+      const char *opt[2] = {"CONTINUE", "NEW GAME"};
+      for (uint8_t i = 0; i < 2; i++) {
+        int16_t x = i ? 72 : 14;
+        if (i == titleSel) { u8g2.drawBox(x - 3, 55, 46, 8); u8g2.setDrawColor(0); }
+        u8g2.setCursor(x, 61); u8g2.print(opt[i]);
+        u8g2.setDrawColor(1);
+      }
+    }
+    u8g2.setFont(u8g2_font_6x10_tr);
+  } else if (splashFrame > 18 && ((splashFrame / 8) & 1)) {
     // Box sized to the text (measured), centred
     const char *msg = "PUSH JUMP TO START";
     u8g2.setFont(u8g2_font_5x7_tr);
@@ -750,7 +783,7 @@ void deathStep(uint8_t e) {
   }
   syncPlayerInts();
   if (deadT >= 60 && sy(py) > 80 && !watch::tunePlaying()) {
-    if (!lives) transitionTo([] { mode = OVER; });
+    if (!lives) transitionTo([] { mode = OVER; writeSaveAt(zone, act, 0, 0, 3); });   // retry this act
     else transitionTo([] {                     // lives/score/emeralds kept
       int16_t sx = starX; uint16_t st = starTime;
       startAct(zone, act); invul = 45;
@@ -889,11 +922,64 @@ void startAct(uint8_t z, uint8_t a) {
   announce();
 }
 
+// ===================== Saving =====================
+// Progress lives in flash (EEPROM emulation), written to two slots in turn so a power cut
+// mid-write leaves the previous save intact. Saved: the act you're on, the last starpost (and
+// the act time then), emeralds, lives, score. Written on a new game, reaching a new act,
+// touching a starpost and leaving for the clock; a game over saves the act start with 3 lives.
+// Runs started from the level select don't save. Beating the game clears the save.
+uint16_t saveSum(const SonicSave &v) {
+  const uint8_t *p = (const uint8_t *)&v; uint16_t a = 0x5A5A;
+  for (size_t i = 0; i < offsetof(SonicSave, sum); i++) a = (uint16_t)(a * 31 + p[i]);
+  return a;
+}
+bool saveValid(const SonicSave &v) { return v.magic == SAVE_MAGIC && v.ver == 1 && v.zone < 4 && v.act < 2 && v.sum == saveSum(v); }
+void eepromInit() { if (!eepromReady) { EEPROM.begin(EE_SIZE); eepromReady = true; } }
+bool readSave() {
+  eepromInit();
+  SonicSave a, b; EEPROM.get(EE_SLOT_A, a); EEPROM.get(EE_SLOT_B, b);
+  bool va = saveValid(a), vb = saveValid(b);
+  if (!va && !vb) return false;
+  lastSave = (va && (!vb || a.seq > b.seq)) ? a : b;
+  saveSeq = lastSave.seq;
+  return true;
+}
+// Save this act (and starpost, if passed) with the given lives
+void writeSaveAt(uint8_t z, uint8_t a, int16_t sx, uint16_t st, uint8_t lv) {
+  if (!savingOn) return;
+  eepromInit();
+  SonicSave v; memset(&v, 0, sizeof v);
+  v.magic = SAVE_MAGIC; v.ver = 1; v.zone = z; v.act = a; v.emeralds = emeralds; v.lives = lv ? lv : 3;
+  v.starX = sx; v.starTime = st; v.score = score; v.seq = ++saveSeq; v.sum = saveSum(v);
+  EEPROM.put((saveSeq & 1) ? EE_SLOT_B : EE_SLOT_A, v);
+  EEPROM.commit();
+  lastSave = v; haveSave = true;
+}
+void writeSave() { writeSaveAt(zone, act, starX, starTime, lives); }
+void clearSave() {
+  eepromInit();
+  SonicSave z; memset(&z, 0, sizeof z);
+  EEPROM.put(EE_SLOT_A, z); EEPROM.put(EE_SLOT_B, z); EEPROM.commit();
+  haveSave = false;
+}
+
 void startGame() {
   randomSeed(micros());
   rings = 0; score = 0; lives = 3; emeralds = 0;
   spFromSelect = false;
+  savingOn = true;
   startAct(0, 0);
+  writeSave();
+}
+// CONTINUE: back to the saved act (at its last starpost, if one was passed)
+void continueGame() {
+  randomSeed(micros());
+  if (!readSave()) { startGame(); return; }
+  rings = 0; score = lastSave.score; lives = lastSave.lives; emeralds = lastSave.emeralds;
+  spFromSelect = false;
+  savingOn = true;
+  startAct(lastSave.zone, lastSave.act);
+  if (lastSave.starX) respawnAtStarpost(lastSave.starX, lastSave.starTime);
 }
 
 const uint8_t SPECIAL_RINGS = 20;
@@ -902,11 +988,14 @@ const uint8_t EMERALD_MAX = 4, EMERALD_GOAL = 3;   // one per zone; 3 is the goa
 void nextStage() {
   if (act == 0) startAct(zone, 1);
   else if (zone < 3) startAct(zone + 1, 0);
-  else { mode = WIN; beep(1000, 500); }
+  else { mode = WIN; beep(1000, 500); if (savingOn) clearSave(); }
 }
 
 void startSpecial();
 void advanceAfterClear() {
+  // the next act is your progress now (even if you leave during the Special Stage)
+  if (act == 0) writeSaveAt(zone, 1, 0, 0, lives);
+  else if (zone < 3) writeSaveAt(zone + 1, 0, 0, 0, lives);
   // Finish an act holding 20+ rings → Special Stage (flashes white on the way in)
   if (emeralds < EMERALD_MAX && rings >= SPECIAL_RINGS) transitionTo(startSpecial, true);
   else transitionTo(nextStage);
@@ -2078,7 +2167,7 @@ void gameStep(uint8_t e) {
 
 void gameStepInner(uint8_t e) {
   if (e & B_GAME) { menuSel = 0; mode = MENU; return; }
-  if (e & B_MODE) { watch::exitToClock(); return; }
+  if (e & B_MODE) { writeSave(); watch::exitToClock(); return; }
 
   if (goalT) e = 0;                              // past the signpost: no control
   else if (actFrames < 0xFFFF) actFrames++;      // act timer (stops at the signpost)
@@ -2318,6 +2407,7 @@ void gameStepInner(uint8_t e) {
       if (!o.state && touches(o.x, o.y - 12, 2, 12)) {
         o.state = 1; o.timer = 20; starX = o.x; starTime = actFrames;
         beep(1300, 40); beep(1700, 60);
+        writeSave();
       }
     }
     else if (o.kind == 12) {
@@ -3014,7 +3104,7 @@ void drawOver() {
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.setCursor(34, 16); u8g2.print(F("GAME OVER"));
   u8g2.setCursor(34, 30); u8g2.print(F("SCORE ")); u8g2.print(score);
-  u8g2.setCursor(4, 46); u8g2.print(F("MID=retry GAME=quit"));
+  u8g2.setCursor(4, 46); u8g2.print(F("MID=retry act  GAME=quit"));
 }
 void drawWin() {
   u8g2.setFont(u8g2_font_6x10_tr);
@@ -3034,7 +3124,7 @@ void menuLoop(uint8_t e) {
   if (e & B_MID) {
     if (menuSel == 0) mode = GAME;
     else if (menuSel == 1) transitionTo(startGame);
-    else watch::exitToClock();
+    else { writeSave(); watch::exitToClock(); }
   }
 }
 void drawMenu() {
@@ -3057,6 +3147,7 @@ void selectStep(uint8_t e) {
   if (e & B_MID) {
     randomSeed(micros());
     rings = 0; score = 0; lives = 3; emeralds = 0;
+    savingOn = false;                            // practice runs don't touch the save
     if (selIdx < 8) transitionTo([] { spFromSelect = false; startAct(selIdx / 2, selIdx % 2); });
     else transitionTo([] {
       zone = 0; act = 0; lvl = &ACTS[0][0];
@@ -3090,6 +3181,7 @@ void drawSelect() {
 
 // ===================== WatchCore hooks =====================
 void gameStart() {            // Game pressed on the clock face
+  haveSave = readSave(); titleSel = 0; eraseAsk = false;
   trState = TR_NONE; trLevel = 0; trAction = nullptr;
   splashFrame = 0;
   codeHist = 0;
@@ -3115,10 +3207,18 @@ void gameUpdate(uint8_t e) {
     case SPLASH:
       // Only Jump (play) and Mode (back to the clock) act here; Left/Right feed the code
       if (splashFrame < 250) splashFrame++;
+      if (eraseAsk) {                            // "ERASE SAVE?"  Left = yes, Right / Mode = no
+        if (e & B_LEFT) { eraseAsk = false; clearSave(); transitionTo(startGame); }
+        else if (e & (B_RIGHT | B_MODE)) { eraseAsk = false; beep(500, 30); }
+        break;
+      }
       if (e & B_LEFT)  codeHist = (uint16_t)((codeHist << 2) | 1) & 0x0FFF;
       if (e & B_RIGHT) codeHist = (uint16_t)((codeHist << 2) | 2) & 0x0FFF;
+      if (haveSave && (e & (B_LEFT | B_RIGHT))) { titleSel ^= 1; beep(900, 10); }
       if (e & B_MID) {
         if (codeHist == LEVEL_SELECT_CODE) { selIdx = 0; mode = SELECT; beep(1800, 80); }
+        else if (haveSave && titleSel == 0) transitionTo(continueGame);
+        else if (haveSave) { eraseAsk = true; beep(400, 40); }      // don't lose progress by accident
         else transitionTo(startGame);
       } else if (e & B_MODE) watch::exitToClock();
       break;
@@ -3128,7 +3228,7 @@ void gameUpdate(uint8_t e) {
     case CLEAR: clearStep(e); break;
     case MENU: menuLoop(e); break;
     case OVER:
-      if (e & B_MID) transitionTo(startGame);
+      if (e & B_MID) transitionTo(savingOn ? continueGame : startGame);   // retry from the act start
       else if (e & (B_GAME | B_MODE)) watch::exitToClock();  // Mode always escapes to clock
       break;
     case WIN: if (e) watch::exitToClock(); break;

@@ -27,7 +27,8 @@ int main(int argc, char **argv) {
   std::stringstream ss(argc > 1 ? argv[1] : ""); std::string tok;
   while (ss >> tok) {
     if (tok == "die") { rings = 0; invul = 0; shieldOn = false; starT = 0; hurt(); continue; }   // lose a life now
-    if (tok == "st") { printf("  px=%d py=%d shield=%d invul=%d rings=%d mode=%d gnd=%d starX=%d t=%u\n", px, py, shieldOn, invul, rings, mode, onGround, starX, actFrames); continue; }
+    if (tok == "save") { SonicSave v; bool ok = readSave(); v = lastSave; printf("  save: %s zone=%d act=%d starX=%d t=%u lives=%d em=%d score=%lu  title shows save=%d\n", ok ? "yes" : "no", v.zone, v.act, v.starX, v.starTime, v.lives, v.emeralds, (unsigned long)v.score, haveSave); continue; }
+    if (tok == "st") { printf("  zone=%d act=%d px=%d py=%d shield=%d invul=%d rings=%d mode=%d gnd=%d starX=%d t=%u lives=%d\n", zone, act, px, py, shieldOn, invul, rings, mode, onGround, starX, actFrames, lives); continue; }
     if (tok == "shot") { uint8_t iv = invul; invul = 0; dump(); invul = iv; continue; }   // never catch him mid-blink
     if (tok.rfind("face:", 0) == 0) { faceView = true; for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); dump(); faceView = false; continue; }
     if (tok == "title") { gameStart(); for (int i = 0; i < 40; i++) frame(0); continue; }
