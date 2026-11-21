@@ -1,6 +1,6 @@
 # Metroid Watch Game Design Document
 
-**RP2040 watch · Design Revision 5**
+**RP2040 watch · Design Revision 6**
 
 Samus returns to Zebes when a shut-down Pirate relay broadcasts her old distress code. She explores two boss routes in either order and unlocks Tourian. After destroying Mother Brain, she races back to her ship. The game is a side-view adventure for a 128 × 64 black-and-white display and five physical buttons.
 
@@ -152,8 +152,7 @@ flowchart TD
 | -------- | ----------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | B01 | Ship and Landing Site | 2×2 | Ship and starting save (the primary save until Kraid's K07). East to B02. The shaft vent beside the ship receives the alarm exit from T07. |
 | B02 | Surface Path | 2×1 | Rocky shelf. West to the ship, east into the top of B03. Show the cracked floor and tank #2 below before Samus has Bombs. |
-| B03 | Brinstar Shaft | 1×4 | A slashed-rock nook high up holds missile tank #7 (Space Jump), seen early. |
-| B03a | (cont.) | | Doors near the top: west to B02, east to the shrine, across a 2-tile gap. Shelves step down the middle and climb back with the base jump and double jump. At the bottom a ball-sized hole in each wall: east returns from the shrine, west goes on to B05. Both are visible before the Morph Ball. |
+| B03 | Brinstar Shaft | 1×4 | Doors near the top: west to B02, east to the shrine, across a 2-tile gap. Shelves step down the middle and climb back with the base jump and double jump. At the bottom a ball-sized hole in each wall: east returns from the shrine, west goes on to B05. Both are visible before the Morph Ball. A slashed-rock nook high up holds missile tank #7 (Space Jump), seen early. |
 | B04 | Morph Ball Shrine | 1×3 | One way in: the door ledge drops 13 tiles (deeper than a double jump) into the statue's chamber. Shoot the Chozo orb, take the Morph Ball, and roll out through the west tunnel into the bottom of B03. |
 | B05 | Missile Room | 2×2 | Rolled into from the bottom of B03 (east duct, top right). A step and a long shelf lead down to the floor and back up. The Missile Launcher (with tank #1) sits in a Chozo statue's hands. East door to B06. |
 | B06 | Junction | 2×2 | Hub. Blue door (upper west) back to B05, climbed via a step and a ledge. Missile doors west to K01 and east to N01. Locked hatch down to B07. |
