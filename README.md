@@ -2,7 +2,7 @@
 
 Handheld watch + game console built around a **Waveshare RP2040-Zero**, a **128×64 SH1106 OLED**, five buttons, and a piezo buzzer.
 
-This repo holds the shared platform docs and two firmwares for the same hardware: **Sonic Watch** (auto-runner) and **Metroid Watch** (Zebes side-view adventure). Flash one sketch per watch.
+This repo holds the shared platform docs and two firmwares for the same hardware: **Sonic Watch** (side-scrolling platformer) and **Metroid Watch** (Zebes exploration adventure). Flash one sketch per watch.
 
 ## Quick start
 
@@ -27,8 +27,9 @@ Requirements: [`arduino-cli`](https://arduino.github.io/arduino-cli/), Earle Phi
 | `docs/` | Hardware, software architecture, flash guide, how to add games |
 | `libraries/WatchCore/` | Shared watch shell: buttons, clock, alarm, set screens, power save, clip-safe drawing |
 | `scripts/flash.sh` | Compile + upload helper (passes `--libraries libraries`) |
-| `sonic_watch/` | Clock + Sonic runner |
+| `sonic_watch/` | Clock + Sonic platformer |
 | `metroid_watch/` | Clock + Metroid adventure (design doc included) |
+| `tools/` | Host tests: `metroid_test` (room checker + scripted runner), `sonic_test` (act bot) |
 
 ## Docs map
 
@@ -59,18 +60,20 @@ Spin-roll ends on a Left/Right tap or hitting a wall — not on jump.
 | Casino Night | Neon signs | Pinball bumpers + bounce chains |
 | Scrap Brain | Gears | Saws, industrial hazards |
 
-## Controls (Metroid firmware — Design Rev 4)
+## Controls (Metroid firmware)
 
-Logical inputs are **Left / Right / Up / Down / Menu**. On the current 5-button board:
+Five buttons today (a sixth is planned: it becomes Down, and Mode goes back to cancel/exit).
 
-| Logical | Pin today | Clock | Game |
-|---------|-----------|-------|------|
-| Left | GP2 | Adjust − | Move left |
-| Up | GP3 (Mid) | Next field | Jump |
-| Right | GP6 | Adjust + | Move right |
-| Down | GP7 (Mode) | Set menus / confirm | Fire / bomb / confirm |
-| Menu | GP8 (Game) | Open title | Tap = Gun→Missiles→Morph; Hold ≈350 ms = Start menu |
+| Button | Clock | Game |
+|--------|-------|------|
+| Left / Right | Adjust | Move (hold to run; a running jump flips) |
+| Mid (Action) | Next field | Jump, again in mid-air to double jump; stand up from the ball |
+| Mode | Set menus (time, date, alarm, sound) | Down: crouch, again to roll into the Morph Ball; save on a save pad |
+| Game (Select/OK) | Start the game | Fire; in the ball, drop a bomb |
+| Mode + Game together | — | Tap: switch beam/missiles · Hold: pause (MAP / ITEMS / GOAL, RESUME / CLOCK) |
 
-Start menu: **Items** · **Map** · **Mission** (Save & Clock). Pin map is isolated at the top of `metroid_watch.ino` for the future button layout.
-
-**Metroid campaign:** 36 rooms, Morph Ball, missiles, bombs, Screw Attack, Ice Missiles, two Energy Tanks; both boss branches → Tourian → Mother Brain escape.
+**Metroid campaign:** Brinstar, Kraid's Lair, Norfair and Tourian (29 rooms). Morph Ball, Missiles and Bombs in
+Chozo shrines; Kraid gives Space Jump, Ridley gives Ice Missiles; 8 missile tanks and 2 Energy Tanks. Beat both
+bosses to open Tourian, destroy Mother Brain, and escape to the ship before the timer runs out. Save stations,
+suspend to the clock (CONTINUE resumes in place), an easy mode and a next-goal hint in the pause menu. A hidden test
+room (hold Left + Right on the title) has every item, enemy and boss.

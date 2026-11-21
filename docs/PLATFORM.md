@@ -31,7 +31,7 @@ Layers 1–4 are **`libraries/WatchCore`**, shared by every title. Layer 5 — p
 
 | Sketch | Genre | Notes |
 |--------|-------|-------|
-| `sonic_watch/` | Auto-runner | Stages, crabs, bees, Egg Wrecker bosses |
-| `metroid_watch/` | Side-view adventure | 36 rooms, gear gates, bosses, escape, EEPROM save |
+| `sonic_watch/` | Platformer | 4 zones × 2 acts, loops, springs, Egg Wrecker bosses, Special Stages |
+| `metroid_watch/` | Exploration adventure | 4 zones, 29 rooms, ability gates, Kraid / Ridley / Mother Brain, escape, saves + suspend |
 
 Flash either sketch onto the same hardware: `./scripts/flash.sh sonic_watch` or `./scripts/flash.sh metroid_watch`. See [ADDING_A_GAME.md](ADDING_A_GAME.md).
