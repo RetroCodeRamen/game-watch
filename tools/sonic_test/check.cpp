@@ -39,6 +39,7 @@ int main(){
         case L_CHEMX: { objs+=4+2+1; plats+=14; int g=terr(o.x+40); for(int x=o.x;x<=o.x+130;x+=2) if(terr(x)!=g){printf("  %s chemx at %d not flat at %d\n",NAMES[z][a],o.x,x);bad++;break;} } break;
         case L_RING: objs++; rings++; break;
         case L_MONITOR: objs++; break;
+        case L_STARPOST: objs++; break;
         default: objs++; if(o.kind!=L_DECO) hazards++; break;
       }
     }

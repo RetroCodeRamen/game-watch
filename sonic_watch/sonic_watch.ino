@@ -164,6 +164,9 @@ enum : uint8_t { MON_SHOES, MON_LIFE, MON_SHIELD, MON_STAR };
 static const uint16_t SHOES_FRAMES = 8 * 30, STAR_FRAMES = 15 * 30;
 uint16_t shoesT, starT;          // frames left of Speed Shoes / invincibility
 bool shieldOn;                   // takes one hit instead of the rings
+// Starposts (kind 14, state 1 = passed): a death respawns at the last one, act time kept
+int16_t starX;                   // world x of the last starpost touched this act (0 = none)
+uint16_t starTime;               // act frames when it was touched
 bool touches(int16_t ox, int16_t oy, int16_t hw, int16_t hh);   // object box vs Sonic's body
 struct Plat { int16_t x, y, w; bool live; };
 struct Shot { int16_t x, y; int16_t vx, vy; int16_t qx, qy; bool live; };   // q/v in 1/16 px
@@ -714,7 +717,11 @@ void deathStep(uint8_t e) {
   syncPlayerInts();
   if (deadT >= 60 && sy(py) > 80 && !watch::tunePlaying()) {
     if (!lives) transitionTo([] { mode = OVER; });
-    else transitionTo([] { startAct(zone, act); invul = 45; });   // lives/score/emeralds kept
+    else transitionTo([] {                     // lives/score/emeralds kept
+      int16_t sx = starX; uint16_t st = starTime;
+      startAct(zone, act); invul = 45;
+      if (sx) respawnAtStarpost(sx, st);       // back at the last starpost, not the start
+    });
   }
 }
 
@@ -798,6 +805,7 @@ void buildAct() {
       case L_LOOP:   placeGreenHillLoop(x); break;
       case L_CHEMX:  placeChemWavyCross(x); break;
       case L_FISH:   addObj(x, groundAt(x) - 4, 11); break;   // in the pool, under the deck
+      case L_STARPOST: addObj(x, groundAt(x), 14); break;
       case L_MONITOR:                        // item TV standing on the ground (or a platform)
         for (auto &o : objs) if (!o.live) {
           o = Obj{x, (int16_t)(g - h - 6), x, 12, d.arg, 0, 0, true};
@@ -810,6 +818,18 @@ void buildAct() {
   if (act == 0) placeGoal(actEnd);   // Act 2 ends in the boss arena instead
 }
 
+// After a death: stand just past the starpost (always placed on clear, flat ground), the
+// posts up to it already lit, the clock where it was when you touched it.
+void respawnAtStarpost(int16_t sx, uint16_t st) {
+  starX = sx; starTime = st; actFrames = st;
+  for (auto &o : objs) if (o.live && o.kind == 14 && o.x <= sx) o.state = 1;
+  int16_t x = sx + 16;
+  setPlayerPos(x, groundAt(x) - RAD_STAND);
+  setPlayerVel(0, 0);
+  cam = x - 64; if (cam < 0) cam = 0;
+  camY = py - 40;
+}
+
 void startAct(uint8_t z, uint8_t a) {
   zone = z; act = a;
   bossOn = false;
@@ -817,6 +837,7 @@ void startAct(uint8_t z, uint8_t a) {
   actEnd = Z(lvl->len);
   rings = 0;                 // rings are per act (and lost on a restart), as in Sonic
   shoesT = 0; starT = 0; shieldOn = false; spdScale = SPD_NORMAL;
+  starX = 0; starTime = 0;
   actFrames = 0;
   camLead = 0;
   goalT = 0;
@@ -2123,6 +2144,7 @@ void gameStepInner(uint8_t e) {
     }
     if (o.kind == 9 && o.timer) o.timer--;
     if (o.kind == 10) o.timer++;
+    if (o.kind == 14 && o.timer) o.timer--;   // starpost: lamp spins for a moment when lit
     if (o.kind == 13) {                        // monitor icon: rises out of the box, then goes
       if (o.timer > 8) o.y--;
       if (o.timer) o.timer--; else o.live = false;
@@ -2239,6 +2261,13 @@ void gameStepInner(uint8_t e) {
         } else if (!invul) {
           hurt();
         }
+      }
+    }
+    else if (o.kind == 14) {
+      // Starpost: passing it saves the spot (it lights and spins once)
+      if (!o.state && touches(o.x, o.y - 12, 2, 12)) {
+        o.state = 1; o.timer = 20; starX = o.x; starTime = actFrames;
+        beep(1300, 40); beep(1700, 60);
       }
     }
     else if (o.kind == 12) {
@@ -2822,6 +2851,13 @@ void drawGame() {
     else if (o.kind == 10) drawSaw(x, y, o.timer);
     else if (o.kind == 11 && o.y < o.home - 5) drawFish(x, y);   // hidden while underwater
     else if (o.kind == 12) drawMonitor(x, y, o.state);
+    else if (o.kind == 14) {                   // starpost: pole, base, lamp (hollow until passed)
+      for (int16_t j = y - 22; j < y; j++) plot(x, j);
+      hLineSafe(x - 2, y - 1, 5);
+      int16_t lx = x, ly = y - 25;
+      if (o.timer) { lx += (o.timer & 4) ? 2 : -2; }   // lamp whirls round when lit
+      if (o.state) discSafe(lx, ly, 3); else circleSafe(lx, ly, 3);
+    }
     else if (o.kind == 13) drawMonIcon(x - 3, y - 4, o.state);
   }
 
