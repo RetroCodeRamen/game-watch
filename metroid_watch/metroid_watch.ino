@@ -36,6 +36,7 @@ struct SaveData {
   uint64_t items, visited, redDoors; uint32_t frames;
   int16_t saveTX, saveTY;          // the station saved at (feet on that tile)
   uint8_t bosses;                  // bosses beaten: 1 Kraid, 2 Ridley, 4 Mother Brain
+  uint8_t easy;                    // easy mode
   uint32_t seq;                    // which of the two save slots is newer
   uint16_t sum;
 };
@@ -155,6 +156,7 @@ int8_t curRoom = 0;
 int16_t padTX = 0, padTY = 0;     // the ship's save pad
 int16_t saveTX = -1, saveTY = -1;  // where Samus last saved (-1: the ship)
 uint8_t bossesBeaten;
+bool easyMode;                     // easy: every hit costs 1, hazards only reset, slower Metroid drain, longer escape
 fx safeX, safeY;                   // last safe footing in this room (sub-pixel): where hazards send her back to
 bool safeOK;                       // false until she has stood on safe ground in this room
 int8_t lastZone = -1;
@@ -354,11 +356,11 @@ uint16_t saveSum(const SaveData &s) {
 }
 void captureSave(SaveData &s) {
   memset(&s, 0, sizeof s);
-  s.magic = SAVE_MAGIC; s.ver = 5; s.saveTX = saveTX; s.saveTY = saveTY; s.bosses = bossesBeaten; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
+  s.magic = SAVE_MAGIC; s.ver = 6; s.easy = easyMode; s.saveTX = saveTX; s.saveTY = saveTY; s.bosses = bossesBeaten; s.gear = gear; s.gearOff = gearOff; s.maxEn = maxEnergy; s.maxMs = maxMissiles;
   s.items = itemsGot; s.visited = visited; s.redDoors = redOpen; s.frames = playFrames;
   s.sum = saveSum(s);
 }
-bool saveValid(const SaveData &s) { return s.magic == SAVE_MAGIC && s.ver == 5 && s.sum == saveSum(s); }
+bool saveValid(const SaveData &s) { return s.magic == SAVE_MAGIC && s.ver == 6 && s.sum == saveSum(s); }
 void clearSuspend();
 void writeSave() {
   captureSave(lastSave);
@@ -510,7 +512,7 @@ void placeAtPad() {
 void loadFrom(const SaveData &s) {
   gear = s.gear; gearOff = s.gearOff; maxEnergy = s.maxEn; maxMissiles = s.maxMs;
   itemsGot = s.items; visited = s.visited; redOpen = s.redDoors; playFrames = s.frames;
-  saveTX = s.saveTX; saveTY = s.saveTY; bossesBeaten = s.bosses;
+  saveTX = s.saveTX; saveTY = s.saveTY; bossesBeaten = s.bosses; easyMode = s.easy;
   energy = maxEnergy; missiles = maxMissiles; weapon = 0;
   for (uint8_t i = 0; i < doorN; i++) doors[i].timer = 0;
   orbOpen = 0; brokenN = 0; escapeT = 0;
@@ -522,7 +524,7 @@ void newGame() {
   sandbox = false;
   clearSuspend();
   gear = 0; gearOff = 0; maxEnergy = 6; maxMissiles = 0; itemsGot = 0; visited = 0; redOpen = 0; playFrames = 0;
-  saveTX = saveTY = -1; bossesBeaten = 0;
+  saveTX = saveTY = -1; bossesBeaten = 0;   // (easy mode carries over from the title / last game)
   captureSave(lastSave);
   loadFrom(lastSave);
   writeSave();          // automatic ship checkpoint
@@ -574,6 +576,7 @@ bool onPad() {                      // standing on the ship's pad or a save stat
 
 void hurt(int8_t fromDir, uint8_t dmg) {
   if (invul || mode != M_PLAY) return;
+  if (easyMode) dmg = 1;
   energy = energy > dmg ? energy - dmg : 0;
   beep(180, 60);
   if (energy == 0) { mode = M_DEAD; deadT = 0; cardT = 0; msgT = 0; watch::playTune(TUNE_DEAD, 4); return; }
@@ -758,7 +761,7 @@ void samusStep(int8_t dir, bool firstStep) {
       for (int16_t tx = (x - hw) >> 3; tx <= (x + hw - 1) >> 3; tx++)
         if (hazard(rawTile(tx, ty))) { spike = true; break; }
     if (spike) {
-      if (!invul) { energy = energy > 1 ? energy - 1 : 0; beep(180, 60); invul = 60; if (!energy) { mode = M_DEAD; deadT = 0; watch::playTune(TUNE_DEAD, 4); } }
+      if (!invul && !easyMode) { energy = energy > 1 ? energy - 1 : 0; beep(180, 60); invul = 60; if (!energy) { mode = M_DEAD; deadT = 0; watch::playTune(TUNE_DEAD, 4); } }
       burst(x, y - 10, 8, 4);
       if (safeOK) { sX = safeX; sY = safeY; sVX = sVY = 0; ball = false; crouch = false; spin = false; }
       else { sVY = -JUMP_V; ground = false; }        // nowhere safe yet in this room: bounce up out of it
@@ -935,7 +938,7 @@ void metroidStep(Enemy &e, int16_t samX, int16_t samY) {
       break;
     case 3:                                     // latched on: ride her head and drain
       e.x = samX - 6; e.y = samY - bodyH() - 7;
-      if (++e.t >= MET_DRAIN) { e.t = 0; drainEnergy(); }
+      if (++e.t >= (easyMode ? MET_DRAIN * 2 : MET_DRAIN)) { e.t = 0; drainEnergy(); }
       break;
     default:                                    // knocked away / recovering: float up, then hunt again
       if ((e.t & 3) == 0 && !enemySolidAt(e, e.x, e.y - 1)) e.y--;
@@ -1052,7 +1055,7 @@ void bossDefeated(uint8_t kind) {
   if (kind == EN_RIDLEY) { gear |= G_ICE; itemKind = 'i'; }
   if (kind == EN_MBRAIN) {                  // the alarm: back to the ship before the timer runs out
     for (auto &b : bul) b.live = false;
-    escapeT = ESCAPE_FRAMES;
+    escapeT = easyMode ? ESCAPE_FRAMES + 120 * 30 : ESCAPE_FRAMES;
     showMsg("ESCAPE! GET TO THE SHIP", 120); watch::playTune(TUNE_DEAD, 4); return;
   }
   for (auto &b : bul) b.live = false;
@@ -2094,7 +2097,11 @@ void pauseStep(uint8_t e) {
   if (inputLock) { if (watch::held() == 0) inputLock = 0; return; }
   if (pauseMsgT) pauseMsgT--;
   uint8_t rows[5], n = ownedRows(rows);
-  if ((e & (B_LEFT | B_RIGHT)) && n) { pauseTab ^= 1; beep(700, 8); }
+  if (e & (B_LEFT | B_RIGHT)) {               // tabs: MAP, (ITEMS once she has any), GOAL
+    int8_t d = (e & B_RIGHT) ? 1 : -1;
+    do pauseTab = (pauseTab + 3 + d) % 3; while (pauseTab == 1 && !n);
+    beep(700, 8);
+  }
   if (e & B_DOWN) { mode = M_PLAY; inputLock = 255; return; }
   if (pauseTab == 0) {
     if (e & B_UP) { pauseSel ^= 1; beep(700, 8); }
@@ -2102,6 +2109,8 @@ void pauseStep(uint8_t e) {
       if (pauseSel == 0) { mode = M_PLAY; inputLock = 255; beep(600, 15); }
       else { if (!sandbox) writeSuspend(); watch::exitToClock(); }
     }
+  } else if (pauseTab == 2) {
+    if (e & B_FIRE) { easyMode = !easyMode; beep(easyMode ? 900 : 500, 15); }
   } else {
     if (gearSel >= n) gearSel = 0;
     if (e & B_UP) { gearSel = (gearSel + 1) % n; beep(700, 8); }
@@ -2110,11 +2119,11 @@ void pauseStep(uint8_t e) {
 }
 
 void drawPauseTabs() {
-  uint8_t rows[5];
-  if (!ownedRows(rows)) return;
-  const char *t[2] = {"MAP", "ITEMS"};
-  int16_t x = 82;
-  for (uint8_t i = 0; i < 2; i++) {
+  uint8_t rows[5]; bool items = ownedRows(rows);
+  const char *t[3] = {"MAP", "ITEMS", "GOAL"};
+  int16_t x = items ? 62 : 82;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (i == 1 && !items) continue;
     int16_t w = u8g2.getStrWidth(t[i]);
     if (pauseTab == i) { fillBoxClipped(x - 2, 0, w + 4, 8); u8g2.setDrawColor(0); }
     u8g2.setCursor(x, 6); u8g2.print(t[i]); u8g2.setDrawColor(1);
@@ -2148,11 +2157,49 @@ bool roomHasStation(uint8_t r) {
   return false;
 }
 
+// What to do next, in plain words, from what Samus has and who she's beaten
+void goalText(const char *&a, const char *&b) {
+  if (bossesBeaten & 4) { a = "ESCAPE! RUN BACK TO"; b = "YOUR SHIP AND TOUCH THE PAD"; return; }
+  if ((bossesBeaten & 3) == 3) { a = "THE HATCH UNDER THE JUNCTION"; b = "IS OPEN: ENTER TOURIAN"; return; }
+  if (!(gear & G_MORPH)) { a = "EXPLORE THE SHAFT EAST OF"; b = "THE SHIP. A STATUE WAITS"; return; }
+  if (!(gear & G_MISSILE)) { a = "ROLL INTO THE LITTLE TUNNELS"; b = "AT THE BOTTOM OF THE SHAFT"; return; }
+  if (!(bossesBeaten & 1) && !(gear & G_BOMB)) { a = "RED DOORS NEED A MISSILE."; b = "TRY THE JUNCTION'S WEST DOOR"; return; }
+  if (!(bossesBeaten & 1)) { a = "BOMB THE CRACKED FLOOR AND"; b = "FIND KRAID PAST THE SAVE"; return; }
+  if (!(bossesBeaten & 2)) { a = "KRAID IS BEATEN! NOW RIDLEY:"; b = "THE JUNCTION'S EAST DOOR"; return; }
+  a = "BEAT KRAID AND RIDLEY"; b = "TO OPEN TOURIAN";
+}
+void drawPauseGoal() {
+  u8g2.setCursor(2, 6); u8g2.print(F("GOAL"));
+  const char *a, *b; goalText(a, b);
+  u8g2.setCursor(4, 17); u8g2.print(a);
+  u8g2.setCursor(4, 25); u8g2.print(b);
+  hLineSafe(0, 29, 128);
+  // bosses: K R M, filled when beaten
+  const char BOSS[3] = {'K', 'R', 'M'};
+  u8g2.setCursor(4, 38); u8g2.print(F("BOSSES"));
+  for (uint8_t i = 0; i < 3; i++) {
+    int16_t x = 34 + i * 10;
+    if (bossesBeaten & (1 << i)) { fillBoxClipped(x - 1, 32, 8, 8); u8g2.setDrawColor(0); }
+    else frameSafe(x - 1, 32, 8, 8);
+    u8g2.setCursor(x + 1, 38); u8g2.print(BOSS[i]); u8g2.setDrawColor(1);
+  }
+  u8g2.setCursor(70, 38); u8g2.print(F("ITEMS ")); u8g2.print(itemCount(true)); u8g2.print('/'); u8g2.print(itemCount(false));
+  uint32_t sec = playFrames / 30;
+  u8g2.setCursor(4, 48); u8g2.print(F("TIME "));
+  watch::print2(sec / 3600); u8g2.print(':'); watch::print2((sec / 60) % 60); u8g2.print(':'); watch::print2(sec % 60);
+  // easy mode toggle (OK)
+  fillBoxClipped(2, 53, 124, 10); u8g2.setDrawColor(0);
+  u8g2.setCursor(6, 61); u8g2.print(F("EASY MODE: ")); u8g2.print(easyMode ? F("ON") : F("OFF"));
+  u8g2.setCursor(92, 61); u8g2.print(F("OK=SET"));
+  u8g2.setDrawColor(1);
+}
+
 void drawPause() {
   u8g2.setFont(u8g2_font_4x6_tr);
   frameN++;
   drawPauseTabs();
   if (pauseTab == 1) { drawPauseItems(); return; }
+  if (pauseTab == 2) { drawPauseGoal(); return; }
   u8g2.setCursor(2, 6); u8g2.print(sandbox ? "TEST ROOM" : zoneName(ROOMS[curRoom].zone));
   // map: one cell per screen, 7×5 px
   // one zone at a time, shifted so its explored rooms start at the top-left of the map area
@@ -2168,6 +2215,12 @@ void drawPause() {
     if (r == curRoom && (frameN & 8)) fillBoxClipped(x, y, w, h);
     else frameSafe(x, y, w, h);
     if (roomHasStation(r)) { u8g2.setCursor(x + 2, y + h - 1); if (r != curRoom || !(frameN & 8)) u8g2.print('S'); }
+    for (uint8_t i = 0; i < itemN; i++)          // something still to find here
+      if (!((itemsGot >> i) & 1) && roomAtTile(items[i].tx, items[i].ty) == r && (frameN & 16)) {
+        int16_t dx = x + w - 3, dy = y + 2;
+        u8g2.setDrawColor(r == curRoom && (frameN & 8) ? 0 : 1); plot(dx, dy); plot(dx + 1, dy); plot(dx, dy + 1); plot(dx + 1, dy + 1); u8g2.setDrawColor(1);
+        break;
+      }
   }
   // status
   u8g2.setCursor(56, 16); u8g2.print(ROOMS[curRoom].name);

@@ -172,10 +172,13 @@ RP2040 has headroom, but keep watch games tiny:
     the ship's pad for the ending (ship lifts off; MISSION COMPLETE, time, items x/12). Out of time = game over
     back at the last save.
 - **Zones look different:** Kraid's Lair spiky stone, Norfair lava-lit edges, Tourian riveted metal.
+- **GOAL tab:** the next objective in plain words (from gear and bosses beaten), boss boxes (K R M), items
+  found x/12, play time, and EASY MODE (OK toggles; saved): every hit costs 1, spikes/lava only reset, Metroids
+  drain half as fast, +2 minutes on the escape. The map marks explored rooms that still hold an item.
 - **Title:** NEW GAME over an existing save asks ERASE SAVE? (NO is the default).
 - **Saving:** the ship's pad and `P` stations: Down saves, refills, and makes that station the respawn point.
   Beaten bosses are saved (`bosses` bits) and don't come back. Two save slots written alternately (the newer
-  valid one loads, so a power cut mid-save can't lose the game). Save version 5.
+  valid one loads, so a power cut mid-save can't lose the game). Save version 6.
 - **Suspend:** CLOCK in the pause menu writes a snapshot (room, position, energy, missiles, progress, any escape
   countdown); CONTINUE resumes exactly there. A death, a new game or a station save drops it (death still
   returns to the last station).
@@ -201,7 +204,7 @@ RP2040 has headroom, but keep watch games tiny:
 - **Ice Missiles:** with Ice on, a missile freezes an enemy for ~5 s instead of hurting it (it shivers for the
   last 1.5 s). Frozen enemies are harmless and solid (stand on them; one frozen against Samus doesn't trap her);
   any missile shatters one, the beam glances off. Ice missiles still open red doors. HUD label reads ICE.
-- **Pause:** Left/Right switch MAP / ITEMS tabs, Action moves the cursor, OK picks, Mode resumes. ITEMS lists owned
+- **Pause:** Left/Right switch MAP / ITEMS / GOAL tabs, Action moves the cursor, OK picks, Mode resumes. ITEMS lists owned
   gear with ON/OFF (Ice under Missiles, Bombs under Morph Ball show "--" while the parent is off); the settings
   (`gearOff`) are saved (save version 3). Turning the Morph Ball off inside a tunnel says NEED ROOM.
 - **Chozo statue:** `SPR_CHOZO`, 38×40, traced from NES-style Chozo pixel art (highlight lines + outline); the
@@ -239,6 +242,9 @@ RP2040 has headroom, but keep watch games tiny:
 - **Combat:** short Power Beam (~64 px), missiles (ammo, faster, 4 damage). Zoomers crawl round any surface,
   Skrees dive and burst into shards, Rippers are invincible (freeze one with Ice to stand on it; missiles don't shatter it). Energy starts at 6 (contact = 1), knock-back
   plus ~1.5 s recovery; zero energy → explosion → back at the last save.
+- **GOAL tab:** the next objective in plain words (from gear and bosses beaten), boss boxes (K R M), items
+  found x/12, play time, and EASY MODE (OK toggles; saved): every hit costs 1, spikes/lava only reset, Metroids
+  drain half as fast, +2 minutes on the escape. The map marks explored rooms that still hold an item.
 - **Title:** NEW GAME over an existing save asks ERASE SAVE? (NO is the default).
 - **Saving:** the ship's pad (Down) refills and writes the save to flash (`EEPROM`, checksummed). Title shows
   Continue when a save exists. New game shows the three-panel opening (Down skips).
