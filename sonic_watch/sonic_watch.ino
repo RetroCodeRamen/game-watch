@@ -643,11 +643,45 @@ static inline bool groundPattern(int32_t wx, int32_t wy) {
   }
 }
 
+// Chemical Plant ground, after the user's mockup: a girder walkway. Top rail, a hatched band,
+// riveted plates every 48 px, a lower rail, then open dark space with support posts and a pipe
+// run (no solid fill). Depth is measured down from the walking surface, so it follows slopes.
+static inline bool chemGround(int32_t wx, int16_t d) {
+  int16_t m = (int16_t)(wx % 48); if (m < 0) m += 48;
+  bool plate = m < 10;
+  if (d <= 1) return true;                                       // top rail
+  if (d <= 10 && plate) {                                        // riveted plate
+    if (m == 0 || m == 9 || d == 2 || d == 10) return true;
+    return (m == 4 || m == 5) && (d == 6 || d == 7);             // rivet
+  }
+  if (d >= 3 && d <= 8) return ((wx + d) & 3) == 0;              // hatched band ////
+  if (d == 9 || d == 11) return true;                            // band edge, lower rail
+  if (d >= 13) {
+    if (m == 2 || m == 7) return true;                           // support post (two rails)
+    if ((d == 18 || d == 21) && !(m > 2 && m < 7)) return true;  // pipe run behind the posts
+  }
+  return false;
+}
+// Light dotted railing standing on the walkway behind Sonic (every other pixel, so it stays
+// out of the way: rulebook 7, 168)
+static inline bool chemRail(int32_t wx, int16_t h) {             // h = px above the surface
+  if (h == 14 || h == 8) return (wx & 1) == 0;
+  return (wx & 15) == 0 && h < 14 && (h & 1) == 0;
+}
+
 void drawTerrain() {
   uint8_t *buf = u8g2.getBufferPtr();   // SH1106 full buffer: 8 pages × 128 bytes, LSB = top row
   for (int16_t i = 0; i < 128; i++) {
     int32_t wx = (int32_t)cam + i;
     int16_t g = sy(groundAt(wx));
+    if (g > 63 + 14) continue;
+    if (zone == 1) {
+      for (int16_t y = (g - 14 < 0 ? 0 : g - 14); y < 64; y++) {
+        bool lit = y < g ? chemRail(wx, g - y) : chemGround(wx, y - g);
+        if (lit) buf[(y >> 3) * 128 + i] |= (uint8_t)(1 << (y & 7));
+      }
+      continue;
+    }
     if (g > 63) continue;
     for (int16_t y = (g < 0 ? 0 : g); y < 64; y++) {
       int16_t depth = y - g;
@@ -2478,11 +2512,41 @@ void drawPalm(int16_t x, int16_t baseY) {
   discSafe(tx + 3, ty + 4, 2);
 }
 
+// Chemical Plant scenery (after the mockup), one of three by position: a storage tank with a
+// pipe elbow, a tall lattice tower, or a stack of crates. Outlines only, so Sonic stays readable.
 void drawPipe(int16_t x, int16_t baseY) {
-  frameSafe(x - 5, baseY - 22, 12, 22);
-  hLineSafe(x - 7, baseY - 22, 16);
-  hLineSafe(x - 7, baseY - 12, 16);
-  fillBoxClipped(x - 2, baseY - 5, 7, 5);
+  switch ((x >> 4) % 3) {
+    case 0: {                                   // tank: capsule outline with bands, pipe out the top
+      int16_t l = x - 9, t = baseY - 28;
+      frameSafe(l, t + 3, 19, 25);
+      hLineSafe(l + 2, t + 1, 15); hLineSafe(l + 4, t, 11);       // domed cap
+      plot(l + 1, t + 2); plot(l + 17, t + 2);
+      hLineSafe(l, t + 8, 19); hLineSafe(l, t + 21, 19);          // bands
+      vLineSafe(l + 4, t + 9, 12);                                // highlight
+      vLineSafe(x - 1, t - 12, 12); vLineSafe(x + 2, t - 12, 12); // pipe up…
+      hLineSafe(x - 1, t - 12, 4);
+      hLineSafe(x + 2, t - 15, 18); hLineSafe(x - 1, t - 18, 21); // …and an elbow off to the right
+      plot(x, t - 16); plot(x + 1, t - 17);
+      fillBoxClipped(x - 2, t - 7, 6, 2);                         // flange
+      break;
+    }
+    case 1: {                                   // lattice tower: dotted rails, zig-zag bracing
+      for (int16_t j = 0; j < 80; j += 2) { plot(x - 4, baseY - j); plot(x + 4, baseY - j); }
+      for (int16_t j = 0; j < 80; j++) {
+        int16_t k = j % 16, dx = k < 8 ? k : 15 - k;
+        if (j & 1) plot(x - 3 + dx, baseY - j);
+      }
+      break;
+    }
+    default: {                                  // crates: a big one with a little one on top
+      int16_t l = x - 7, t = baseY - 14;
+      frameSafe(l, t, 14, 14); frameSafe(l + 2, t + 2, 10, 10);
+      lineSafe(l + 3, t + 10, l + 10, t + 3);
+      frameSafe(l + 3, t - 8, 8, 8);
+      lineSafe(l + 4, t - 2, l + 9, t - 7);
+      break;
+    }
+  }
 }
 
 // Casino "neon": a card-suit outline on a pole that blinks every ~0.5 s (no text/logos —
