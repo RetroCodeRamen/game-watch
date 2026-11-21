@@ -946,8 +946,8 @@ static const SpStageDef SP_STAGES[EMERALD_MAX] = {
   //  quotas/leg     bombs  bomb-pattern  speed
   { {  8, 10, 12 },     0,       0,       2.0f },   // 1: rings only — hard to lose
   { { 13, 15, 17 },     2,       1,       2.1f },   // 2: meet the bombs, one or two per leg
-  { { 20, 23, 26 },   255,       3,       2.3f },   // 3: the full mix
-  { { 24, 26, 28 },   255,       4,       2.45f },  // 4: the ultimate-power emerald: dialled up
+  { { 18, 20, 22 },   255,       3,       2.15f },  // 3: the full mix
+  { { 18, 21, 24 },   255,       3,       2.25f },  // 4: hardest, but winnable for an 8-year-old
 };
 // (a macro, not a function: Arduino's generated prototypes would land above the struct)
 #define spStage() (SP_STAGES[emeralds < EMERALD_MAX ? emeralds : EMERALD_MAX - 1])
@@ -966,7 +966,8 @@ int16_t spPattern(int16_t p) {
   // bombWeight = how many of every 6 picks are bomb patterns; bombsPerLeg caps them.
   uint8_t legLeft = st.bombsPerLeg > spGenBombs ? st.bombsPerLeg - spGenBombs : 0;
   uint8_t pick = random(3);
-  if (st.bombWeight && legLeft && (uint8_t)random(6) < st.bombWeight) {
+  bool legOpening = (p % SP_LEG) < 190;        // each leg opens with rings only: footing first
+  if (st.bombWeight && legLeft && !legOpening && (uint8_t)random(6) < st.bombWeight) {
     if (st.bombsPerLeg == 255) pick = 3 + random(3);
     else pick = (legLeft >= 2 && random(2)) ? 4 : 3;   // stage 2: single bombs or one pair
   }
@@ -1010,7 +1011,9 @@ void spGenerate() {
   // Fill the course ahead, leaving a clear run-in after each checkpoint and before the next
   while (spGen < spDist + SP_ZMAX + 20) {
     uint16_t legStart = (spGen / SP_LEG) * SP_LEG, legEnd = legStart + SP_LEG;
-    if (spGen < legStart + 50) { spGen = legStart + 50; continue; }
+    // the opening gets a longer clear run so you find your footing (about 1.8 s), later legs 50
+    uint16_t runIn = legStart == 0 ? 120 : 50;
+    if (spGen < legStart + runIn) { spGen = legStart + runIn; continue; }
     if (spGen > legEnd - 90 || spGen / SP_LEG >= 3) { spGen = legEnd + 50; if (spGen / SP_LEG >= 3) return; continue; }
     if (spGen / SP_LEG != spGenLeg) { spGenLeg = spGen / SP_LEG; spGenBombs = 0; }
     spGen += spPattern((int16_t)spGen) + 24;

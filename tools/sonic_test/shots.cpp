@@ -35,6 +35,43 @@ int main(int argc, char **argv) {
     if (tok == "special") { startSpecial(); trState = TR_NONE; trLevel = 0; continue; }
     if (tok.rfind("at:", 0) == 0) { int x = atoi(tok.c_str() + 3); setPlayerPos(x, groundAt(x) - RAD_STAND); fvx = fvy = 0; cam = x - 64; continue; }   // put Sonic on the ground at world x
     if (tok.rfind("rings:", 0) == 0) { rings = atoi(tok.c_str() + 6); continue; }
+    if (tok.rfind("spbot:", 0) == 0) {      // Special Stage bot: N runs of stage k (emeralds held = k-1)
+      int k = 0, n = 0; sscanf(tok.c_str(), "spbot:%d:%d", &k, &n);
+      int wins = 0, legsDone[4] = {0};
+      for (int run = 0; run < n; run++) {
+        randomSeed(1000 + run * 7919);
+        emeralds = k - 1; startSpecial(); trState = TR_NONE; trLevel = 0;
+        int jumpCool = 0;
+        for (int t = 0; t < 30 * 120 && mode == SPECIAL && spPhase == SP_RUN; t++) {
+          // aim: the nearest ring 8-50 ahead that isn't right beside a bomb; dodge bombs 6-30 ahead
+          float want = spAng; int bestZ = 999; bool bombAhead = false, pairAhead = false;
+          for (auto &o : spObj) {
+            if (!o.live) continue;
+            int z = o.pos - (int)spDist;
+            if (o.kind == SPO_BOMB && z > 4 && z < 26 && fabsf(o.ang - spAng) < 16) bombAhead = true;
+            if (o.kind == SPO_BOMB && z > 4 && z < 14 && fabsf(o.ang - spAng) < 14) pairAhead = true;
+          }
+          for (auto &o : spObj) {
+            if (!o.live || o.kind != SPO_RING) continue;
+            int z = o.pos - (int)spDist;
+            if (z < 8 || z > 50 || z >= bestZ) continue;
+            bool nearBomb = false;
+            for (auto &b : spObj) if (b.live && b.kind == SPO_BOMB && abs(b.pos - o.pos) < 8 && fabsf(b.ang - o.ang) < 14) nearBomb = true;
+            if (!nearBomb) { bestZ = z; want = o.ang; }
+          }
+          if (bombAhead && fabsf(want - spAng) < 16) want = spAng + (spAng > 0 ? -30 : 30);
+          uint8_t h = 0;
+          if (want < spAng - 4) h |= B_LEFT; else if (want > spAng + 4) h |= B_RIGHT;
+          if (jumpCool) jumpCool--;
+          if (pairAhead && !jumpCool && !spAir) { h |= B_MID; jumpCool = 20; }
+          frame(h);
+        }
+        int legs = spLeg; if (spWon) { wins++; legs = 3; }
+        for (int L = 0; L < legs && L < 3; L++) legsDone[L]++;
+      }
+      printf("  stage %d: won %d/%d   legs passed: 1st %d, 2nd %d, 3rd %d\n", k, wins, n, legsDone[0], legsDone[1], legsDone[2]);
+      continue;
+    }
     if (tok == "fight") {                    // boss bot: wait on the side away from the ball, jump at the ship
       int t = 0, jumpT = 0, hits = 0, hp = bossHP, hurtN = 0;
       for (; t < 30 * 90 && bossOn && mode == GAME; t++) {
