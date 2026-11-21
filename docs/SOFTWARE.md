@@ -125,10 +125,10 @@ RP2040 has headroom, but keep watch games tiny:
 - Campaign: Green Hill → Chemical Plant → Casino Night → Scrap Brain (2 acts each + Egg Wrecker).
 - Levels are hand-designed in `sonic_levels.h`: per act a terrain profile (`{x, groundY}` points) and an object list (`{x, h above ground, kind, arg}`) with builders for ring rows/arcs, spike runs, platforms, the loop and the Chemical Plant wavy cross. Act 1 ≈ 5.5–5.9k px, Act 2 ≈ 2.3–2.5k px + boss.
 - Terrain can have **cliffs** (two points 1 px apart): a rise is a wall to jump (≤ 30 px) or spring up (a spring flush against the face, at cliff x − 6 — miss the top and you land back on it), a drop is a ledge. Act 1s span ~3–5 screens of height.
-- **Zoom:** the world is drawn 7/4 bigger than the level data (`ZN`/`ZD`, `Z()` in the sketch) to fit the 32-px
-  Sonic drawn from `assets/sonic_sprite/reference_run.png`. `sonic_levels.h` and its rules stay in design units.
+- **Zoom:** the world is drawn 13/8 bigger than the level data (`ZN`/`ZD`, `Z()` in the sketch) to fit the 24×29
+  Sonic from `assets/sonic_sprite/reference_29.webp`. `sonic_levels.h` and its rules stay in design units.
   Running speed and acceleration were kept at their old (5/4) values on purpose, so the game is no faster on
-  screen; jump, springs, gravity and Sonic's body scale with the world (`VS()`, ×1.4 over the old values) so
+  screen; jump, springs, gravity and Sonic's body scale with the world (`VS()`, ×1.3 over the old values) so
   every ledge is still in reach and jumps take the same time. Loops keep their old pixel size (a bigger loop
   would need more speed). The clock face keeps the small 20×22 Sonic (`sonicMini`).
 - Physics follows Sonic 1 proportions: jump ≈ 38 design px (48 on screen, ~2.2× Sonic's height), yellow spring ≈ 62 (77 on screen), slope pull 0.125·sin, Sonic sticks to the ground over crests and down slopes, side contact with walls/spikes just stops him (no knock-back).

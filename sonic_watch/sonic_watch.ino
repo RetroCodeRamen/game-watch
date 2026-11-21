@@ -189,15 +189,15 @@ uint8_t h8(uint16_t n) {
 
 // Fixed-point physics (1/256 px), 60Hz steps.
 // ZOOM: the world is drawn ZN/ZD bigger than the level data (sonic_levels.h stays in design
-// units). It was 5/4 with the 22-px Sonic; the 32-px Sonic (from the reference drawing) needs
-// 7/4. Running speed and acceleration were deliberately kept at their 5/4 values (the game was
+// units). It was 5/4 with the 22-px Sonic; the 29-px Sonic (assets/sonic_sprite/reference_29)
+// needs 13/8 (29/22 x 5/4). Running speed and acceleration were deliberately kept at their 5/4 values (the game was
 // already fast enough on screen): ZV() still scales by 5/4. Everything vertical — jump,
 // springs, gravity, Sonic's body — scales with the world by VS() so every ledge is still in
 // reach and a jump takes the same time. Z() scales a design length.
-#define ZN 7
-#define ZD 4
+#define ZN 13
+#define ZD 8
 #define Z(v) ((int16_t)(((int32_t)(v) * ZN) / ZD))
-// Vertical / size values tuned at the old 5/4 zoom, scaled to the current one (×7/5)
+// Vertical / size values tuned at the old 5/4 zoom, scaled to the current one (×1.3)
 #define VS(v) ((v) * ZN * 4 / (ZD * 5))
 // Watch-tuned: snappy accel, firmer coast (less slippery), hard skid ≈11× accel.
 // Design values (pre-zoom) in comments; every speed/accel below is design × 5/4.
@@ -221,7 +221,7 @@ static const int16_t CLIFF_STEP = VS(7);
 // In the air the Genesis wall sensors sit at Sonic's middle, so a ledge whose top is level
 // with his body still catches him (floor sensors pop him up onto it). Same leniency here.
 static const int16_t CLIFF_STEP_AIR = VS(12);   // ground rising more than this within Sonic's half-width = a wall
-static const int16_t RAD_STAND = VS(6), RAD_ROLL = VS(6) - 1;   // feet below centre (8 / 7)
+static const int16_t RAD_STAND = VS(6), RAD_ROLL = VS(6) - 1;   // feet below centre (7 / 6)
 // Slope pull per px of height change over 10 px (slopeAt). Genesis proportions to our ACCEL:
 // the max slope you can walk up from rest is ~21° (as in Sonic 1); rolling 2.5× down, 0.625× up.
 static const fx SLOPE_RUN     = 10;
@@ -1944,7 +1944,7 @@ void gameStepInner(uint8_t e) {
   if (bossOn) {
     cam = arenaOrigin;
     // Floor stays at the bottom; the view rises to keep Sonic in sight above the Egg Mobile
-    int16_t want = py - 30;
+    int16_t want = py - 26;
     if (want > 0) want = 0;
     if (camY > want) camY -= (camY - want + 1) / 2;
     else if (camY < want) camY += (want - camY + 3) / 4;
@@ -1968,7 +1968,7 @@ void gameStepInner(uint8_t e) {
       if (cam < 0) cam = 0;
       // Vertical follow — keeps Sonic framed through tall loops
       int16_t psy = py - camY;
-      if (psy < 34) camY = py - 34;      // his head stays below the HUD
+      if (psy < 32) camY = py - 32;      // his head stays below the HUD
       if (psy > 48) camY = py - 48;
     }
   }
