@@ -1231,20 +1231,30 @@ void spDrawSonic() {
     u8g2.setDrawColor(1);
     return;
   }
-  bool st = (animFrame >> 1) & 1;               // running stride
-  // shoes kick up alternately, legs
-  P(-2, 5, x, y); P(-2, st ? 0 : 3, x2, y2); lineSafe(x, y, x2, y2); P(-3, st ? 0 : 3, x3, y3); hLineSafe(x3 - 1, y3, 3);
-  P(2, 5, x, y);  P(2, st ? 3 : 0, x2, y2);  lineSafe(x, y, x2, y2); P(3, st ? 3 : 0, x3, y3); hLineSafe(x3 - 1, y3, 3);
-  // body, swinging arms
-  P(0, 7, x, y); discSafe(x, y, 4);
-  P(-3, 8, x, y); P(-6, st ? 6 : 9, x2, y2); lineSafe(x, y, x2, y2);
-  P(3, 8, x, y);  P(6, st ? 9 : 6, x2, y2);  lineSafe(x, y, x2, y2);
-  // head with two back quills sweeping out and down, and the ears
-  P(0, 13, x, y); discSafe(x, y, 6);
-  P(-2, 13, x, y); P(-3, 10, x2, y2); P(-8, 9, x3, y3); fillTriSafe(x, y, x2, y2, x3, y3);
-  P(2, 13, x, y);  P(3, 10, x2, y2);  P(8, 9, x3, y3);  fillTriSafe(x, y, x2, y2, x3, y3);
-  P(-3, 16, x, y); P(-1, 16, x2, y2); P(-3, 19, x3, y3); fillTriSafe(x, y, x2, y2, x3, y3);
-  P(3, 16, x, y);  P(1, 16, x2, y2);  P(3, 19, x3, y3);  fillTriSafe(x, y, x2, y2, x3, y3);
+  // Running: the back-view bitmap (sonic_sprites.h, from reference_special.png), rotated to
+  // stand on the pipe wall, mirrored every other step for the stride. Each screen pixel near him
+  // is mapped back into the bitmap, so the rotation leaves no holes; a dark halo first keeps
+  // him readable over the pipe's lines.
+  bool st = (animFrame >> 1) & 1;
+  auto lit = [&](int16_t c, int16_t r) -> bool {
+    if (c < 0 || c >= SPB_W || r < 0 || r >= SPB_H) return false;
+    if (st) c = SPB_W - 1 - c;
+    return pgm_read_byte(&spBack[0][r * SPB_ROWBYTES + (c >> 3)]) & (1 << (c & 7));
+  };
+  int16_t R = SPB_H / 2 + 4;
+  int16_t cx = (int16_t)lroundf(bx + ux * SPB_H / 2), cy = (int16_t)lroundf(by + uy * SPB_H / 2);
+  for (uint8_t pass = 0; pass < 2; pass++) {
+    u8g2.setDrawColor(pass);
+    for (int16_t Y = cy - R; Y <= cy + R; Y++)
+      for (int16_t X = cx - R; X <= cx + R; X++) {
+        float dx = X - bx, dy = Y - by;
+        float a = dx * rx + dy * ry, b = dx * ux + dy * uy;      // along the wall, up from his feet
+        int16_t c = (int16_t)floorf(a + SPB_W / 2.0f), r = SPB_H - 1 - (int16_t)floorf(b);
+        bool on = pass ? lit(c, r) : (lit(c, r) || lit(c - 1, r) || lit(c + 1, r) || lit(c, r - 1) || lit(c, r + 1));
+        if (on) plot(X, Y);
+      }
+  }
+  u8g2.setDrawColor(1);
 }
 
 void spDrawEmeraldGlyph(int16_t x, int16_t y, int16_t r, bool filled) {

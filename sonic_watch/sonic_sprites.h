@@ -474,6 +474,42 @@ static const uint8_t eggShip[2][156] PROGMEM = {
     0x00, 0x00, 0xE0, 0x00, 0x00, 0x00,  //                      ###
   },
 };
+// Special Stage Sonic from behind (special_back.txt):
+static const uint8_t SPB_W = 19;
+static const uint8_t SPB_H = 28;
+static const uint8_t SPB_ROWBYTES = 3;
+static const uint8_t spBack[1][84] PROGMEM = {
+  { // back
+    0x80, 0x01, 0x00,  //        ##
+    0xC8, 0x23, 0x00,  //    #  ####   #
+    0xD8, 0x37, 0x00,  //    ## ##### ##
+    0xB0, 0x1B, 0x00,  //     ## ### ##
+    0x7C, 0x3D, 0x00,  //   ##### # ####
+    0xFE, 0x7F, 0x00,  //  ##############
+    0xDF, 0xFF, 0x00,  // ##### ##########
+    0xCF, 0xE7, 0x00,  // ####  #####  ###
+    0xF3, 0x9B, 0x01,  // ##  ###### ##  ##
+    0xB8, 0x3D, 0x00,  //    ### ## ####
+    0x7C, 0x3D, 0x00,  //   ##### # ####
+    0x7E, 0x7C, 0x00,  //  ######   #####
+    0xCE, 0x66, 0x00,  //  ###  ## ##  ##
+    0xD6, 0x57, 0x02,  //  ## # ##### # #  #
+    0xE8, 0xAF, 0x00,  //    # ####### # #
+    0x64, 0x4D, 0x01,  //   #  ## # ##  # #
+    0xAA, 0x8B, 0x01,  //  # # # ### #   ##
+    0x85, 0x45, 0x03,  // # #    ## #   # ##
+    0x0B, 0x8D, 0x02,  // ## #    # ##   # #
+    0x85, 0x1C, 0x01,  // # #    #  ###   #
+    0x82, 0x12, 0x06,  //  #     # #  #    ##
+    0x80, 0x2E, 0x00,  //        # ### #
+    0x60, 0x11, 0x00,  //      ## #   #
+    0xC0, 0x25, 0x00,  //       ### #  #
+    0x60, 0x2D, 0x00,  //      ## # ## #
+    0x10, 0x19, 0x00,  //     #   #  ##
+    0x18, 0x01, 0x00,  //    ##   #
+    0xF0, 0x01, 0x00,  //     #####
+  },
+};
 enum : uint8_t {
   SPR_STAND = 0, SPR_BLINK = 1, SPR_RUN0 = 2, SPR_RUN1 = 3, SPR_RUN2 = 4, SPR_RUN3 = 5, SPR_FAST0 = 6, SPR_FAST1 = 7, SPR_SKID = 8, SPR_ROLL0 = 9, SPR_ROLL1 = 10, SPR_ROLL2 = 11, SPR_ROLL3 = 12,
   SPR_COUNT = 13
