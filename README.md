@@ -48,6 +48,11 @@ Same hardware, same watch platform underneath, two firmwares. One RP2040 per wri
 ## Sonic Watch
 
 <p align="center">
+  <img src="docs/img/sonic_demo.gif" alt="Sonic Watch demo: clock face, title, Green Hill, Chemical Plant, Special Stage and the Egg Wrecker" width="420">
+  <br><sub>Clock face → title → Green Hill → Chemical Plant → Special Stage → Egg Wrecker. Real game code, real speed.</sub>
+</p>
+
+<p align="center">
   <img src="docs/img/sonic_title.png" alt="Sonic title screen" width="380">
   &nbsp;
   <img src="docs/img/sonic_green_hill.png" alt="Green Hill loop" width="380">
@@ -106,6 +111,11 @@ A spin-roll ends when you tap Left/Right or hit a wall, not when you jump. That'
 ---
 
 ## Metroid Watch
+
+<p align="center">
+  <img src="docs/img/metroid_demo.gif" alt="Metroid Watch demo: clock face, title, story, landing, Brinstar and Kraid" width="420">
+  <br><sub>Clock face → title → story → touchdown on Zebes → Brinstar → Kraid. Real game code, real speed.</sub>
+</p>
 
 <p align="center">
   <img src="docs/img/metroid_title.png" alt="Metroid title screen" width="380">
@@ -227,8 +237,8 @@ people:
 - **On the watch itself.** Over USB the watch takes fake button presses (`P <buttons> <ms>`) and reports its
   frame times (`F`), so performance gets measured on the real hardware, not guessed.
 - **GitHub Actions** builds both firmwares and runs all of the above on every push.
-- **These screenshots** come straight from the simulators: `./tools/readme_shots.sh` rebuilds every picture in
-  this README from the current code.
+- **These screenshots and GIFs** come straight from the simulators: `./tools/readme_shots.sh` rebuilds every
+  picture and `./tools/readme_gifs.sh` re-records both demo reels from the current code.
 
 ```bash
 ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check && ./tools/metroid_test/out/bot

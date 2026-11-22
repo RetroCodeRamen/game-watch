@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
   std::string tok; uint8_t prev = 0; int every = 0, fcount = 0;
   while (ss >> tok) {
     if (tok == "shot") { dump(); continue; }
-    if (tok.rfind("face:", 0) == 0) { for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); u8g2.clearBuffer(); drawView(); dump(); continue; }   // the clock face
+    if (tok.rfind("face:", 0) == 0) { int n = atoi(tok.c_str() + 5); for (int i = 1; i <= n; i++) { stepWatchFace(); g_ms += 33; if (every && i % every == 0) { u8g2.clearBuffer(); drawView(); dump(); } } if (!every) { u8g2.clearBuffer(); drawView(); dump(); } continue; }   // the clock face
     if (tok.rfind("en:", 0) == 0) { energy = atoi(tok.c_str() + 3); continue; }
     if (tok == "god") { god = true; continue; }
     if (tok.rfind("visit:", 0) == 0) { visited |= strtoull(tok.c_str() + 6, nullptr, 16); continue; }   // mark rooms explored (hex bit mask by room index)

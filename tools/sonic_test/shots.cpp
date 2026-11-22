@@ -9,6 +9,7 @@
 unsigned long g_ms; uint8_t watch::g_held; int watch::g_tune;
 static int shotN = 0; static std::string prefix = "s";
 static bool faceView = false;
+static int recEvery = 0, recLeft = 0, recCount = 0;   // "rec:<every>:<max>" dumps every Nth frame (GIF recording)
 void dump() {
   u8g2.clearBuffer(); if (faceView) drawView(); else gameDraw();
   char fn[512]; snprintf(fn, sizeof fn, "%s_%03d.pbm", prefix.c_str(), shotN++);
@@ -17,10 +18,14 @@ void dump() {
   fclose(f);
 }
 uint8_t prevHeld;
+void recTick() {
+  if (recEvery && recLeft > 0 && ++recCount % recEvery == 0) { uint8_t iv = invul; if (iv <= 2) invul = 0; dump(); invul = iv; recLeft--; }
+}
 void frame(uint8_t held) {
   watch::g_held = held; uint8_t e = held & ~prevHeld; prevHeld = held;
   g_ms += 33; if (watch::g_tune > 0) watch::g_tune--;
   gameUpdate(e); lives = 99;
+  recTick();
 }
 int main(int argc, char **argv) {
   if (argc > 2) prefix = argv[2];
@@ -31,7 +36,8 @@ int main(int argc, char **argv) {
     if (tok == "save") { SonicSave v; bool ok = readSave(); v = lastSave; printf("  save: %s zone=%d act=%d starX=%d t=%u lives=%d em=%d score=%lu  title shows save=%d\n", ok ? "yes" : "no", v.zone, v.act, v.starX, v.starTime, v.lives, v.emeralds, (unsigned long)v.score, haveSave); continue; }
     if (tok == "st") { printf("  zone=%d act=%d px=%d py=%d shield=%d invul=%d rings=%d mode=%d gnd=%d starX=%d t=%u lives=%d\n", zone, act, px, py, shieldOn, invul, rings, mode, onGround, starX, actFrames, lives); continue; }
     if (tok == "shot") { uint8_t iv = invul; invul = 0; dump(); invul = iv; continue; }   // never catch him mid-blink
-    if (tok.rfind("face:", 0) == 0) { faceView = true; for (int i = atoi(tok.c_str() + 5); i > 0; i--) stepWatchFace(); dump(); faceView = false; continue; }
+    if (tok.rfind("rec:", 0) == 0) { sscanf(tok.c_str(), "rec:%d:%d", &recEvery, &recLeft); recCount = 0; continue; }
+    if (tok.rfind("face:", 0) == 0) { faceView = true; for (int i = atoi(tok.c_str() + 5); i > 0; i--) { stepWatchFace(); g_ms += 33; recTick(); } if (!recEvery) dump(); faceView = false; continue; }
     if (tok == "title") { gameStart(); for (int i = 0; i < 40; i++) frame(0); continue; }
     if (tok.rfind("act:", 0) == 0) { int z, a; sscanf(tok.c_str(), "act:%d:%d", &z, &a); gameStart(); startGame(); startAct(z, a); trState = TR_NONE; trLevel = 0; continue; }
     if (tok == "special") { startSpecial(); trState = TR_NONE; trLevel = 0; continue; }
