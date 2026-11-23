@@ -40,6 +40,7 @@ Same hardware, same watch platform underneath, two firmwares. One RP2040 per wri
 | **Watch platform** (`WatchCore`) | Done. Clock, date, alarm, set screens, sound on/off, screen dimming, time set over USB. |
 | **Metroid Watch** | Full campaign playable start to credits. In playtesting on the real watch. |
 | **Sonic Watch** | 4 zones, 8 acts, bosses, special stages, all playable. Paused while Metroid gets finished, then it gets the same deep review. |
+| **Breach Watch** | New, for a neighbor. A Doom-style first-person shooter: the engine and a test room are in. No deadline. |
 | **Testing** | Every push builds both firmwares and runs a room checker, a level checker and a physics bot on GitHub. |
 | **Deadline** | December 25. Non-negotiable. Santa does not do extensions. |
 
@@ -243,6 +244,7 @@ people:
 ```bash
 ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check && ./tools/metroid_test/out/bot
 ./tools/sonic_test/build.sh   && ./tools/sonic_test/out/check
+./tools/breach_test/build.sh  && ./tools/breach_test/out/check
 ```
 
 ---
@@ -264,6 +266,7 @@ people:
 | --- | --- |
 | `libraries/WatchCore/` | The shared watch: buttons, clock, alarm, set screens, sound, dimming, USB time set |
 | `sonic_watch/` | Clock face + Sonic |
+| `breach_watch/` | Clock face + Breach, a first-person shooter (engine, art and the test room) |
 | `metroid_watch/` | Clock face + Metroid (world in `metroid_world.h`, design notes in the folder) |
 | `scripts/` | `flash.sh` (build + upload + set the clock), `settime.sh` |
 | `tools/` | Simulators, checkers, the physics bot, the screenshot script |

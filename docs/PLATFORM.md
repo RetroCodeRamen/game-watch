@@ -32,6 +32,7 @@ Layers 1–4 are **`libraries/WatchCore`**, shared by every title. Layer 5 — p
 | Sketch | Genre | Notes |
 |--------|-------|-------|
 | `sonic_watch/` | Platformer | 4 zones × 2 acts, loops, springs, Egg Wrecker bosses, Special Stages |
+| `breach_watch/` | First-person shooter (working title) | Raycaster engine + test room: doors, keycard, switch, 3 monsters, 2 guns |
 | `metroid_watch/` | Exploration adventure | 4 zones, 29 rooms, ability gates, Kraid / Ridley / Mother Brain, escape, saves + suspend |
 
 Flash either sketch onto the same hardware: `./scripts/flash.sh sonic_watch` or `./scripts/flash.sh metroid_watch`. See [ADDING_A_GAME.md](ADDING_A_GAME.md).
