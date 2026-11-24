@@ -18,8 +18,8 @@ jobs:
         run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries sonic_watch
       - name: Compile Metroid Watch
         run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries metroid_watch
-      - name: Compile Breach Watch
-        run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries breach_watch
+      - name: Compile Hellgate Watch
+        run: arduino-cli compile --fqbn rp2040:rp2040:waveshare_rp2040_zero --libraries libraries hellgate_watch
       - name: Metroid room checker (reachability, softlocks, gates)
         run: ./tools/metroid_test/build.sh && ./tools/metroid_test/out/check
       - name: Metroid physics bot (real reachability and backtracking, ~3 min)
@@ -28,5 +28,5 @@ jobs:
         run: ./tools/sonic_test/build.sh && ./tools/sonic_test/out/check
       - name: Sonic reaction-time check (no blind or unwarned hazards at speed)
         run: ./tools/sonic_test/out/sight | tail -1 | grep -q "^0 hazard"
-      - name: Breach map and art checker
-        run: ./tools/breach_test/build.sh && ./tools/breach_test/out/check
+      - name: Hellgate map and art checker
+        run: ./tools/hellgate_test/build.sh && ./tools/hellgate_test/out/check

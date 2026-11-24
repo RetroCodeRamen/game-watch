@@ -1,4 +1,4 @@
-// Breach map and art checker: every map closed, every door between two walls, the art well-formed,
+// Hellgate map and art checker: every map closed, every door between two walls, the art well-formed,
 // and everything reachable from the start once doors, the switch and the keycard are used.
 #include "pp.cpp"
 #include <stdio.h>
@@ -13,9 +13,9 @@ void checkMap(const char *name, const char *const *rows, uint8_t h) {
     if (strlen(rows[y]) != w) FAIL("%s: row %d is %zu wide, not %d", name, y, strlen(rows[y]), w);
     for (int x = 0; x < w; x++) {
       char c = rows[y][x];
-      if (!strchr("#BSXDKLPhsoackG+.", c)) FAIL("%s: unknown tile '%c' at %d,%d", name, c, x, y);
+      if (!strchr("#BRFZSXDKLPtmfackG+.", c)) FAIL("%s: unknown tile '%c' at %d,%d", name, c, x, y);
       bool edge = !x || !y || x == w - 1 || y == h - 1;
-      if (edge && !strchr("#BSX", c)) FAIL("%s: the edge is open at %d,%d", name, x, y);
+      if (edge && !strchr("#BRFZSX", c)) FAIL("%s: the edge is open at %d,%d", name, x, y);
       if (c == 'P') starts++;
     }
   }
@@ -42,7 +42,7 @@ void checkMap(const char *name, const char *const *rows, uint8_t h) {
         char t = rows[ny][nx];
         if (t == 'S') sw = true;
         if (t == 'X') exitSeen = true;
-        if (strchr("#BSX", t)) continue;
+        if (strchr("#BRFZSX", t)) continue;
         if (t == 'L' && !sw) continue;
         if (t == 'K' && !key) continue;
         if (t == 'k') key = true;
@@ -51,13 +51,13 @@ void checkMap(const char *name, const char *const *rows, uint8_t h) {
     }
   }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
-    if (strchr("hsoackG+.", rows[y][x]) && !seen[y][x]) FAIL("%s: %d,%d ('%c') can't be reached", name, x, y, rows[y][x]);
+    if (strchr("tmfackG+.", rows[y][x]) && !seen[y][x]) FAIL("%s: %d,%d ('%c') can't be reached", name, x, y, rows[y][x]);
   if (!exitSeen) FAIL("%s: the exit can't be reached", name);
   printf("%s: %dx%d, %d doors, %d monsters\n", name, w, h, nDoors, totalKills);
 }
 int main() {
   initTables();
-  if (!artOk) FAIL("a sprite or texture has the wrong size (check ART[] against breach_art.h)");
+  if (!artOk) FAIL("a sprite or texture has the wrong size (check ART[] against hellgate_art.h)");
   for (int i = 0; i < SP_N; i++) if (strlen(ART[i].art) != (size_t)ART[i].w * ART[i].h) FAIL("sprite %d is %zu chars, expected %dx%d", i, strlen(ART[i].art), ART[i].w, ART[i].h);
   checkMap("TEST_ROOM", TEST_ROOM, TEST_ROOM_H);
   printf(fails ? "%d problem(s)\n" : "all checks passed\n", fails);

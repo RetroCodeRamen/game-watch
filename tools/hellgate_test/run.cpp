@@ -1,4 +1,4 @@
-// Host runner: plays the real breach_watch.ino with scripted buttons and dumps screenshots.
+// Host runner: plays the real hellgate_watch.ino with scripted buttons and dumps screenshots.
 //   out/run "<script>" [prefix]
 // script tokens: <frames>:<buttons>   buttons: L R U(forward) D(back, Mode) F(fire/use, OK) . = none
 //   "shot" dumps the frame · "every:N" dumps every N frames · "face:N" animates and dumps the clock face
@@ -26,7 +26,7 @@ void frame(uint8_t held, uint8_t prev) {
 void state(int t) {
   printf("t=%d mode=%d x=%.2f y=%.2f ang=%.0f hp=%u ammo=%u/%u wpn=%u key=%d kills=%u/%u\n", t, mode, px / 65536.0, py / 65536.0,
          (pAng >> 4) * 360.0 / 1024, health, bullets, shells, weapon, haveKey, kills, totalKills);
-  for (int i = 0; i < nEnts; i++) if (ents[i].live && ents[i].kind <= K_DRONE)
+  for (int i = 0; i < nEnts; i++) if (ents[i].live && ents[i].kind <= K_FIEND)
     printf("  enemy %d kind=%d st=%d hp=%u at %.2f,%.2f\n", i, ents[i].kind, ents[i].st, ents[i].hp, ents[i].x / 65536.0, ents[i].y / 65536.0);
   for (int i = 0; i < nDoors; i++) printf("  door %d (%d,%d) kind=%d st=%d open=%.2f\n", i, doors[i].tx, doors[i].ty, doors[i].kind, doors[i].st, doors[i].open / 65536.0);
 }

@@ -1,4 +1,4 @@
-// Breach Watch — a Doom-style first-person shooter for the Game Watch (working title).
+// Hellgate Watch — a first-person demon shooter for the Game Watch, in the spirit of the 90s classics.
 //
 // Engine: a grid raycaster in 16.16 fixed point that writes straight into the SH1106 page buffer.
 //   - walls are 16x16 one-bit textures; walls facing north/south are dithered darker so corners read
@@ -8,12 +8,12 @@
 // View 128x56 (seven display pages) above an 8 px status bar. ~30 FPS from WatchCore's frame loop.
 //
 // Clock, alarm, set screens and buttons live in libraries/WatchCore.
-// Host simulator and screenshots: tools/breach_test (build.sh, then out/run "<script>").
+// Host simulator and screenshots: tools/hellgate_test (build.sh, then out/run "<script>").
 
 #include <Arduino.h>
 #include <WatchCore.h>
-#include "breach_art.h"
-#include "breach_maps.h"
+#include "hellgate_art.h"
+#include "hellgate_maps.h"
 
 typedef int32_t q16;   // 16.16 fixed point; 1.0 = one map tile
 
@@ -51,35 +51,36 @@ const int32_t FOCAL = 91;                           // px; the horizontal field 
 const q16 ONE = 65536;
 const q16 PLANE = (64L << 16) / FOCAL;              // camera plane half-width, ~0.70
 const q16 BIG = 1L << 26;
+const int16_t GUN_OFFSET = 26;                      // px right of centre
 const q16 FLOOR_DOTS_MAX = 5 * ONE;                 // no floor dots beyond this (they only shimmer)
 
 // ---- tiles ----
-enum : uint8_t { T_EMPTY, T_TECH, T_BRICK, T_SWITCH, T_SWITCH_ON, T_EXIT, T_EXIT_ON,
+enum : uint8_t { T_EMPTY, T_TECH, T_BRICK, T_STONE, T_FLESH, T_SIGIL, T_SWITCH, T_SWITCH_ON, T_EXIT, T_EXIT_ON,
                  TX_DOOR, TX_KEYDOOR, TX_SHUTTER, TX_JAMB, TX_N };
 const uint8_t T_DOORBIT = 0x80;                     // tile = 0x80 | door index
 enum : uint8_t { DK_NORMAL, DK_KEY, DK_SHUTTER };
 enum : uint8_t { DS_CLOSED, DS_OPENING, DS_OPEN, DS_CLOSING };
 
 // ---- things ----
-enum : uint8_t { K_HUSK, K_SPIT, K_DRONE, K_MEDKIT, K_CLIP, K_SHELLS, K_KEY, K_SCATTER };
+enum : uint8_t { K_THRALL, K_MAW, K_FIEND, K_MEDKIT, K_CLIP, K_SHELLS, K_KEY, K_SCATTER };
 enum : uint8_t { ST_IDLE, ST_CHASE, ST_ATTACK, ST_PAIN, ST_DIE, ST_DEAD };
 const EnemyDef DEFS[3] = {
   //  hp  speed       radius     height     elev       range      keep away  dmg cool windup ranged
-  {   30, ONE * 45 / 1000, ONE * 3 / 10, ONE * 78 / 100, 0,         ONE * 9 / 10, ONE * 6 / 10, 8, 30, 8,  false },  // Husk
-  {   24, ONE * 30 / 1000, ONE * 3 / 10, ONE * 50 / 100, 0,         ONE * 7,      ONE * 5 / 2,  10, 50, 14, true },   // Spitter
-  {   16, ONE * 60 / 1000, ONE / 4,      ONE * 38 / 100, ONE * 3 / 10, ONE * 6,   ONE * 2,      5, 36, 8,  true },   // Drone
+  {   30, ONE * 45 / 1000, ONE * 3 / 10, ONE * 78 / 100, 0,         ONE * 9 / 10, ONE * 6 / 10, 8, 30, 8,  false },  // Thrall
+  {   24, ONE * 30 / 1000, ONE * 3 / 10, ONE * 50 / 100, 0,         ONE * 7,      ONE * 5 / 2,  10, 50, 14, true },   // Maw
+  {   16, ONE * 60 / 1000, ONE / 4,      ONE * 38 / 100, ONE * 3 / 10, ONE * 6,   ONE * 2,      5, 36, 8,  true },   // Fiend
 };
 
 // ---- sprites ----
-enum : uint8_t { SP_HUSK_A, SP_HUSK_B, SP_HUSK_ATK, SP_SPIT_A, SP_SPIT_B, SP_SPIT_ATK,
-                 SP_DRONE_A, SP_DRONE_B, SP_DRONE_ATK, SP_GLOB, SP_BOLT,
+enum : uint8_t { SP_THRALL_A, SP_THRALL_B, SP_THRALL_ATK, SP_MAW_A, SP_MAW_B, SP_MAW_ATK,
+                 SP_FIEND_A, SP_FIEND_B, SP_FIEND_ATK, SP_GLOB, SP_BOLT,
                  SP_MEDKIT, SP_CLIP, SP_SHELLS, SP_KEY, SP_SCATTER_PICK,
                  SP_PISTOL, SP_SCATTER, SP_FLASH, SP_N };
 const ArtSpr ART[SP_N] = {
-  {16, 20, HUSK_A}, {16, 20, HUSK_B}, {16, 20, HUSK_ATK},
-  {16, 13, SPIT_A}, {16, 13, SPIT_B}, {16, 13, SPIT_ATK},
-  {14, 12, DRONE_A}, {14, 12, DRONE_B}, {14, 12, DRONE_ATK},
-  {6, 6, GLOB_ART}, {4, 4, BOLT_ART},
+  {16, 20, THRALL_A}, {16, 20, THRALL_B}, {16, 20, THRALL_ATK},
+  {16, 14, MAW_A}, {16, 14, MAW_B}, {16, 14, MAW_ATK},
+  {16, 12, FIEND_A}, {16, 12, FIEND_B}, {16, 12, FIEND_ATK},
+  {7, 7, GLOB_ART}, {4, 4, BOLT_ART},
   {12, 8, MEDKIT_ART}, {8, 6, CLIP_ART}, {12, 7, SHELLS_ART}, {10, 9, KEY_ART}, {21, 6, SCATTER_PICKUP_ART},
   {22, 20, PISTOL_ART}, {22, 18, SCATTER_ART}, {12, 8, FLASH_ART},
 };
@@ -164,6 +165,7 @@ void initTables() {
   for (uint8_t i = 0; i < SP_N; i++) buildSprite(spr[i], ART[i]);
   memset(tex, 0, sizeof tex);
   buildTex(T_TECH, TX_TECH_ART);   buildTex(T_BRICK, TX_BRICK_ART);
+  buildTex(T_STONE, TX_STONE_ART); buildTex(T_FLESH, TX_FLESH_ART); buildTex(T_SIGIL, TX_SIGIL_ART);
   buildTex(T_SWITCH, TX_SWITCH_ART); buildTex(T_SWITCH_ON, TX_SWITCH_ON_ART);
   buildTex(T_EXIT, TX_EXIT_ART);   buildTex(T_EXIT_ON, TX_EXIT_ON_ART);
   buildTex(TX_DOOR, TX_DOOR_ART);  buildTex(TX_KEYDOOR, TX_KEYDOOR_ART);
@@ -180,7 +182,7 @@ void addEnt(uint8_t kind, uint8_t tx, uint8_t ty) {
   memset(&e, 0, sizeof e);
   e.live = true; e.kind = kind; e.st = ST_IDLE;
   e.x = ((q16)tx << 16) + ONE / 2; e.y = ((q16)ty << 16) + ONE / 2;
-  if (kind <= K_DRONE) { e.hp = DEFS[kind].hp; totalKills++; }
+  if (kind <= K_FIEND) { e.hp = DEFS[kind].hp; totalKills++; }
 }
 
 void loadMap(const char *const *rows, uint8_t h) {
@@ -197,6 +199,9 @@ void loadMap(const char *const *rows, uint8_t h) {
       switch (c) {
         case '#': t = T_TECH; break;
         case 'B': t = T_BRICK; break;
+        case 'R': t = T_STONE; break;
+        case 'F': t = T_FLESH; break;
+        case 'Z': t = T_SIGIL; break;
         case 'S': t = T_SWITCH; break;
         case 'X': t = T_EXIT; break;
         case 'D': case 'K': case 'L':
@@ -208,9 +213,9 @@ void loadMap(const char *const *rows, uint8_t h) {
           }
           break;
         case 'P': px = ((q16)x << 16) + ONE / 2; py = ((q16)y << 16) + ONE / 2; break;
-        case 'h': addEnt(K_HUSK, x, y); break;
-        case 's': addEnt(K_SPIT, x, y); break;
-        case 'o': addEnt(K_DRONE, x, y); break;
+        case 't': addEnt(K_THRALL, x, y); break;
+        case 'm': addEnt(K_MAW, x, y); break;
+        case 'f': addEnt(K_FIEND, x, y); break;
         case '+': addEnt(K_MEDKIT, x, y); break;
         case 'a': addEnt(K_CLIP, x, y); break;
         case 'c': addEnt(K_SHELLS, x, y); break;
@@ -423,9 +428,9 @@ bool project(q16 x, q16 y, q16 &depth, int16_t &sx) {
 }
 
 uint8_t enemySprite(const Ent &e) {
-  uint8_t base = e.kind == K_HUSK ? SP_HUSK_A : e.kind == K_SPIT ? SP_SPIT_A : SP_DRONE_A;
+  uint8_t base = e.kind == K_THRALL ? SP_THRALL_A : e.kind == K_MAW ? SP_MAW_A : SP_FIEND_A;
   if (e.st == ST_ATTACK) return base + 2;
-  if (e.kind == K_DRONE) return base + ((frameN >> 2) & 1);     // rotors spin even when still
+  if (e.kind == K_FIEND) return base + ((frameN >> 2) & 1);     // wings beat even when hovering
   return base + ((e.anim >> 3) & 1);
 }
 
@@ -455,7 +460,7 @@ void drawThings(uint8_t *buf) {
       continue;
     }
     const Ent &e = ents[it.idx];
-    if (e.kind <= K_DRONE) {
+    if (e.kind <= K_FIEND) {
       const EnemyDef &d = DEFS[e.kind];
       uint8_t sq = 16;
       q16 elev = d.elev;
@@ -505,7 +510,7 @@ bool occupied(const Door &d) {
   if (qabs(px - cx) < lim && qabs(py - cy) < lim) return true;
   for (uint8_t i = 0; i < nEnts; i++) {
     const Ent &e = ents[i];
-    if (e.live && e.kind <= K_DRONE && e.st != ST_DEAD && qabs(e.x - cx) < lim && qabs(e.y - cy) < lim) return true;
+    if (e.live && e.kind <= K_FIEND && e.st != ST_DEAD && qabs(e.x - cx) < lim && qabs(e.y - cy) < lim) return true;
   }
   return false;
 }
@@ -568,7 +573,7 @@ bool tryUse() {
 void wakeNear(q16 range) {
   for (uint8_t i = 0; i < nEnts; i++) {
     Ent &e = ents[i];
-    if (e.live && e.kind <= K_DRONE && e.st == ST_IDLE && distF(px, py, e.x, e.y) < range / 65536.0f) {
+    if (e.live && e.kind <= K_FIEND && e.st == ST_IDLE && distF(px, py, e.x, e.y) < range / 65536.0f) {
       e.st = ST_CHASE; e.cool = 10 + random(20);
     }
   }
@@ -595,7 +600,7 @@ void hitscan(int16_t col, int16_t aim, uint8_t dmg) {
   int8_t best = -1; q16 bestD = wall;
   for (uint8_t i = 0; i < nEnts; i++) {
     const Ent &e = ents[i];
-    if (!e.live || e.kind > K_DRONE || e.st == ST_DIE || e.st == ST_DEAD) continue;
+    if (!e.live || e.kind > K_FIEND || e.st == ST_DIE || e.st == ST_DEAD) continue;
     q16 depth; int16_t sx;
     if (!project(e.x, e.y, depth, sx)) continue;
     int32_t halfW = (int32_t)(((int64_t)FOCAL * DEFS[e.kind].radius) / depth);
@@ -648,11 +653,11 @@ void enemyAttack(Ent &e, const EnemyDef &d) {
     if (s.live) continue;
     float dist = distF(e.x, e.y, px, py);
     if (dist < 0.1f) dist = 0.1f;
-    float spd = e.kind == K_DRONE ? 0.18f : 0.11f;
-    s.live = true; s.kind = e.kind == K_DRONE ? 1 : 0; s.life = 120;
+    float spd = e.kind == K_FIEND ? 0.18f : 0.11f;
+    s.live = true; s.kind = e.kind == K_FIEND ? 1 : 0; s.life = 120;
     s.x = e.x; s.y = e.y;
     s.vx = (q16)((px - e.x) / dist * spd); s.vy = (q16)((py - e.y) / dist * spd);
-    beep(e.kind == K_DRONE ? 700 : 240, 30);
+    beep(e.kind == K_FIEND ? 700 : 240, 30);
     return;
   }
 }
@@ -707,7 +712,7 @@ void updateShots() {
     s.x += s.vx; s.y += s.vy;
     if (!s.life-- || cellSolid(s.x >> 16, s.y >> 16)) { s.live = false; continue; }
     if (qabs(s.x - px) < ONE * 3 / 10 && qabs(s.y - py) < ONE * 3 / 10) {
-      hurtPlayer(DEFS[s.kind ? K_DRONE : K_SPIT].dmg);
+      hurtPlayer(DEFS[s.kind ? K_FIEND : K_MAW].dmg);
       s.live = false;
     }
   }
@@ -759,7 +764,7 @@ void play(uint8_t e, uint8_t h) {
   for (uint8_t i = 0; i < nEnts; i++) {
     Ent &en = ents[i];
     if (!en.live) continue;
-    if (en.kind <= K_DRONE) updateEnemy(en);
+    if (en.kind <= K_FIEND) updateEnemy(en);
     else if (qabs(en.x - px) < ONE / 2 && qabs(en.y - py) < ONE / 2) pickUp(en);
   }
   updateShots();
@@ -831,9 +836,14 @@ void drawGun(uint8_t *buf) {
     by = (int16_t)(qabs(s) * 2 >> 16);
   }
   int16_t recoil = flashT ? 2 : 0;
-  int16_t x = 64 - g.w / 2 + bx, y = VIEW_H - g.h + 2 + by + recoil;
-  if (flashT) blit(buf, spr[SP_FLASH], 64 - spr[SP_FLASH].w / 2 + bx, y - spr[SP_FLASH].h + 3);
+  // held right of centre: a centred gun would hide whatever stands straight ahead on a 56 px view
+  int16_t cx = 64 + GUN_OFFSET + bx;
+  int16_t x = cx - g.w / 2, y = VIEW_H - g.h + 2 + by + recoil;
+  if (flashT) blit(buf, spr[SP_FLASH], cx - spr[SP_FLASH].w / 2, y - spr[SP_FLASH].h + 3);
   blit(buf, g, x, y);
+  // crosshair: four dots around the aim point, drawn inverted so they show on walls and on black
+  static const int8_t CH[4][2] = { {-3, 0}, {3, 0}, {0, -3}, {0, 3} };
+  for (uint8_t i = 0; i < 4; i++) buf[((HZ + CH[i][1]) >> 3) * 128 + 64 + CH[i][0]] ^= 1 << ((HZ + CH[i][1]) & 7);
 }
 
 void drawHud() {
@@ -900,13 +910,29 @@ void drawPlay() {
   }
 }
 
+// a row of flickering flames standing on row `base`, up to maxH tall; tips are dithered
+static inline uint8_t hash8(uint16_t n) { n = (n << 7) ^ n; return (uint8_t)((n * (n * n * 15731u + 789221u) + 1376312589u) >> 13); }
+void drawFlames(uint8_t *buf, int16_t base, uint8_t maxH, uint32_t t) {
+  for (int16_t x = 0; x < VIEW_W; x++) {
+    uint8_t g = x >> 2, k = x & 3;                       // a tongue of flame every 4 px
+    int16_t h = maxH / 3 + hash8(g * 31 + (t >> 1) * 7) % (maxH - maxH / 3 + 1);
+    h -= (k == 0 || k == 3) ? h / 3 : 0;                 // tongues are pointed
+    for (int16_t i = 0; i < h; i++) {
+      int16_t y = base - i;
+      if (y < 0) break;
+      if (i < h - 3 || ((x ^ y ^ t) & 1)) setPix(buf, x, y);
+    }
+  }
+}
+
 void drawTitle() {
   uint8_t *buf = u8g2.getBufferPtr();
-  setCamera(9 * ONE, 3 * ONE + ONE / 2, titleAng >> 1);
-  renderView(buf, true);
-  textBox(14, 10, 100, 34);
-  u8g2.setFont(u8g2_font_ncenB18_tr); centerText("BREACH", 32);
-  u8g2.setFont(u8g2_font_4x6_tr); centerText("TEST ROOM", 41);
+  setCamera(15 * ONE + ONE / 2, 4 * ONE + ONE / 2, titleAng >> 1);
+  renderView(buf, false);
+  drawFlames(buf, 55, 14, frameN);
+  textBox(3, 8, 122, 30);
+  u8g2.setFont(u8g2_font_ncenB14_tr); centerText("HELLGATE", 27);
+  u8g2.setFont(u8g2_font_4x6_tr); centerText("TEST ROOM", 35);
   u8g2.setDrawColor(0); u8g2.drawBox(0, 56, 128, 8); u8g2.setDrawColor(1);
   u8g2.setFont(u8g2_font_5x7_tr);
   if ((frameN >> 4) & 1) centerText("PRESS OK", 63);
@@ -917,7 +943,7 @@ void gameDraw() {
 }
 
 // =====================================================================
-// Clock face: the arena turns slowly behind the time
+// Clock face: the gate turns slowly behind the time, over a row of flames
 // =====================================================================
 void stepWatchFace() { faceAng += 1; }
 
@@ -928,9 +954,10 @@ void drawView() {
   uint8_t *buf = u8g2.getBufferPtr();
   setCamera(15 * ONE + ONE / 2, 4 * ONE + ONE / 2, faceAng);
   renderView(buf, false);
-  textBox(20, 10, 88, 32);
+  drawFlames(buf, 53, 10, faceAng);
+  textBox(20, 8, 88, 32);
   u8g2.setFont(u8g2_font_logisoso24_tn);
-  u8g2.setCursor(29, 38); print2(hours()); u8g2.print(':'); print2(minutes());
+  u8g2.setCursor(29, 36); print2(hours()); u8g2.print(':'); print2(minutes());
   u8g2.setDrawColor(0); u8g2.drawBox(0, 54, 128, 10); u8g2.setDrawColor(1);
   u8g2.drawHLine(0, 54, 128);
   u8g2.setFont(u8g2_font_6x10_tr);
